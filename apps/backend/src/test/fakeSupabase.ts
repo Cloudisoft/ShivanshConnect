@@ -53,6 +53,12 @@ interface Tables {
   call_events: Row[];
   webhook_events: Row[];
   webhook_failures: Row[];
+  campaigns: Row[];
+  campaign_versions: Row[];
+  campaign_leads: Row[];
+  campaign_lead_skip_log: Row[];
+  campaign_settings: Row[];
+  dialing_settings: Row[];
 }
 
 export interface FakeAuthUser {
@@ -97,6 +103,12 @@ export function createFakeSupabase() {
     call_events: [],
     webhook_events: [],
     webhook_failures: [],
+    campaigns: [],
+    campaign_versions: [],
+    campaign_leads: [],
+    campaign_lead_skip_log: [],
+    campaign_settings: [],
+    dialing_settings: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -130,6 +142,12 @@ export function createFakeSupabase() {
       'calls.manage',
       'webhooks.manage',
       'cdr.view',
+      'campaigns.view',
+      'campaigns.create',
+      'campaigns.edit',
+      'campaigns.start',
+      'campaigns.pause',
+      'campaigns.delete',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -227,6 +245,11 @@ export function createFakeSupabase() {
     if (table === 'role_permissions' && selectStr.includes('permissions(')) {
       const perm = tables.permissions.find((p) => p.id === row.permission_id);
       out.permissions = perm ? { key: perm.key } : null;
+    }
+
+    if (table === 'campaign_leads' && selectStr.includes('leads(')) {
+      const lead = tables.leads.find((l) => l.id === row.lead_id);
+      out.leads = lead ? { id: lead.id, first_name: lead.first_name, last_name: lead.last_name, phone_normalized: lead.phone_normalized, company: lead.company } : null;
     }
 
     if (table === 'lead_list_members' && selectStr.includes('lead_lists(')) {
@@ -350,6 +373,66 @@ export function createFakeSupabase() {
         return { organization_id: null, processed_at: null, processing_status: 'pending', error: null, retry_count: 0, received_at: new Date().toISOString() };
       case 'webhook_failures':
         return { replayed_at: null, failed_at: new Date().toISOString() };
+      case 'campaigns':
+        return {
+          status: 'draft',
+          timezone: 'America/New_York',
+          calling_window_start: '09:00',
+          calling_window_end: '18:00',
+          calling_days: [1, 2, 3, 4, 5],
+          concurrency_limit: 5,
+          calls_per_minute_limit: null,
+          current_version_id: null,
+          phone_number_id: null,
+          transfer_number_e164: null,
+          voicemail_detection_enabled: true,
+          voicemail_message: null,
+          leave_voicemail: true,
+          lead_cooldown_minutes: 1440,
+          background_noise: null,
+        };
+      case 'campaign_versions':
+        return {
+          prompt: '',
+          ai_agent_id: null,
+          ai_agent_version_id: null,
+          voice_id: null,
+          knowledge_base_ids: [],
+          script_id: null,
+          transfer_number_e164: null,
+          calling_rules: {},
+          disposition_rules: {},
+          status: 'draft',
+          published_at: null,
+        };
+      case 'campaign_leads':
+        return {
+          status: 'pending',
+          attempt_count: 0,
+          last_attempt_at: null,
+          next_eligible_at: null,
+          last_call_id: null,
+          final_disposition: null,
+          added_at: new Date().toISOString(),
+        };
+      case 'dialing_settings':
+        return {
+          is_default: true,
+          default_concurrency: 5,
+          max_concurrency: 25,
+          calls_per_minute: 30,
+          max_attempts: 3,
+          retry_delay_minutes: 60,
+          lead_cooldown_minutes: 1440,
+          calling_hours_start: '09:00',
+          calling_hours_end: '18:00',
+          voicemail_behavior: 'leave_message',
+          amd_enabled: true,
+          dnc_behavior: 'skip',
+          failed_call_behavior: 'retry',
+          busy_behavior: 'retry',
+          no_answer_behavior: 'retry',
+        };
       default:
         return {};
     }
@@ -450,6 +533,11 @@ export function createFakeSupabase() {
 
     range(from: number, to: number): this {
       this.rangeVal = [from, to];
+      return this;
+    }
+
+    limit(n: number): this {
+      this.rangeVal = [0, n - 1];
       return this;
     }
 
