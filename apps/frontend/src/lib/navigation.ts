@@ -45,7 +45,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'analytics', label: 'Analytics', path: '/analytics', icon: BarChart3, builtInPhase1: false },
   { id: 'ai-agents', label: 'AI Agents', path: '/ai-agents', icon: Bot, builtInPhase1: true },
   { id: 'voices', label: 'Voices', path: '/voices', icon: Mic, builtInPhase1: true },
-  { id: 'dids', label: 'DIDs', path: '/dids', icon: Phone, builtInPhase1: false },
+  { id: 'dids', label: 'DIDs', path: '/dids', icon: Phone, builtInPhase1: true },
   { id: 'inbound-routes', label: 'Inbound Routes', path: '/inbound-routes', icon: Route, builtInPhase1: false },
   { id: 'queues', label: 'Queues', path: '/queues', icon: ListOrdered, builtInPhase1: false },
   { id: 'users', label: 'Users', path: '/users', icon: Users, builtInPhase1: true },
