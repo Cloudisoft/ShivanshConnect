@@ -20,6 +20,9 @@ import { leadRoutes } from './routes/leads.js';
 import { leadCustomFieldRoutes } from './routes/leadCustomFields.js';
 import { dncRoutes } from './routes/dnc.js';
 import { importJobRoutes } from './routes/importJobs.js';
+import { agentRoutes } from './routes/agents.js';
+import { scriptRoutes } from './routes/scripts.js';
+import { knowledgeBaseRoutes } from './routes/knowledgeBases.js';
 
 export function buildApp() {
   const env = getEnv();
@@ -63,6 +66,9 @@ export function buildApp() {
       api.register(leadCustomFieldRoutes, { prefix: '/lead-custom-fields' });
       api.register(dncRoutes, { prefix: '/dnc' });
       api.register(importJobRoutes, { prefix: '/import-jobs' });
+      api.register(agentRoutes, { prefix: '/agents' });
+      api.register(scriptRoutes, { prefix: '/scripts' });
+      api.register(knowledgeBaseRoutes, { prefix: '/knowledge-bases' });
     },
     { prefix: '/api/v1' },
   );
