@@ -16,11 +16,15 @@
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
+    "@fastify/multipart": "^10.1.1",
     "@fastify/rate-limit": "^10.1.1",
     "@shivanshconnect/shared": "workspace:*",
     "@supabase/supabase-js": "^2.45.4",
+    "csv-parse": "^7.0.2",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "fastify": "^5.1.0",
+    "libphonenumber-js": "^1.13.13",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",
     "zod": "^3.23.8"
