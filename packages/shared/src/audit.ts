@@ -26,6 +26,18 @@ export const AUDIT_ACTIONS = {
   ROLE_UPDATED: 'role.updated',
   ROLE_DELETED: 'role.deleted',
   ROLE_PERMISSIONS_CHANGED: 'role.permissions_changed',
+
+  LEAD_LIST_CREATED: 'lead_list.created',
+  LEAD_LIST_UPDATED: 'lead_list.updated',
+  LEAD_LIST_DELETED: 'lead_list.deleted',
+  LEAD_CREATED: 'lead.created',
+  LEAD_UPDATED: 'lead.updated',
+  LEAD_DELETED: 'lead.deleted',
+  LEAD_BULK_ACTION: 'lead.bulk_action',
+  DNC_ENTRY_ADDED: 'dnc.entry_added',
+  DNC_ENTRY_REMOVED: 'dnc.entry_removed',
+  IMPORT_JOB_CREATED: 'import_job.created',
+  IMPORT_JOB_COMMITTED: 'import_job.committed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

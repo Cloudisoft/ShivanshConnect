@@ -5,3 +5,4 @@ export * from './role.js';
 export * from './permission.js';
 export * from './audit.js';
 export * from './me.js';
+export * from './lead.js';

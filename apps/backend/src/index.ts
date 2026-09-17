@@ -2,6 +2,7 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
+import multipart from '@fastify/multipart';
 import { ZodError } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { getEnv } from './env.js';
@@ -14,6 +15,11 @@ import { roleRoutes } from './routes/roles.js';
 import { permissionRoutes } from './routes/permissions.js';
 import { organizationRoutes } from './routes/organizations.js';
 import { auditLogRoutes } from './routes/auditLogs.js';
+import { leadListRoutes } from './routes/leadLists.js';
+import { leadRoutes } from './routes/leads.js';
+import { leadCustomFieldRoutes } from './routes/leadCustomFields.js';
+import { dncRoutes } from './routes/dnc.js';
+import { importJobRoutes } from './routes/importJobs.js';
 
 export function buildApp() {
   const env = getEnv();
@@ -37,6 +43,10 @@ export function buildApp() {
     timeWindow: '1 minute',
   });
 
+  app.register(multipart, {
+    limits: { fileSize: 25 * 1024 * 1024, files: 1 },
+  });
+
   app.get('/health', async () => ({ status: 'ok', service: 'shivanshconnect-backend' }));
 
   app.register(
@@ -48,6 +58,11 @@ export function buildApp() {
       api.register(permissionRoutes, { prefix: '/permissions' });
       api.register(organizationRoutes, { prefix: '/organizations' });
       api.register(auditLogRoutes, { prefix: '/audit-logs' });
+      api.register(leadListRoutes, { prefix: '/lead-lists' });
+      api.register(leadRoutes, { prefix: '/leads' });
+      api.register(leadCustomFieldRoutes, { prefix: '/lead-custom-fields' });
+      api.register(dncRoutes, { prefix: '/dnc' });
+      api.register(importJobRoutes, { prefix: '/import-jobs' });
     },
     { prefix: '/api/v1' },
   );
