@@ -29,6 +29,8 @@ import {
   type TranscriptSegmentRaw,
 } from '../lib/orchestration/index.js';
 import { generateCallSummary } from './generateCallSummary.js';
+import { evaluateCall } from './evaluateCall.js';
+import { aggregateAgentImprovements } from './aggregateAgentImprovements.js';
 import { hasLiveTranscriptSegments } from './liveTranscriptIngestion.js';
 import { resolveProviderForCall } from '../lib/orchestration/resolveProvider.js';
 
@@ -269,6 +271,24 @@ export async function processCallArtifacts(callId: string): Promise<void> {
         // eslint-disable-next-line no-console
         console.error('generateCallSummary failed for call', callId, err);
       });
+    });
+
+    // Phase 11: AI call evaluator + improvement mining (spec sections
+    // 24/49/86). Also fire-and-forget, and deliberately independent of
+    // the summary above (one LLM feature failing must never block
+    // another) - see services/evaluateCall.ts's header comment for the
+    // exact skip conditions (no LLM configured / no disposition yet /
+    // etc.), all honest no-ops, never a fabricated evaluation.
+    setImmediate(() => {
+      evaluateCall(callId)
+        .then((evaluation) => {
+          if (!evaluation) return;
+          return aggregateAgentImprovements(callId, evaluation);
+        })
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.error('evaluateCall/aggregateAgentImprovements failed for call', callId, err);
+        });
     });
   }
 }

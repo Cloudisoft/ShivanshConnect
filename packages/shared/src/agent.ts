@@ -161,18 +161,40 @@ export interface AiAgentWithCurrentVersion extends AiAgent {
 
 export type ImprovementStatus = 'detected' | 'under_review' | 'approved' | 'rejected' | 'applied';
 
+/** One prior occurrence's real evidence for a recurring improvement -
+ * services/aggregateAgentImprovements.ts appends one of these every time
+ * the same normalized issue is seen again on a different call. */
+export interface AgentImprovementEvidenceEntry {
+  call_id: string;
+  evaluation_id: string;
+  category: string;
+  excerpt: string;
+  detected_at: string;
+}
+
+export interface AgentImprovementEvidence {
+  category: string;
+  occurrences: AgentImprovementEvidenceEntry[];
+}
+
 export interface AiAgentImprovement {
   id: string;
   organization_id: string;
   agent_id: string;
   issue: string;
-  evidence: Record<string, unknown>;
+  evidence: AgentImprovementEvidence | Record<string, unknown>;
   suggested_change: string;
   confidence: number;
   frequency: number;
   status: ImprovementStatus;
   affected_version_id: string | null;
+  // Phase 11: points at the most recent call/evaluation that surfaced or
+  // reinforced this issue (see 00000000000039's ALTER) - the full history
+  // of every contributing call is in `evidence.occurrences` above.
+  source_call_id: string | null;
+  source_evaluation_id: string | null;
   created_at: string;
+  updated_at: string;
   reviewed_by: string | null;
   reviewed_at: string | null;
 }

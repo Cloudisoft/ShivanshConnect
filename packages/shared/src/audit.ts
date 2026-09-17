@@ -113,6 +113,13 @@ export const AUDIT_ACTIONS = {
   CALL_BARGE_ENDED: 'call.barge_ended',
   CALL_TRANSFER_SUPERVISOR_INITIATED: 'call.transfer_supervisor_initiated',
   CALL_ENDED_BY_SUPERVISOR: 'call.ended_by_supervisor',
+
+  // Phase 11: AI call evaluator + improvement queue (master spec sections
+  // 24/49/86). Evaluation itself runs under the service-role key and is
+  // not user-initiated, so it is not audit logged; what IS audit logged
+  // is every human decision on an improvement.
+  AGENT_IMPROVEMENT_STATUS_CHANGED: 'agent_improvement.status_changed',
+  AGENT_IMPROVEMENT_APPLIED: 'agent_improvement.applied',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

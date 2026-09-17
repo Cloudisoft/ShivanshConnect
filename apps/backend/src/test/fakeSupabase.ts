@@ -67,6 +67,7 @@ interface Tables {
   call_recordings: Row[];
   call_summaries: Row[];
   exports: Row[];
+  call_evaluations: Row[];
 }
 
 export interface FakeAuthUser {
@@ -125,6 +126,7 @@ export function createFakeSupabase() {
     call_recordings: [],
     call_summaries: [],
     exports: [],
+    call_evaluations: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -514,6 +516,29 @@ export function createFakeSupabase() {
         return { key_points: [], customer_intent: null, objections: null, questions: null, next_action: null, outcome: null, generated_at: new Date().toISOString() };
       case 'exports':
         return { filters: {}, status: 'pending', file_storage_path: null, row_count: null, failure_reason: null, completed_at: null };
+      case 'call_evaluations':
+        return {
+          scores: {},
+          what_went_well: [],
+          what_went_poorly: [],
+          missed_opportunities: [],
+          incorrect_statements: [],
+          customer_objections: [],
+          recommended_improvement: null,
+          evaluated_at: new Date().toISOString(),
+        };
+      case 'ai_agent_improvements':
+        return {
+          evidence: {},
+          confidence: 0,
+          frequency: 1,
+          status: 'detected',
+          affected_version_id: null,
+          source_call_id: null,
+          source_evaluation_id: null,
+          reviewed_by: null,
+          reviewed_at: null,
+        };
       default:
         return {};
     }
@@ -536,6 +561,11 @@ export function createFakeSupabase() {
     // (00000000000035_phase9_cdr.sql) - the real dedupe key live
     // transcript ingestion relies on (services/liveTranscriptIngestion.ts).
     call_transcript_segments: [['transcript_id', 'segment_index']],
+    // Phase 11: mirrors call_evaluations_call_id_key
+    // (00000000000038_phase11_call_evaluations.sql) - one evaluation per
+    // call, same upsert-by-call_id pattern as call_transcripts/
+    // call_summaries above.
+    call_evaluations: [['call_id']],
   };
 
   function violatesUniqueConstraint(table: keyof Tables, candidate: Row): boolean {
@@ -828,6 +858,51 @@ export function createFakeSupabase() {
     return { data: scored, error: null };
   }
 
+  /**
+   * Minimal stand-in for supabase.rpc('agent_evaluation_summary', ...) -
+   * see supabase/migrations/00000000000041_phase11_evaluation_summary_fn
+   * .sql. Computes the same average-overall-score + per-category-average
+   * aggregation in JS against the in-memory call_evaluations table, with
+   * the exact same organization_id + agent_id + since-timestamp scoping
+   * the real SQL function applies.
+   */
+  function agentEvaluationSummary(args: {
+    match_organization_id: string;
+    match_agent_id: string;
+    match_since?: string;
+  }): { data: Row[]; error: null } {
+    const { match_organization_id: orgId, match_agent_id: agentId, match_since: since } = args;
+    const sinceMs = since ? new Date(since).getTime() : 0;
+    const scoped = tables.call_evaluations.filter((ce) => {
+      if (ce.organization_id !== orgId) return false;
+      const call = tables.calls.find((c) => c.id === ce.call_id);
+      if (!call || call.organization_id !== orgId || call.ai_agent_id !== agentId) return false;
+      return new Date(ce.evaluated_at).getTime() >= sinceMs;
+    });
+
+    const categoryTotals = new Map<string, { sum: number; count: number }>();
+    for (const ce of scoped) {
+      for (const [key, value] of Object.entries((ce.scores as Record<string, number>) ?? {})) {
+        const entry = categoryTotals.get(key) ?? { sum: 0, count: 0 };
+        entry.sum += Number(value);
+        entry.count += 1;
+        categoryTotals.set(key, entry);
+      }
+    }
+    const category_averages: Record<string, number> = {};
+    for (const [key, { sum, count }] of categoryTotals) {
+      category_averages[key] = Math.round((sum / count) * 100) / 100;
+    }
+
+    const average_overall_score =
+      scoped.length === 0 ? null : Math.round((scoped.reduce((acc, ce) => acc + Number(ce.overall_score), 0) / scoped.length) * 100) / 100;
+
+    return {
+      data: [{ call_count: scoped.length, average_overall_score, category_averages }],
+      error: null,
+    };
+  }
+
   const supabase = {
     from(table: keyof Tables) {
       return new QueryBuilder(table);
@@ -838,6 +913,9 @@ export function createFakeSupabase() {
       }
       if (fnName === 'search_call_transcripts') {
         return searchCallTranscripts(args as any);
+      }
+      if (fnName === 'agent_evaluation_summary') {
+        return agentEvaluationSummary(args as any);
       }
       return { data: null, error: { message: `Unknown RPC function in fake client: ${fnName}` } };
     },
