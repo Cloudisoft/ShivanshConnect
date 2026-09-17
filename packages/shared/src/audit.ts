@@ -59,6 +59,13 @@ export const AUDIT_ACTIONS = {
   VOICE_SYNCED: 'voice.synced',
   VOICE_CLONE_REQUESTED: 'voice.clone_requested',
   VOICE_DELETED: 'voice.deleted',
+
+  TELEPHONY_PROVIDER_CREDENTIALS_SAVED: 'telephony_provider.credentials_saved',
+  TELEPHONY_PROVIDER_CONNECTION_TESTED: 'telephony_provider.connection_tested',
+  PHONE_NUMBER_SYNCED: 'phone_number.synced',
+  PHONE_NUMBER_IMPORTED: 'phone_number.imported',
+  PHONE_NUMBER_UPDATED: 'phone_number.updated',
+  PHONE_NUMBER_DELETED: 'phone_number.deleted',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

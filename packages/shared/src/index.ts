@@ -8,3 +8,4 @@ export * from './me.js';
 export * from './lead.js';
 export * from './agent.js';
 export * from './voice.js';
+export * from './telephony.js';
