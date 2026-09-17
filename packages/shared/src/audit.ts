@@ -72,6 +72,22 @@ export const AUDIT_ACTIONS = {
   CALL_CREATED: 'call.created',
   CALL_TRANSFER_REQUESTED: 'call.transfer_requested',
   WEBHOOK_EVENT_REPLAYED: 'webhook_event.replayed',
+
+  CAMPAIGN_CREATED: 'campaign.created',
+  CAMPAIGN_UPDATED: 'campaign.updated',
+  CAMPAIGN_DELETED: 'campaign.deleted',
+  CAMPAIGN_DUPLICATED: 'campaign.duplicated',
+  CAMPAIGN_VERSION_CREATED: 'campaign_version.created',
+  CAMPAIGN_VERSION_PUBLISHED: 'campaign_version.published',
+  CAMPAIGN_STARTED: 'campaign.started',
+  CAMPAIGN_PAUSED: 'campaign.paused',
+  CAMPAIGN_RESUMED: 'campaign.resumed',
+  CAMPAIGN_STOPPED: 'campaign.stopped',
+  CAMPAIGN_ARCHIVED: 'campaign.archived',
+  CAMPAIGN_CONCURRENCY_CHANGED: 'campaign.concurrency_changed',
+  CAMPAIGN_LEADS_ATTACHED: 'campaign.leads_attached',
+  CAMPAIGN_LEADS_ROTATED: 'campaign.leads_rotated',
+  DIALING_SETTINGS_UPDATED: 'dialing_settings.updated',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

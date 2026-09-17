@@ -10,3 +10,4 @@ export * from './agent.js';
 export * from './voice.js';
 export * from './telephony.js';
 export * from './orchestration.js';
+export * from './campaign.js';
