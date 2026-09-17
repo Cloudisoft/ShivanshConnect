@@ -42,6 +42,9 @@ interface Tables {
   knowledge_bases: Row[];
   knowledge_documents: Row[];
   knowledge_chunks: Row[];
+  voice_providers: Row[];
+  voice_provider_credentials: Row[];
+  voices: Row[];
 }
 
 export interface FakeAuthUser {
@@ -75,6 +78,9 @@ export function createFakeSupabase() {
     knowledge_bases: [],
     knowledge_documents: [],
     knowledge_chunks: [],
+    voice_providers: [],
+    voice_provider_credentials: [],
+    voices: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -103,6 +109,7 @@ export function createFakeSupabase() {
       'leads.delete',
       'leads.import',
       'agents.manage',
+      'voices.manage',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -120,6 +127,26 @@ export function createFakeSupabase() {
     tables.role_permissions.push({ role_id: viewer.id, permission_id: dashboardPerm.id });
   }
   seedRolesAndPermissions();
+
+  function seedVoiceProviders() {
+    const catalog: Array<[string, string, boolean]> = [
+      ['elevenlabs', 'ElevenLabs', false],
+      ['cartesia', 'Cartesia', false],
+      ['omnivoice', 'OmniVoice (k2-fsa)', true],
+      ['voxcpm', 'VoxCPM (OpenBMB)', true],
+    ];
+    for (const [key, display_name, requires_external_hosting] of catalog) {
+      tables.voice_providers.push({
+        id: randomUUID(),
+        organization_id: null,
+        key,
+        display_name,
+        requires_external_hosting,
+        created_at: new Date().toISOString(),
+      });
+    }
+  }
+  seedVoiceProviders();
 
   function matchesClause(actual: any, op: string, value: any): boolean {
     switch (op) {
@@ -246,6 +273,16 @@ export function createFakeSupabase() {
         return { version: 1, source: 'editor' };
       case 'knowledge_documents':
         return { status: 'uploaded', size_bytes: 0 };
+      case 'voice_provider_credentials':
+        return { status: 'not_connected', last_verified_at: null, last_error: null };
+      case 'voices':
+        return {
+          gender: 'unknown',
+          status: 'active',
+          is_cloned: false,
+          clone_status: 'n/a',
+          consent_confirmed: false,
+        };
       default:
         return {};
     }
