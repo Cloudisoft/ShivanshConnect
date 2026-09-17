@@ -8,8 +8,8 @@ import { uuidSchema } from '../schemas/common.js';
 import { listWebhookEventsQuerySchema } from '../schemas/orchestration.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS, type CallStatus } from '@shivanshconnect/shared';
-import { isValidCallTransition } from '../lib/orchestration/callStateMachine.js';
-import { applyCallOutcomeToCampaignLead } from '../services/campaignLeadDisposition.js';
+import { transitionCallState } from '../lib/callStateMachine.js';
+import { extractPipecatToolCalls, extractVapiToolCalls, processToolCalls } from '../services/toolCallHandler.js';
 
 /**
  * Phase 6 webhook receivers (spec sections 31/58).
@@ -125,41 +125,23 @@ async function markWebhookFailed(supabase: ReturnType<typeof getSupabaseAdmin>, 
   await supabase.from('webhook_failures').insert({ webhook_event_id: webhookEventId, error: errorMessage });
 }
 
-/** Applies a call-status update only when the transition is valid (spec
- * 50). An invalid transition is logged (never applied, never crashes the
- * webhook). Phase 7: when the call belongs to a campaign and the new
- * status is a terminal one, also drives that campaign_leads row's
- * disposition/retry bookkeeping (services/campaignLeadDisposition.ts) -
- * this is the one place Phase 6's webhook processor and Phase 7's
- * campaign engine actually meet, extending rather than duplicating it. */
+/** Applies a call-status update by going through the Phase 8 call state
+ * machine executor (lib/callStateMachine.ts) - the ONE place `calls.status`
+ * is ever written. `transitionCallState()` itself validates the
+ * transition (spec 50), logs and rejects an invalid one instead of
+ * silently applying it, and - for a terminal status - awaits the
+ * registered terminal-call handler (services/callTerminalHandler.ts),
+ * which runs Phase 8's disposition engine and drives the corresponding
+ * campaign_leads row's disposition/retry bookkeeping
+ * (services/campaignLeadDisposition.ts). This webhook processor never
+ * duplicates any of that logic itself. */
 async function applyCallStatus(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   call: Record<string, any>,
   nextStatus: CallStatus,
   extra: Record<string, unknown> = {},
 ): Promise<void> {
-  if (!isValidCallTransition(call.status as CallStatus, nextStatus)) {
-    await supabase.from('call_events').insert({
-      call_id: call.id,
-      organization_id: call.organization_id,
-      event_type: 'call.invalid_transition_rejected',
-      payload: { from: call.status, to: nextStatus },
-    });
-    return;
-  }
-  if (call.status === nextStatus) return; // idempotent no-op redelivery
-  await supabase.from('calls').update({ status: nextStatus, ...extra }).eq('id', call.id);
-  await applyCallOutcomeToCampaignLead(
-    supabase,
-    {
-      id: call.id,
-      organization_id: call.organization_id,
-      campaign_id: call.campaign_id ?? null,
-      lead_id: call.lead_id ?? null,
-      ended_reason: (extra.ended_reason as string | null | undefined) ?? call.ended_reason ?? null,
-    },
-    nextStatus,
-  );
+  await transitionCallState(supabase, call.id, nextStatus, extra);
 }
 
 export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void> {
@@ -249,6 +231,12 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
           // transcript tables arrive in Phase 9 (see the task brief).
           break;
         }
+        case 'tool-calls': {
+          // Phase 8: real tool-call handling (spec 17/53/60) -
+          // schedule_callback / request_dnc, see services/toolCallHandler.ts.
+          await processToolCalls(supabase, call, extractVapiToolCalls(message));
+          break;
+        }
         default:
           break;
       }
@@ -306,6 +294,10 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       }
 
       await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: eventType, payload: body, occurred_at: new Date().toISOString() });
+
+      if (eventType === 'tool-calls') {
+        await processToolCalls(supabase, call, extractPipecatToolCalls(body));
+      }
 
       const map: Record<string, CallStatus> = {
         dialing: 'dialing',

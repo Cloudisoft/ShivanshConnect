@@ -5,8 +5,11 @@ import { ok, paginationMeta } from '../lib/response.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { uuidSchema } from '../schemas/common.js';
 import { createCallSchema, listCallsQuerySchema } from '../schemas/orchestration.js';
+import { overrideCallDispositionSchema } from '../schemas/dispositions.js';
 import { isValidNormalizedPhone, normalizePhoneNumber } from '../lib/phone.js';
 import { originateCall, resolveDefaultEngine } from '../services/callOrigination.js';
+import { writeAuditLog } from '../lib/audit.js';
+import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
 
 const CALL_COLUMNS =
   'id, organization_id, engine, vapi_call_id, pipecat_call_id, ai_agent_id, ai_agent_version_id, campaign_id, lead_id, phone_number_id, direction, customer_number, status, started_at, answered_at, ended_at, duration_seconds, talk_duration_seconds, ended_reason, transfer_destination_e164, transfer_status, cost, created_by, created_at, updated_at';
@@ -112,5 +115,79 @@ export async function callRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return ok(call, { message: 'Call placed.' });
+  });
+
+  // PATCH /api/v1/calls/:id/disposition - supervisor manual override
+  // (spec section 20). A legitimate correction path for the deterministic
+  // engine's own occasional mistakes, never a way for the UI to bypass it
+  // by default - the engine still runs automatically on every terminal
+  // call event regardless of whether a manual override happened before or
+  // will happen after. Writes disposition_source = 'manual' and an audit
+  // log entry.
+  app.patch('/:id/disposition', { preHandler: requirePermission('calls.manage') }, async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const body = overrideCallDispositionSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const { data: call, error: callError } = await supabase.from('calls').select('id, organization_id').eq('id', id).maybeSingle();
+    if (callError) throw callError;
+    if (!call || call.organization_id !== orgId) throw new NotFoundError('Call not found.');
+
+    const { data: disposition, error: dispositionError } = await supabase.from('dispositions').select('id, organization_id').eq('id', body.disposition_id).maybeSingle();
+    if (dispositionError) throw dispositionError;
+    if (!disposition || (disposition.organization_id !== null && disposition.organization_id !== orgId)) {
+      throw new ValidationError('Disposition not found for this organization.');
+    }
+
+    const { data: existing } = await supabase.from('call_dispositions').select('*').eq('call_id', id).maybeSingle();
+
+    let updatedRow: Record<string, any>;
+    if (existing) {
+      const { data, error } = await supabase
+        .from('call_dispositions')
+        .update({
+          disposition_id: body.disposition_id,
+          disposition_source: 'manual',
+          disposition_confidence: null,
+          disposition_reason: body.reason ?? null,
+          assigned_at: new Date().toISOString(),
+          assigned_by: req.user!.id,
+        })
+        .eq('id', existing.id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      updatedRow = data;
+    } else {
+      const { data, error } = await supabase
+        .from('call_dispositions')
+        .insert({
+          call_id: id,
+          organization_id: orgId,
+          disposition_id: body.disposition_id,
+          disposition_source: 'manual',
+          disposition_reason: body.reason ?? null,
+          assigned_by: req.user!.id,
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      updatedRow = data;
+    }
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.CALL_DISPOSITION_OVERRIDDEN,
+      entityType: 'call',
+      entityId: id,
+      oldValue: existing ?? null,
+      newValue: updatedRow,
+      ipAddress: req.ip,
+    });
+
+    return ok(updatedRow, { message: 'Disposition overridden.' });
   });
 }

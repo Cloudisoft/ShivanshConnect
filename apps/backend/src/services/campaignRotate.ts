@@ -12,7 +12,6 @@
  */
 
 import type { CampaignLead } from '@shivanshconnect/shared';
-import { ROTATE_EXCLUDED_DISPOSITIONS } from '@shivanshconnect/shared';
 
 export interface RotateDecision {
   leadId: string;
@@ -21,18 +20,25 @@ export interface RotateDecision {
   reason: string;
 }
 
-/** A campaign_leads row is excluded from rotation when its current status
- * or final_disposition indicates a genuine terminal outcome that should
- * never be re-dialed. `dnc` is included here even though DNC leads are
- * also excluded at dispatch-eligibility time - excluding them from
- * rotation too means the rotate preview never even offers to re-queue
- * them. */
-function isPermanentOutcome(campaignLead: Pick<CampaignLead, 'status' | 'final_disposition'>): boolean {
-  if (campaignLead.status === 'dnc') return true;
-  if (campaignLead.status === 'completed') return true;
-  const disposition = campaignLead.final_disposition?.toLowerCase().trim();
-  if (!disposition) return false;
-  return ROTATE_EXCLUDED_DISPOSITIONS.some((excluded) => disposition === excluded || disposition.includes(excluded.replace(/-/g, ' ')));
+/**
+ * A campaign_leads row is excluded from rotation when its current STATUS
+ * indicates a genuine terminal outcome that should never be re-dialed.
+ * `dnc` is included here even though DNC leads are also excluded at
+ * dispatch-eligibility time - excluding them from rotation too means the
+ * rotate preview never even offers to re-queue them.
+ *
+ * Phase 8 note: this used to also pattern-match `final_disposition`'s raw
+ * ended_reason string against a fixed keyword list
+ * (ROTATE_EXCLUDED_DISPOSITIONS). That is now redundant AND unsafe:
+ * services/campaignLeadDisposition.ts (the Phase 8 single source of
+ * truth) already sets `status` correctly for every outcome - including a
+ * retry-pending lead whose disposition CODE happens to read "DISCONNECTED"
+ * or "HUNG_UP" while it is still fully eligible for another automatic
+ * attempt. Trusting `status` alone (not a coincidental substring match on
+ * the disposition string) is what keeps rotation and the dispatcher's own
+ * eligibility check agreeing with each other. */
+function isPermanentOutcome(campaignLead: Pick<CampaignLead, 'status'>): boolean {
+  return campaignLead.status === 'dnc' || campaignLead.status === 'completed';
 }
 
 /** Leads eligible for re-queue: never attempted (`pending`), or a

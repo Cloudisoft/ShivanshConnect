@@ -44,9 +44,22 @@ import { OrchestrationProviderError, OrchestrationProviderNotConfiguredError } f
 import { campaignRoutes } from './routes/campaigns.js';
 import { dialingSettingsRoutes, campaignSettingsRoutes } from './routes/dialingSettings.js';
 import { startCampaignDispatcher } from './services/campaignDispatcher.js';
+import { dispositionRoutes } from './routes/dispositions.js';
+import { callbackRoutes } from './routes/callbacks.js';
+import { registerTerminalCallHandler } from './lib/callStateMachine.js';
+import { handleTerminalCall } from './services/callTerminalHandler.js';
 
 export function buildApp() {
   const env = getEnv();
+
+  // Phase 8: the call state machine's terminal-transition handler (Phase
+  // 8's disposition engine + campaign_leads update) is a plain function
+  // reference, re-registered on every buildApp() call - idempotent
+  // (registerTerminalCallHandler just replaces the stored reference), and
+  // must be wired here (not only in main()) so the test suite, which
+  // builds the app directly via app.inject() and never calls main(),
+  // exercises the exact same terminal-transition pipeline production does.
+  registerTerminalCallHandler(handleTerminalCall);
 
   const app = Fastify({
     logger: {
@@ -106,6 +119,8 @@ export function buildApp() {
       // hook doesn't collide with campaignRoutes's.
       api.register(campaignSettingsRoutes, { prefix: '/campaigns' });
       api.register(dialingSettingsRoutes, { prefix: '/dialing-settings' });
+      api.register(dispositionRoutes, { prefix: '/dispositions' });
+      api.register(callbackRoutes, { prefix: '/callbacks' });
       // Unauthenticated webhook receivers (external engines) vs the
       // authenticated admin log/replay routes are deliberately two
       // separate Fastify plugin registrations under the same prefix so

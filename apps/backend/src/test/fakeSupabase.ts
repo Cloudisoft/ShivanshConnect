@@ -59,6 +59,9 @@ interface Tables {
   campaign_lead_skip_log: Row[];
   campaign_settings: Row[];
   dialing_settings: Row[];
+  dispositions: Row[];
+  call_dispositions: Row[];
+  callbacks: Row[];
 }
 
 export interface FakeAuthUser {
@@ -109,6 +112,9 @@ export function createFakeSupabase() {
     campaign_lead_skip_log: [],
     campaign_settings: [],
     dialing_settings: [],
+    dispositions: [],
+    call_dispositions: [],
+    callbacks: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -148,6 +154,7 @@ export function createFakeSupabase() {
       'campaigns.start',
       'campaigns.pause',
       'campaigns.delete',
+      'callbacks.manage',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -197,6 +204,24 @@ export function createFakeSupabase() {
     }
   }
   seedPhoneNumberProviders();
+
+  function seedDispositions() {
+    const catalog: Array<[string, string]> = [
+      ['CALL_CONNECTED', 'Call Connected'],
+      ['DISCONNECTED', 'Disconnected'],
+      ['DNC', 'DNC'],
+      ['ANSWERING_MACHINE', 'Answering Machine'],
+      ['VOICEMAIL', 'Voicemail'],
+      ['NOT_INTERESTED', 'Not Interested'],
+      ['HUNG_UP', 'Hung Up'],
+      ['TRANSFERRED', 'Transferred'],
+      ['CALL_DISCONNECTED_IN_TRANSFER', 'Call Disconnected in Transfer'],
+    ];
+    for (const [code, name] of catalog) {
+      tables.dispositions.push({ id: randomUUID(), organization_id: null, code, name, is_system: true, created_at: new Date().toISOString() });
+    }
+  }
+  seedDispositions();
 
   function matchesClause(actual: any, op: string, value: any): boolean {
     switch (op) {
@@ -485,6 +510,11 @@ export function createFakeSupabase() {
 
     eq(field: string, value: any): this {
       this.filters.push([field, 'eq', value]);
+      return this;
+    }
+
+    is(field: string, value: any): this {
+      this.filters.push([field, 'is', value]);
       return this;
     }
 

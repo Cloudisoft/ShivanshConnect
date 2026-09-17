@@ -22,6 +22,7 @@ import { ValidationError } from '../lib/errors.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS, type CallEngine, DEFAULT_CALL_ENGINE_SETTINGS_KEY } from '@shivanshconnect/shared';
 import { createOrchestrationProvider, OrchestrationProviderError, OrchestrationProviderNotConfiguredError, type AssistantConfig } from '../lib/orchestration/index.js';
+import { transitionCallState } from '../lib/callStateMachine.js';
 import { VapiProvider } from '../lib/orchestration/vapi.js';
 import { decryptCredentials, type EncryptedEnvelope } from '../lib/crypto/credentials.js';
 import { toAdapterCredentials as toTelephonyAdapterCredentials } from '../routes/phoneNumberProviders.js';
@@ -206,13 +207,9 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
         transferDestinationE164: transferDestination,
       });
 
-      const { data: updated, error: updateError } = await supabase
-        .from('calls')
-        .update({ vapi_call_id: created.providerCallId, status: 'dialing', started_at: new Date().toISOString() })
-        .eq('id', call.id)
-        .select('*')
-        .single();
-      if (updateError) throw updateError;
+      await supabase.from('calls').update({ vapi_call_id: created.providerCallId, started_at: new Date().toISOString() }).eq('id', call.id);
+      const transition = await transitionCallState(supabase, call.id, 'dialing');
+      const updated = transition.call ?? call;
 
       await supabase.from('call_events').insert({
         call_id: call.id,
@@ -256,13 +253,9 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
           : { provider: 'telnyx', apiKey: (telephonyCreds as { api_key: string }).api_key },
     });
 
-    const { data: updated, error: updateError } = await supabase
-      .from('calls')
-      .update({ pipecat_call_id: created.providerCallId, status: 'dialing', started_at: new Date().toISOString() })
-      .eq('id', call.id)
-      .select('*')
-      .single();
-    if (updateError) throw updateError;
+    await supabase.from('calls').update({ pipecat_call_id: created.providerCallId, started_at: new Date().toISOString() }).eq('id', call.id);
+    const pipecatTransition = await transitionCallState(supabase, call.id, 'dialing');
+    const updated = pipecatTransition.call ?? call;
 
     await supabase.from('call_events').insert({
       call_id: call.id,
@@ -275,6 +268,16 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
 
     return { call: updated };
   } catch (err) {
+    // Deliberately NOT routed through transitionCallState()/the terminal
+    // handler here: this is a pre-flight origination failure (e.g. a
+    // misconfigured provider) that happens before campaign_leads.
+    // last_call_id is ever set to this call's id (that only happens on a
+    // SUCCESSFUL originateCall(), see campaignDispatcher.ts) - the
+    // terminal handler's "only update the row this exact call is the most
+    // current attempt for" guard would otherwise silently skip the
+    // campaign_leads bookkeeping entirely and leave it stuck in
+    // 'dialing'. The dispatcher's own catch block handles that
+    // bookkeeping directly for this specific failure path instead.
     const message = err instanceof Error ? err.message : 'Call origination failed.';
     await supabase.from('calls').update({ status: 'failed', ended_reason: message, ended_at: new Date().toISOString() }).eq('id', call.id);
     await supabase.from('call_events').insert({ call_id: call.id, organization_id: orgId, event_type: 'call.origination_failed', payload: { error: message } });
