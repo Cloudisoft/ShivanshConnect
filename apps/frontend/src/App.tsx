@@ -17,6 +17,7 @@ import { LeadDetailPage } from './pages/LeadDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { AgentDetailPage } from './pages/AgentDetailPage';
 import { ScriptsPage } from './pages/ScriptsPage';
+import { VoicesPage } from './pages/VoicesPage';
 import { SettingsLayout } from './pages/settings/SettingsLayout';
 import { OrganizationSettingsPage } from './pages/settings/OrganizationSettingsPage';
 import { ProfileSettingsPage } from './pages/settings/ProfileSettingsPage';
@@ -51,6 +52,7 @@ export default function App(): JSX.Element {
           <Route path="/ai-agents" element={<AgentsPage />} />
           <Route path="/ai-agents/:id" element={<AgentDetailPage />} />
           <Route path="/scripts" element={<ScriptsPage />} />
+          <Route path="/voices" element={<VoicesPage />} />
 
           <Route path="/settings" element={<SettingsLayout />}>
             <Route index element={<Navigate to="/settings/organization" replace />} />

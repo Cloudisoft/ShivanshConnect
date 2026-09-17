@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Play } from 'lucide-react';
 import {
   BEHAVIOR_TRAITS,
   PERSONALITY_TONES,
@@ -13,6 +14,7 @@ import {
   usePublishAgentVersion,
   useUpdateAgentVersion,
 } from '../../hooks/useAgents';
+import { usePreviewVoice, useVoices } from '../../hooks/useVoices';
 import { Alert, Button, Card, Input, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
 
@@ -61,6 +63,65 @@ function TogglePills({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** Real voice picker for the agent's voice_id, replacing Phase 3's bare
+ * text field - pulls this org's own registered voices (Phase 4) with a
+ * preview play button. Voices are only usable once actually registered
+ * (synced or cloned) under the Voices page. */
+function VoicePicker({ value, onChange }: { value: string; onChange: (voiceId: string) => void }): JSX.Element {
+  const voicesQuery = useVoices({ status: 'active' });
+  const voices = voicesQuery.data?.data ?? [];
+  const preview = usePreviewVoice();
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const apiOrigin = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000/api/v1').replace(/\/api\/v1\/?$/, '');
+
+  async function handlePreview() {
+    if (!value) return;
+    setPreviewError(null);
+    try {
+      const result = await preview.mutateAsync({ id: value });
+      const url = result.url.startsWith('http') ? result.url : `${apiOrigin}${result.url}`;
+      if (audioRef.current) {
+        audioRef.current.src = url;
+        await audioRef.current.play();
+      }
+    } catch (err) {
+      setPreviewError(err instanceof ApiClientError ? err.message : 'Could not generate a preview.');
+    }
+  }
+
+  return (
+    <div>
+      <Label htmlFor="voice_id">Voice</Label>
+      {voices.length === 0 && !voicesQuery.isLoading && (
+        <p className="mb-1.5 text-xs text-ink-500">
+          No voices registered yet - add and sync a provider, or clone a voice, on the Voices page.
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <select
+          id="voice_id"
+          className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          <option value="">No voice selected</option>
+          {voices.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.name} ({v.provider_key}{v.requires_external_hosting ? ', self-hosted' : ''})
+            </option>
+          ))}
+        </select>
+        <Button type="button" variant="secondary" disabled={!value || preview.isPending} onClick={handlePreview}>
+          <Play className="h-3.5 w-3.5" /> {preview.isPending ? '...' : 'Preview'}
+        </Button>
+      </div>
+      <audio ref={audioRef} className="hidden" />
+      {previewError && <p className="mt-1 text-xs text-red-600">{previewError}</p>}
     </div>
   );
 }
@@ -371,13 +432,7 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
           </div>
         </div>
         <div className="mt-3">
-          <Label htmlFor="voice_id">Voice (Phase 4 wires up real voice selection)</Label>
-          <Input
-            id="voice_id"
-            placeholder="Voice id"
-            value={form.voice_id}
-            onChange={(e) => setForm((f) => ({ ...f, voice_id: e.target.value }))}
-          />
+          <VoicePicker value={form.voice_id} onChange={(voiceId) => setForm((f) => ({ ...f, voice_id: voiceId }))} />
         </div>
       </Card>
 

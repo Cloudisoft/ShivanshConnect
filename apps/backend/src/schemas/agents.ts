@@ -56,7 +56,10 @@ export const agentVersionConfigSchema = z.object({
   llm_model: z.string().trim().min(1).max(100).optional(),
   llm_temperature: z.number().min(0).max(2).optional(),
   llm_max_tokens: z.number().int().positive().max(32000).optional(),
-  voice_id: z.string().trim().max(200).nullable().optional(),
+  // Phase 4: voice_id references voices.id (a uuid FK - see
+  // supabase/migrations/00000000000024_voices.sql, which converted this
+  // column from Phase 3's bare text).
+  voice_id: z.string().uuid().nullable().optional(),
 });
 export type AgentVersionConfigInput = z.infer<typeof agentVersionConfigSchema>;
 
