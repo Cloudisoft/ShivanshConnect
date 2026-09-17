@@ -179,27 +179,117 @@ up real enforcement, not another migration.
   gets zero results, and is separately rejected outright (404) addressing the first organization's
   agent id directly.
 
+**Phase 4 (this build) - done:**
+
+- Database schema: `voice_providers` (fixed 4-provider catalog - `elevenlabs`, `cartesia`,
+  `omnivoice`, `voxcpm` - seeded, `requires_external_hosting` flags the self-hosted two),
+  `voice_provider_credentials` (org-scoped, AES-256-GCM encrypted API key / endpoint+key per
+  provider), `voices` (the org's own registered voices - synced from a provider's catalog or
+  created by cloning; `is_cloned`/`clone_status`/`consent_confirmed`/`source_sample_storage_path`).
+  Adds the FK Phase 3 deferred: `ai_agent_versions.voice_id` (a bare `text` column since
+  `00000000000018`) is converted to `uuid` and given a real `references voices(id) on delete set
+  null` constraint. RLS on all 3 new tables, same pattern as Phases 1-3.
+- `apps/backend/src/lib/voice/`: a `VoiceProviderAdapter` interface (`listVoices`, `getVoice`,
+  `previewVoice`, `validateVoice`, optional `createVoice`/`deleteVoice` for cloning) mirroring
+  Phase 3's `LLMProviderAdapter` shape, with **four real adapters**:
+  - `ElevenLabsProvider` / `CartesiaProvider` - real REST calls against each vendor's actual
+    documented managed-API endpoints (voice list/get, text-to-speech, multipart voice-cloning
+    upload, delete), auth via `xi-api-key` / `X-API-Key`+`Cartesia-Version` respectively.
+  - `OmniVoiceProvider` (k2-fsa, Apache-2.0, open-source voice cloning/design) and `VoxCPMProvider`
+    (OpenBMB, Apache-2.0, open-source 48kHz diffusion TTS) are **not run in this codebase** - no
+    GPU exists here. Each is an HTTP client against a **serverless GPU inference endpoint the
+    organization deploys and configures itself**, per org, under Voice Providers:
+    - **OmniVoice -> a Replicate custom model deployment.** Chosen because Replicate's HTTP API has
+      the clearest documented *generic* invocation pattern of the real serverless-GPU options
+      considered (Replicate custom deployments / Modal / RunPod Serverless / HF Inference
+      Endpoints): every model is invoked the same way - `POST {input: {...}}` with a bearer token,
+      then poll the returned `urls.get` until `status` settles. `OmniVoiceProvider` implements
+      exactly that create -> poll contract. Full deploy steps (package the model as a Cog model,
+      push it, create a Deployment, set `OMNIVOICE_ENDPOINT_URL`/`OMNIVOICE_API_KEY`) are documented
+      in `lib/voice/omnivoice.ts`'s header comment.
+    - **VoxCPM -> its own official vLLM-Omni integration**, which serves it behind an
+      **OpenAI-compatible `/v1/audio/speech` endpoint** (`vllm serve openbmb/VoxCPM2 --omni`) - the
+      real, documented way to serve this model without writing custom inference glue.
+      `VoxCPMProvider` is simply an OpenAI-TTS-shaped client against that endpoint, using VoxCPM's
+      documented `ref_audio` extension for cloned voices. Deploy steps are documented in
+      `lib/voice/voxcpm.ts`'s header comment.
+    - Both self-hosted adapters carry `requiresExternalHosting: true` on every `VoiceInfo` they
+      return, and every method throws a typed `VoiceProviderNotConfiguredError` (mapped to a
+      `422 VOICE_PROVIDER_NOT_CONFIGURED` response) until the org sets its endpoint URL + key -
+      **never fabricated voices or audio.** Neither has a built-in voice catalog (they're raw
+      synthesis/cloning models, not managed APIs with a voices list), so `listVoices()` honestly
+      returns an empty list once configured; every OmniVoice/VoxCPM voice in this build comes from
+      cloning.
+- `apps/backend/src/lib/crypto/credentials.ts`: AES-256-GCM encrypt/decrypt using
+  `CREDENTIAL_ENCRYPTION_KEY`, plus a `maskSecret()` helper for safe frontend display - built fresh
+  here (no prior phase needed it) and explicitly the pattern Phase 5 (Twilio/Telnyx), Phase 6
+  (Vapi) and Phase 13 (SMTP) are expected to reuse for their own credentials rather than each
+  rolling their own.
+- `apps/backend/src/lib/storage/`: a `StorageAdapter` interface with **one real implementation**,
+  `LocalDiskStorageAdapter` - the first phase that needs to durably write bytes it later serves
+  back (generated voice-preview audio, cloning reference samples). This is real, working local-disk
+  storage (served back by a new unauthenticated `GET /voice-previews/:key` route, keyed by
+  server-generated random UUIDs only) but is explicitly documented as **not production object
+  storage** - master spec section 22's real S3-compatible storage is still deferred; the interface
+  exists precisely so that swap is mechanical later, same as the LLM/voice adapter pattern.
+- Backend API: `/voice-providers` (catalog + this org's connection status, masked credentials
+  only), `POST /voice-providers/:key/credentials` (encrypts before storing), `POST
+  /voice-providers/:key/test-connection` (a real adapter call - `listVoices()` for the managed
+  providers, since there's no other reachability check for the self-hosted two, a tiny
+  `previewVoice()` call - persists real status/`last_verified_at`/`last_error`); `/voices`
+  (paginated, provider/language/gender/status filters), `POST /voices/sync/:providerKey`
+  (`listVoices()` -> upsert deduped on org+provider+provider_voice_id), `POST /voices/:id/preview`
+  (`previewVoice()` -> saved via `StorageAdapter` -> returns a URL), `POST /voices/clone`
+  (multipart upload, **hard-rejects a request with no explicit `consent_confirmed: true`** per the
+  spec's compliance rule, creates a `pending` voice row, then a `setImmediate` hand-off - same
+  pattern as Phase 2/3's async jobs - calls the provider's real `createVoice()` and transitions
+  `clone_status` to `ready`/`failed`), `DELETE /voices/:id`. Every route requires
+  `voices.manage` (already in the Phase 1 permission catalog, granted to
+  SUPER_ADMIN/ADMIN/MANAGER), scopes every query to the caller's `organization_id`, validates with
+  Zod, and audit-logs credential saves/connection tests/syncs/clones/deletes.
+- Frontend: replaces the "Voices" sidebar placeholder with a real module at `/voices` (3 tabs -
+  Voices: table with a real Play preview button per voice and "Self-hosted - endpoint required" vs
+  "Managed" badges; Provider Connections: per-provider credential form with a masked existing
+  value, a real Test Connection button, deploy instructions inline for the two self-hosted
+  providers; Clone Voice: upload + a required, cannot-submit-without-it consent checkbox + clone
+  status polling). Wires the agent Configuration tab's `voice_id` field (a bare text input since
+  Phase 3) to a real picker pulling the org's registered voices with its own preview button.
+- Backend tests: credential encryption round-trip/tamper-detection/not-configured (unit); each
+  adapter's request-shaping against fetch mocks, asserting on the exact documented URLs/headers/
+  payloads (unit, all 4 providers); the self-hosted providers' not-configured error paths with no
+  endpoint env vars set (unit); and a full integration test - connect ElevenLabs (HTTP mocked only
+  at the fetch boundary), a real test-connection call, sync, and a voice list scoped to the
+  connecting org only (a second org's list/provider status stays untouched even after the first
+  org's sync) - plus voice cloning rejecting a request with no consent and completing one with
+  consent once the (mocked) provider call resolves.
+
 **Explicitly NOT built yet** (deferred to later phases):
 
 - Campaigns, Dialing Settings, Callbacks, Dispositions - campaign/dialer management
 - Live Monitor (listen/barge/whisper on live calls)
 - CDR (call detail records), call history/recordings/transcripts on the lead detail page
-- Voices (Vapi / ElevenLabs / Cartesia integration) - `ai_agent_versions.voice_id` exists as a bare
-  column today, its FK and any real voice catalog/selection land in Phase 4
+- Vapi / real telephony (Twilio/Telnyx) integration for actually placing/receiving calls with a
+  chosen voice - Phase 4 only builds voice *management* (providers, credentials, the org's voice
+  catalog, cloning, preview); wiring a voice into a live call is Phase 5/6.
 - DIDs, Inbound Routes, Queues (Twilio/Telnyx number management, inbound call routing)
 - Messaging
 - Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake)
 - SMTP-backed email delivery
-- Background job queues / Redis (the async import in Phase 2 and the Phase 3 knowledge-document
-  pipeline both use `setImmediate` on the backend process itself - see above - specifically so this
-  later migration is mechanical for both)
-- Real object storage for uploaded import files and knowledge-base documents (both are parsed in
-  memory on receipt and never written to disk/S3; their `*_storage_path` columns record a synthetic
-  `memory:<...>` locator so the schema already matches a later phase that adds real storage - this is
-  also why knowledge-document "reprocess" in this build resets status and asks for a fresh upload
-  rather than fabricating a re-embed from bytes that were never persisted)
+- Background job queues / Redis (the async import in Phase 2, the Phase 3 knowledge-document
+  pipeline and Phase 4's voice cloning all use `setImmediate` on the backend process itself - see
+  above - specifically so this later migration is mechanical for all three)
+- Real, production S3-compatible object storage (master spec section 22) - Phase 4 adds the first
+  real implementation (`LocalDiskStorageAdapter`, see above) for voice-preview audio and cloning
+  samples, but it is explicitly local-disk, not durable/replicated production storage; uploaded
+  import files and knowledge-base documents from Phases 2-3 still use the synthetic
+  `memory:<...>` locator and are never persisted - this is also why knowledge-document "reprocess"
+  in this build resets status and asks for a fresh upload rather than fabricating a re-embed from
+  bytes that were never persisted
 - A second LLM/embedding provider - only `OpenAIProvider` is implemented; `LLMProviderAdapter` is
   provider-agnostic so a second one can be added without touching call sites
+- Actually deploying/running the OmniVoice or VoxCPM models on any GPU, serverless or otherwise -
+  Phase 4 ships real, working HTTP clients against endpoints the organization must stand up itself
+  (see `lib/voice/omnivoice.ts` / `voxcpm.ts` for exact steps); no GPU exists in this build/sandbox
 - Railway service provisioning
 
 ### Phase 3 environment requirements
@@ -212,6 +302,19 @@ requires the `pgvector` Postgres extension (`CREATE EXTENSION vector`, migration
 `00000000000021_knowledge_base.sql`); a hosted Supabase project has this available already, and a
 self-managed Postgres needs the `pgvector` extension package installed first (e.g.
 `apt install postgresql-16-pgvector` on Debian/Ubuntu, matching the server's major version).
+
+### Phase 4 environment requirements
+
+`CREDENTIAL_ENCRYPTION_KEY` must be set for `POST /voice-providers/:key/credentials` to work at
+all (a 64-hex-char or 32-byte-base64 key - generate one with `openssl rand -hex 32`); without it
+every credential save fails with an honest `422 CREDENTIAL_ENCRYPTION_NOT_CONFIGURED`. Each voice
+provider is otherwise opt-in per organization, via Voice Providers in the app, not a required
+startup variable - `ELEVENLABS_API_KEY`/`CARTESIA_API_KEY` (and `OMNIVOICE_ENDPOINT_URL`/
+`OMNIVOICE_API_KEY`, `VOXCPM_ENDPOINT_URL`/`VOXCPM_API_KEY`) in the backend env only act as a
+platform-level default an org's own stored credential overrides. `STORAGE_LOCAL_DIR` controls
+where generated voice-preview audio and cloning reference samples are written
+(`LocalDiskStorageAdapter`); it defaults to `apps/backend/.data/voice-storage` and needs no other
+configuration to work, but see the storage bullet above for why this isn't production storage.
 
 ## Running locally
 
@@ -328,6 +431,31 @@ were verified for real in both:
      retrieval isolation test (a second organization's identical query returns zero results; a
      guessed agent id from another org is rejected with 404), plus a no-provider-configured ->
      `status=failed` case.
+   - Phase 4: `apps/backend/src/voices.integration.test.ts` - connect ElevenLabs credentials (HTTP
+     mocked only at the fetch boundary, real route/adapter code unmocked), verify the raw API key
+     never appears in the save response, a real test-connection call, sync voices, and a voice list
+     scoped to the connecting org only (a second org's list and provider status stay untouched);
+     voice cloning rejects a request with no `consent_confirmed` (no voice row created) and
+     completes one with consent once the mocked provider response arrives (`clone_status`
+     pending -> ready with the real `provider_voice_id`).
+   - Phase 4 added 2 new migrations (25 total: the original 23 plus
+     `00000000000024_voices.sql`/`00000000000025_phase4_rls_policies.sql`), applied cleanly in
+     order to a fresh database; RLS confirmed enabled on all 26 tables including the 3 new ones
+     (`voice_providers`, `voice_provider_credentials`, `voices`); the permission catalog seed still
+     produces exactly 27 permissions (`voices.manage` was already seeded in Phase 1, granted to
+     SUPER_ADMIN/ADMIN/MANAGER - no new permission row needed); the `voice_providers` catalog seed
+     produces exactly the 4 expected providers with `requires_external_hosting` correctly set
+     (`false` for `elevenlabs`/`cartesia`, `true` for `omnivoice`/`voxcpm`); and the deferred
+     `ai_agent_versions.voice_id -> voices.id` foreign key is confirmed in place after converting
+     the column from `text` to `uuid`.
+
+**Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
+ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
+request URL/headers/payload is built from each provider's current public API documentation, and
+their unit tests assert on those exact shapes against a mocked `fetch`), and OmniVoice/VoxCPM
+end-to-end synthesis/cloning, which requires an organization to actually deploy a serverless GPU
+endpoint first (no GPU exists in this build/sandbox) - both adapters' "not configured" and
+request-shaping logic are unit-tested instead.
 
 If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
