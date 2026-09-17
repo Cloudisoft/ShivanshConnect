@@ -13,3 +13,4 @@ export * from './orchestration.js';
 export * from './campaign.js';
 export * from './disposition.js';
 export * from './callback.js';
+export * from './cdr.js';

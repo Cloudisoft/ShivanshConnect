@@ -99,6 +99,8 @@ export const AUDIT_ACTIONS = {
   CALLBACK_CANCELLED: 'callback.cancelled',
 
   LEAD_DNC_REQUESTED_ON_CALL: 'lead.dnc_requested_on_call',
+
+  CDR_EXPORT_CREATED: 'cdr.export_created',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
