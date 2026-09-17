@@ -66,6 +66,12 @@ export const AUDIT_ACTIONS = {
   PHONE_NUMBER_IMPORTED: 'phone_number.imported',
   PHONE_NUMBER_UPDATED: 'phone_number.updated',
   PHONE_NUMBER_DELETED: 'phone_number.deleted',
+
+  VAPI_CREDENTIALS_SAVED: 'vapi.credentials_saved',
+  VAPI_CONNECTION_TESTED: 'vapi.connection_tested',
+  CALL_CREATED: 'call.created',
+  CALL_TRANSFER_REQUESTED: 'call.transfer_requested',
+  WEBHOOK_EVENT_REPLAYED: 'webhook_event.replayed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
