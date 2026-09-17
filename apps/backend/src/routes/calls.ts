@@ -279,7 +279,25 @@ export async function callRoutes(app: FastifyInstance): Promise<void> {
         return ok(updated, { message: 'Call placed.' });
       }
 
-      // pipecat
+      // pipecat - see PipecatProvider's header comment for exactly why
+      // the org's carrier credentials are resolved HERE (reusing Phase
+      // 5's existing storage/adapters, nothing new persisted) and
+      // forwarded transiently, once, rather than pipecat-service holding
+      // its own copy.
+      if (phoneNumber.provider_key !== 'twilio' && phoneNumber.provider_key !== 'telnyx') {
+        throw new ValidationError('The pipecat engine currently places calls through a connected Twilio or Telnyx number only - this number is BYON.');
+      }
+      const { data: telephonyCredRow } = await supabase
+        .from('phone_number_provider_credentials')
+        .select('encrypted_credentials')
+        .eq('organization_id', orgId)
+        .eq('provider_key', phoneNumber.provider_key)
+        .maybeSingle();
+      if (!telephonyCredRow) {
+        throw new ValidationError(`${phoneNumber.provider_key} is not connected for this organization - required for the pipecat engine to place this call.`);
+      }
+      const telephonyCreds = toTelephonyAdapterCredentials(phoneNumber.provider_key, telephonyCredRow.encrypted_credentials as EncryptedEnvelope);
+
       const provider = createOrchestrationProvider('pipecat');
       const created = await provider.createCall({
         callId: call.id,
@@ -290,6 +308,10 @@ export async function callRoutes(app: FastifyInstance): Promise<void> {
         fromPhoneNumberProviderId: null,
         toPhoneNumber: customerNumber,
         transferDestinationE164: transferDestination,
+        telephonyCredentials:
+          phoneNumber.provider_key === 'twilio'
+            ? { provider: 'twilio', accountSid: (telephonyCreds as { account_sid: string }).account_sid, authToken: (telephonyCreds as { auth_token: string }).auth_token }
+            : { provider: 'telnyx', apiKey: (telephonyCreds as { api_key: string }).api_key },
       });
 
       const { data: updated, error: updateError } = await supabase

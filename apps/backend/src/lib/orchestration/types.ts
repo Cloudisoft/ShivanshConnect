@@ -96,6 +96,23 @@ export interface AssistantResult {
   providerAssistantId: string;
 }
 
+/** Transient, single-use carrier credentials for the PIPECAT engine only -
+ * resolved and decrypted by routes/calls.ts from Phase 5's existing
+ * per-org encrypted storage, then forwarded once over the private network
+ * to pipecat-service so IT can place the actual outbound Twilio/Telnyx
+ * call and wire up the media stream. pipecat-service never stores these -
+ * see PipecatProvider's class doc for exactly why this is the chosen
+ * split between "don't duplicate credential storage" and "don't hand
+ * pipecat-service a long-lived credential of its own". Vapi never uses
+ * this field - Vapi originates calls itself once a number is imported
+ * into it. */
+export interface TransientTelephonyCredentials {
+  provider: 'twilio' | 'telnyx';
+  accountSid?: string;
+  authToken?: string;
+  apiKey?: string;
+}
+
 export interface CreateCallParams {
   callId: string; // internal calls.id, created BEFORE the provider call per spec 72
   organizationId: string;
@@ -108,6 +125,8 @@ export interface CreateCallParams {
    * call (from the agent/campaign's own config) - never client-supplied.
    * Null when the agent has no transfer destination configured. */
   transferDestinationE164: string | null;
+  /** pipecat only - see TransientTelephonyCredentials's doc. */
+  telephonyCredentials?: TransientTelephonyCredentials | null;
 }
 
 export interface CreateCallResult {

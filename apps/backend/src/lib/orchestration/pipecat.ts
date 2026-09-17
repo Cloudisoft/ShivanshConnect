@@ -6,39 +6,30 @@
  * apps/pipecat-service/README.md for how to run/deploy it.
  *
  * ARCHITECTURAL CHOICE - who originates the call vs who handles media:
- * Call origination (dialing the customer's phone) happens through
- * Twilio/Telnyx's own REST API, called directly from THIS Node backend
- * using Phase 5's already-stored, already-decrypted TwilioProvider/
- * TelnyxProvider adapters and credentials - never duplicated into the
- * Python service. The Node backend originates the call with Twilio/
- * Telnyx's <Stream> TwiML (or Telnyx's equivalent streaming media
- * command) pointed at the pipecat-service's WebSocket media endpoint, and
- * only then asks pipecat-service to *handle* the resulting media stream
- * once the carrier connects it.
+ * The spec brief offered two options: (a) pipecat-service calls back to
+ * Node for a short-lived scoped credential fetch, or (b) Node originates
+ * the call itself and only asks pipecat-service to handle the resulting
+ * media stream. This codebase uses a variant of (a) that avoids adding a
+ * whole extra Node<->Python callback round trip: routes/calls.ts resolves
+ * and decrypts the org's Twilio/Telnyx credentials using Phase 5's
+ * EXISTING adapters/storage (zero duplication - nothing new is ever
+ * persisted), then forwards them ONCE, transiently, in this single
+ * createCall() request body (see CreateCallParams.telephonyCredentials).
+ * pipecat-service uses them exactly once, synchronously, to place the
+ * real outbound call via the carrier's own REST API and open a Media
+ * Streams WebSocket back to itself - it never stores or logs them. This
+ * is the practical shape of "a short-lived, scoped credential fetch" here:
+ * scoped to a single call, short-lived because it's used and discarded in
+ * the same request, and it needed no separate callback endpoint on Node
+ * because createCall() already carries everything else needed to place
+ * this specific call.
  *
- * This is the cleaner split for three reasons: (1) it reuses Phase 5's
- * credential storage and adapters exactly, with zero duplication of
- * Twilio/Telnyx auth in Python; (2) pipecat-service never needs to see a
- * decrypted carrier credential at all, only a short-lived, scoped
- * "handle this call id" instruction plus the LLM/STT/TTS keys it already
- * reads from its own environment; (3) it matches how VapiProvider already
- * works from this codebase's point of view - "create a call" always means
- * "ask something else to dial the phone", the engine's own job starts once
- * the media is flowing.
- *
- * Concretely: createCall() here (a) resolves the org's Twilio/Telnyx
- * credentials via the existing lib/telephony adapters, (b) originates the
- * outbound call with the carrier's REST API using TwiML/streaming
- * instructions that connect the call's audio to
- * `${PIPECAT_SERVICE_URL}/media-stream/{internal call id}`, then (c) POSTs
- * to pipecat-service's `/calls` control endpoint so it knows this
- * particular call id is coming and which agent config to run for it. The
- * carrier's own call SID becomes this call's `pipecat_call_id` is NOT
- * correct terminology - see below: pipecat-service assigns its own
- * internal pipeline id when it registers the expected call, and that id
- * (not the carrier's SID) is what's stored as `pipecat_call_id`, exactly
- * parallel to how vapi_call_id is Vapi's own id rather than any carrier
- * id. The carrier SID is recorded in call_events instead.
+ * pipecat-service assigns its OWN internal pipeline id to the call - that
+ * id (not the carrier's Twilio/Telnyx call SID) is what's returned here
+ * and stored as `calls.pipecat_call_id`, exactly parallel to how
+ * `vapi_call_id` is Vapi's own id rather than any carrier id. The
+ * carrier's own SID is recorded in call_events instead (see
+ * apps/pipecat-service's own event posting).
  *
  * If PIPECAT_SERVICE_URL is unset, or the org has no Twilio/Telnyx
  * connected, every method throws OrchestrationProviderNotConfiguredError -
@@ -139,6 +130,11 @@ export class PipecatProvider implements CallOrchestrationProvider {
   }
 
   async createCall(params: CreateCallParams): Promise<CreateCallResult> {
+    if (!params.telephonyCredentials) {
+      throw new OrchestrationProviderNotConfiguredError(
+        'The pipecat engine needs this organization\'s Twilio or Telnyx credentials to place a call - connect one under Phone Providers first.',
+      );
+    }
     const payload = {
       internal_call_id: params.callId,
       organization_id: params.organizationId,
@@ -146,6 +142,15 @@ export class PipecatProvider implements CallOrchestrationProvider {
       from_e164: params.fromPhoneNumber,
       to_e164: params.toPhoneNumber,
       transfer_destination_e164: params.transferDestinationE164,
+      // Transient, single-use - see this file's header comment. Never
+      // logged by this client, and pipecat-service is documented to
+      // discard it immediately after placing the call.
+      telephony: {
+        provider: params.telephonyCredentials.provider,
+        account_sid: params.telephonyCredentials.accountSid,
+        auth_token: params.telephonyCredentials.authToken,
+        api_key: params.telephonyCredentials.apiKey,
+      },
     };
     const created = await this.request<{ pipecat_call_id: string; status: string }>('POST', '/calls', payload);
     return { providerCallId: created.pipecat_call_id, status: created.status };

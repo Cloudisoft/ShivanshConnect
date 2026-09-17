@@ -66,6 +66,7 @@ describe('PipecatProvider', () => {
       fromPhoneNumberProviderId: null,
       toPhoneNumber: '+14845552222',
       transferDestinationE164: '+14845559999',
+      telephonyCredentials: { provider: 'twilio', accountSid: 'AC123', authToken: 'secret' },
     });
 
     expect(result).toEqual({ providerCallId: 'pc_1', status: 'dialing' });
@@ -80,7 +81,27 @@ describe('PipecatProvider', () => {
       from_e164: '+14845551111',
       to_e164: '+14845552222',
       transfer_destination_e164: '+14845559999',
+      telephony: { provider: 'twilio', account_sid: 'AC123', auth_token: 'secret', api_key: undefined },
     });
+  });
+
+  it('createCall() requires telephonyCredentials for the pipecat engine (never a simulated call)', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new PipecatProvider('http://localhost:8100');
+    await expect(
+      provider.createCall({
+        callId: 'call-1',
+        organizationId: 'org-1',
+        providerAssistantId: null,
+        agentVersionId: 'version-1',
+        fromPhoneNumber: '+14845551111',
+        fromPhoneNumberProviderId: null,
+        toPhoneNumber: '+14845552222',
+        transferDestinationE164: null,
+      }),
+    ).rejects.toBeInstanceOf(OrchestrationProviderNotConfiguredError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('a 422 from pipecat-service surfaces as OrchestrationProviderNotConfiguredError (e.g. missing STT/TTS/LLM key)', async () => {
@@ -97,6 +118,7 @@ describe('PipecatProvider', () => {
         fromPhoneNumberProviderId: null,
         toPhoneNumber: '+14845552222',
         transferDestinationE164: null,
+        telephonyCredentials: { provider: 'telnyx', apiKey: 'key' },
       }),
     ).rejects.toBeInstanceOf(OrchestrationProviderNotConfiguredError);
   });
