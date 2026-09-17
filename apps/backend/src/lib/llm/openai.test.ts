@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import { OpenAIProvider } from './openai.js';
 import { LlmNotConfiguredError } from './types.js';
 
