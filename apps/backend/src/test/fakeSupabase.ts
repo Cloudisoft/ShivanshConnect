@@ -239,6 +239,8 @@ export function createFakeSupabase() {
         return value === 'null' ? actual === null || actual === undefined : actual === value;
       case 'gte':
         return actual >= value;
+      case 'gt':
+        return actual > value;
       case 'lte':
         return actual <= value;
       default:
@@ -533,17 +535,30 @@ export function createFakeSupabase() {
       return this;
     }
 
+    gt(field: string, value: any): this {
+      this.filters.push([field, 'gt', value]);
+      return this;
+    }
+
     lte(field: string, value: any): this {
       this.filters.push([field, 'lte', value]);
       return this;
     }
 
     or(expr: string): this {
-      // Supports the one shape this codebase uses:
-      // "is_system_role.eq.true,organization_id.eq.<uuid>"
+      // Supports the shapes this codebase uses, e.g.
+      // "is_system_role.eq.true,organization_id.eq.<uuid>" or
+      // "next_eligible_at.is.null,next_eligible_at.lte.<ISO timestamp>".
+      // Splits on only the FIRST TWO dots - an ISO timestamp value itself
+      // contains a dot before its milliseconds (and the field/op never
+      // do), so a naive full split() would truncate it.
       this.orFilters = expr.split(',').map((clause) => {
-        const [field, op, rawValue] = clause.split('.');
-        const value = rawValue === 'true' ? true : rawValue === 'false' ? false : rawValue;
+        const firstDot = clause.indexOf('.');
+        const secondDot = clause.indexOf('.', firstDot + 1);
+        const field = clause.slice(0, firstDot);
+        const op = clause.slice(firstDot + 1, secondDot);
+        const rawValue = clause.slice(secondDot + 1);
+        const value = rawValue === 'true' ? true : rawValue === 'false' ? false : rawValue === 'null' ? null : rawValue;
         return [field, op, value] as [string, string, any];
       });
       return this;

@@ -107,5 +107,26 @@ export async function applyCallOutcomeToCampaignLead(
     update = { status: 'completed', final_disposition: dispositionCode ?? call.ended_reason ?? nextStatus };
   }
 
+  // Callback scheduling overrides normal cooldown (spec 53): a callback
+  // may have been created WHILE this call was still active (a tool-call
+  // fired mid-call, before this end-of-call bookkeeping ran) - the
+  // callback's own scheduled_at always wins over whatever cooldown/retry
+  // math this terminal event would otherwise compute, so scheduling
+  // ordering never matters. Never applies to a DNC outcome - that hard
+  // invariant is checked above and returns early.
+  const { data: pendingCallback } = await supabase
+    .from('callbacks')
+    .select('id, scheduled_at')
+    .eq('campaign_id', call.campaign_id)
+    .eq('lead_id', call.lead_id)
+    .in('status', ['scheduled', 'pending'])
+    .gt('scheduled_at', new Date().toISOString())
+    .order('scheduled_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (pendingCallback) {
+    update = { status: 'pending', next_eligible_at: pendingCallback.scheduled_at, final_disposition: dispositionCode ?? update.final_disposition };
+  }
+
   await supabase.from('campaign_leads').update(update).eq('id', campaignLead.id);
 }

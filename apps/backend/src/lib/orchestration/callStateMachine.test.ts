@@ -35,4 +35,23 @@ describe('call state machine', () => {
       expect(isValidCallTransition(status, 'in_progress')).toBe(false);
     }
   });
+
+  it('a caller can request DNC from any in-call, non-terminal state (Phase 8 spec 60)', () => {
+    for (const status of ['queued', 'dialing', 'ringing', 'answered', 'in_progress', 'voicemail', 'answering_machine', 'transfer_pending', 'transferring', 'transfer_failed'] as const) {
+      expect(isValidCallTransition(status, 'dnc')).toBe(true);
+    }
+  });
+
+  it('every state in the full enum is represented in the transition table (no orphan states)', () => {
+    const allStates = ['queued', 'dialing', 'ringing', 'answered', 'in_progress', 'voicemail', 'answering_machine', 'transfer_pending', 'transferring', 'transferred', 'transfer_failed', 'completed', 'failed', 'dnc', 'cancelled'] as const;
+    for (const status of allStates) {
+      // Every state is at least a valid no-op transition target from
+      // itself - proves the transition table has an entry for it.
+      expect(isValidCallTransition(status, status)).toBe(true);
+    }
+  });
+
+  it('rejects skipping straight from queued to in_progress (must go through dialing first)', () => {
+    expect(isValidCallTransition('queued', 'in_progress')).toBe(false);
+  });
 });

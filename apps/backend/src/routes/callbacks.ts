@@ -65,6 +65,14 @@ export async function callbackRoutes(app: FastifyInstance): Promise<void> {
       if (!campaign || campaign.organization_id !== orgId) throw new ValidationError('Campaign not found for this organization.');
     }
 
+    // A callback attached to a campaign defaults to `assigned_to = 'ai'`
+    // (an auto-dial candidate the dispatcher will pick up through the
+    // same claim machinery as any other lead) unless the caller explicitly
+    // names a human agent - a supervisor scheduling a follow-up call FOR
+    // the campaign is the common case per spec 53. A callback with no
+    // campaign has nothing to auto-dial into, so it defaults to the
+    // creating user's own manual follow-up instead.
+    const defaultAssignedTo = body.campaign_id ? 'ai' : req.user!.id;
     const { callback } = await createCallback(supabase, {
       organizationId: orgId,
       leadId: body.lead_id,
@@ -74,7 +82,7 @@ export async function callbackRoutes(app: FastifyInstance): Promise<void> {
       timezone: body.timezone,
       reason: body.reason ?? null,
       notes: body.notes ?? null,
-      assignedTo: body.assigned_to ?? req.user!.id,
+      assignedTo: body.assigned_to ?? defaultAssignedTo,
       sourceCallId: null,
       createdBy: req.user!.id,
     });
