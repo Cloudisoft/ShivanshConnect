@@ -1,0 +1,408 @@
+import { useEffect, useState } from 'react';
+import {
+  BEHAVIOR_TRAITS,
+  PERSONALITY_TONES,
+  PERSONALITY_TRAITS,
+  PROMPT_VARIABLES,
+  type AiAgentVersion,
+} from '@shivanshconnect/shared';
+import { useAuth } from '../../hooks/useAuth';
+import {
+  useAgentVersions,
+  useCreateAgentVersion,
+  usePublishAgentVersion,
+  useUpdateAgentVersion,
+} from '../../hooks/useAgents';
+import { Alert, Button, Card, Input, Label } from '../../components/ui';
+import { ApiClientError } from '../../lib/apiClient';
+
+function VariablePalette(): JSX.Element {
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {PROMPT_VARIABLES.map((v) => (
+        <code
+          key={v}
+          className="rounded bg-ink-100 px-1.5 py-0.5 text-[11px] text-ink-600"
+          title="Click to copy"
+          onClick={() => navigator.clipboard?.writeText(`{{${v}}}`).catch(() => undefined)}
+        >
+          {`{{${v}}}`}
+        </code>
+      ))}
+    </div>
+  );
+}
+
+function TogglePills({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: readonly string[];
+  selected: string[];
+  onToggle: (value: string) => void;
+}): JSX.Element {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((option) => {
+        const active = selected.includes(option);
+        return (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onToggle(option)}
+            className={
+              active
+                ? 'rounded-full bg-ink-900 px-3 py-1 text-xs font-medium text-white'
+                : 'rounded-full border border-ink-300 bg-white px-3 py-1 text-xs font-medium text-ink-700 hover:bg-ink-50'
+            }
+          >
+            {option}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+interface DraftForm {
+  tone: string | null;
+  personality_traits: string[];
+  behavior_traits: string[];
+  language: string;
+  accent: string;
+  greeting_template: string;
+  system_prompt: string;
+  fallback_behavior: string;
+  llm_provider: string;
+  llm_model: string;
+  llm_temperature: number;
+  llm_max_tokens: number;
+  voice_id: string;
+  transfer_on_no_match: 'end_call' | 'transfer' | 'voicemail';
+  transfer_to: string;
+  max_call_duration_seconds: string;
+}
+
+function formFromVersion(v: AiAgentVersion | null): DraftForm {
+  return {
+    tone: v?.personality?.tone ?? null,
+    personality_traits: v?.personality?.personality_traits ?? [],
+    behavior_traits: v?.personality?.behavior_traits ?? [],
+    language: v?.language ?? 'en-US',
+    accent: v?.accent ?? '',
+    greeting_template: v?.greeting_template ?? '',
+    system_prompt: v?.system_prompt ?? '',
+    fallback_behavior: v?.fallback_behavior ?? '',
+    llm_provider: v?.llm_provider ?? 'openai',
+    llm_model: v?.llm_model ?? 'gpt-4o-mini',
+    llm_temperature: v?.llm_temperature ?? 0.7,
+    llm_max_tokens: v?.llm_max_tokens ?? 800,
+    voice_id: v?.voice_id ?? '',
+    transfer_on_no_match: v?.transfer_rules?.on_no_match ?? 'end_call',
+    transfer_to: v?.transfer_rules?.transfer_to ?? '',
+    max_call_duration_seconds: v?.call_ending_rules?.max_call_duration_seconds
+      ? String(v.call_ending_rules.max_call_duration_seconds)
+      : '',
+  };
+}
+
+function toPayload(form: DraftForm) {
+  return {
+    personality: {
+      tone: form.tone,
+      personality_traits: form.personality_traits,
+      behavior_traits: form.behavior_traits,
+    },
+    language: form.language,
+    accent: form.accent || null,
+    greeting_template: form.greeting_template,
+    system_prompt: form.system_prompt,
+    fallback_behavior: form.fallback_behavior || null,
+    llm_provider: form.llm_provider,
+    llm_model: form.llm_model,
+    llm_temperature: form.llm_temperature,
+    llm_max_tokens: form.llm_max_tokens,
+    voice_id: form.voice_id || null,
+    transfer_rules: {
+      on_no_match: form.transfer_on_no_match,
+      transfer_to: form.transfer_to || null,
+      conditions: [],
+    },
+    call_ending_rules: {
+      max_call_duration_seconds: form.max_call_duration_seconds ? Number(form.max_call_duration_seconds) : null,
+      end_phrases: [],
+      summarize_before_ending: true,
+    },
+  };
+}
+
+export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element {
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission('agents.manage');
+  const versionsQuery = useAgentVersions(agentId);
+  const createVersion = useCreateAgentVersion(agentId);
+  const updateVersion = useUpdateAgentVersion(agentId);
+  const publishVersion = usePublishAgentVersion(agentId);
+
+  const versions = versionsQuery.data ?? [];
+  const draft = versions.find((v) => v.status === 'draft') ?? null;
+  const published = versions.find((v) => v.status === 'published') ?? null;
+
+  const [form, setForm] = useState<DraftForm>(() => formFromVersion(draft ?? published));
+  const [error, setError] = useState<string | null>(null);
+  const [confirmPublish, setConfirmPublish] = useState(false);
+
+  const draftId = draft?.id;
+  const publishedId = published?.id;
+  useEffect(() => {
+    setForm(formFromVersion(draft ?? published));
+    // Only re-sync the form when which version is active changes, not on
+    // every render (the effect intentionally excludes draft/published
+    // object identity since a new object is fetched on each query).
+  }, [draftId, publishedId]);
+
+  if (versionsQuery.isLoading) return <p className="text-sm text-ink-500">Loading configuration...</p>;
+
+  async function handleSaveDraft() {
+    setError(null);
+    try {
+      if (draft) {
+        await updateVersion.mutateAsync({ versionId: draft.id, ...toPayload(form) });
+      } else {
+        await createVersion.mutateAsync(toPayload(form));
+      }
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Could not save the draft.');
+    }
+  }
+
+  async function handlePublish() {
+    setError(null);
+    try {
+      let versionId = draft?.id;
+      if (!versionId) {
+        const created = await createVersion.mutateAsync(toPayload(form));
+        versionId = created.id;
+      } else {
+        await updateVersion.mutateAsync({ versionId, ...toPayload(form) });
+      }
+      await publishVersion.mutateAsync(versionId);
+      setConfirmPublish(false);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Could not publish this version.');
+    }
+  }
+
+  const saving = createVersion.isPending || updateVersion.isPending || publishVersion.isPending;
+
+  return (
+    <div className="space-y-6">
+      {error && <Alert>{error}</Alert>}
+
+      {published && !draft && (
+        <Alert variant="info">
+          Editing will create a new draft version {(versions[0]?.version_number ?? 0) + 1}. Version{' '}
+          {published.version_number} stays published until you publish the new one.
+        </Alert>
+      )}
+
+      <Card>
+        <h3 className="text-sm font-semibold text-ink-900">Personality</h3>
+        <div className="mt-3">
+          <Label>Tone</Label>
+          <TogglePills
+            options={PERSONALITY_TONES}
+            selected={form.tone ? [form.tone] : []}
+            onToggle={(t) => setForm((f) => ({ ...f, tone: f.tone === t ? null : t }))}
+          />
+        </div>
+        <div className="mt-4">
+          <Label>Personality traits</Label>
+          <TogglePills
+            options={PERSONALITY_TRAITS}
+            selected={form.personality_traits}
+            onToggle={(t) =>
+              setForm((f) => ({
+                ...f,
+                personality_traits: f.personality_traits.includes(t)
+                  ? f.personality_traits.filter((x) => x !== t)
+                  : [...f.personality_traits, t],
+              }))
+            }
+          />
+        </div>
+        <div className="mt-4">
+          <Label>Behavior</Label>
+          <TogglePills
+            options={BEHAVIOR_TRAITS}
+            selected={form.behavior_traits}
+            onToggle={(t) =>
+              setForm((f) => ({
+                ...f,
+                behavior_traits: f.behavior_traits.includes(t)
+                  ? f.behavior_traits.filter((x) => x !== t)
+                  : [...f.behavior_traits, t],
+              }))
+            }
+          />
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label htmlFor="language">Language</Label>
+            <Input id="language" value={form.language} onChange={(e) => setForm((f) => ({ ...f, language: e.target.value }))} />
+          </div>
+          <div>
+            <Label htmlFor="accent">Accent (optional)</Label>
+            <Input id="accent" value={form.accent} onChange={(e) => setForm((f) => ({ ...f, accent: e.target.value }))} />
+          </div>
+        </div>
+      </Card>
+
+      <Card>
+        <h3 className="text-sm font-semibold text-ink-900">Greeting &amp; system prompt</h3>
+        <div className="mt-3">
+          <Label htmlFor="greeting">Greeting template</Label>
+          <textarea
+            id="greeting"
+            className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+            rows={2}
+            value={form.greeting_template}
+            onChange={(e) => setForm((f) => ({ ...f, greeting_template: e.target.value }))}
+          />
+          <VariablePalette />
+        </div>
+        <div className="mt-4">
+          <Label htmlFor="system_prompt">System prompt</Label>
+          <textarea
+            id="system_prompt"
+            className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 font-mono text-xs text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+            rows={10}
+            value={form.system_prompt}
+            onChange={(e) => setForm((f) => ({ ...f, system_prompt: e.target.value }))}
+          />
+          <VariablePalette />
+        </div>
+        <div className="mt-4">
+          <Label htmlFor="fallback">Fallback behavior</Label>
+          <textarea
+            id="fallback"
+            className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+            rows={2}
+            placeholder="What the agent should do when it doesn't understand the caller"
+            value={form.fallback_behavior}
+            onChange={(e) => setForm((f) => ({ ...f, fallback_behavior: e.target.value }))}
+          />
+        </div>
+      </Card>
+
+      <Card>
+        <h3 className="text-sm font-semibold text-ink-900">Transfer &amp; call-ending rules</h3>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label htmlFor="on_no_match">When the agent can't help</Label>
+            <select
+              id="on_no_match"
+              className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+              value={form.transfer_on_no_match}
+              onChange={(e) => setForm((f) => ({ ...f, transfer_on_no_match: e.target.value as DraftForm['transfer_on_no_match'] }))}
+            >
+              <option value="end_call">End the call</option>
+              <option value="transfer">Transfer</option>
+              <option value="voicemail">Send to voicemail</option>
+            </select>
+          </div>
+          {form.transfer_on_no_match === 'transfer' && (
+            <div>
+              <Label htmlFor="transfer_to">Transfer to</Label>
+              <Input
+                id="transfer_to"
+                placeholder="Extension, number, or queue"
+                value={form.transfer_to}
+                onChange={(e) => setForm((f) => ({ ...f, transfer_to: e.target.value }))}
+              />
+            </div>
+          )}
+          <div>
+            <Label htmlFor="max_duration">Max call duration (seconds, optional)</Label>
+            <Input
+              id="max_duration"
+              type="number"
+              min={1}
+              value={form.max_call_duration_seconds}
+              onChange={(e) => setForm((f) => ({ ...f, max_call_duration_seconds: e.target.value }))}
+            />
+          </div>
+        </div>
+      </Card>
+
+      <Card>
+        <h3 className="text-sm font-semibold text-ink-900">LLM settings</h3>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <Label htmlFor="llm_provider">Provider</Label>
+            <Input id="llm_provider" value={form.llm_provider} onChange={(e) => setForm((f) => ({ ...f, llm_provider: e.target.value }))} />
+          </div>
+          <div>
+            <Label htmlFor="llm_model">Model</Label>
+            <Input id="llm_model" value={form.llm_model} onChange={(e) => setForm((f) => ({ ...f, llm_model: e.target.value }))} />
+          </div>
+          <div>
+            <Label htmlFor="llm_temperature">Temperature</Label>
+            <Input
+              id="llm_temperature"
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
+              value={form.llm_temperature}
+              onChange={(e) => setForm((f) => ({ ...f, llm_temperature: Number(e.target.value) }))}
+            />
+          </div>
+          <div>
+            <Label htmlFor="llm_max_tokens">Max tokens</Label>
+            <Input
+              id="llm_max_tokens"
+              type="number"
+              min={1}
+              value={form.llm_max_tokens}
+              onChange={(e) => setForm((f) => ({ ...f, llm_max_tokens: Number(e.target.value) }))}
+            />
+          </div>
+        </div>
+        <div className="mt-3">
+          <Label htmlFor="voice_id">Voice (Phase 4 wires up real voice selection)</Label>
+          <Input
+            id="voice_id"
+            placeholder="Voice id"
+            value={form.voice_id}
+            onChange={(e) => setForm((f) => ({ ...f, voice_id: e.target.value }))}
+          />
+        </div>
+      </Card>
+
+      {canManage && (
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" disabled={saving} onClick={handleSaveDraft}>
+            {saving ? 'Saving...' : draft ? 'Save draft' : 'Create draft'}
+          </Button>
+          {!confirmPublish ? (
+            <Button disabled={saving} onClick={() => setConfirmPublish(true)}>
+              Publish
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2 rounded-md border border-gold-300 bg-gold-50 px-3 py-2 text-sm">
+              <span>Publish this version? It becomes live for calls immediately.</span>
+              <Button disabled={saving} onClick={handlePublish}>
+                {saving ? 'Publishing...' : 'Confirm publish'}
+              </Button>
+              <Button variant="ghost" onClick={() => setConfirmPublish(false)}>
+                Cancel
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

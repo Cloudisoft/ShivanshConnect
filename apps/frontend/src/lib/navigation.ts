@@ -25,8 +25,10 @@ export interface NavItem {
   label: string;
   path: string;
   icon: LucideIcon;
-  /** Phase 1 builds Dashboard, Users and Settings end-to-end; everything
-   * else routes to an honest "scheduled for a later phase" placeholder. */
+  /** True once a module has a real page wired up (name kept from Phase 1
+   * for git-history continuity - it now also covers later phases, e.g.
+   * Phase 3's AI Agents). Everything still false routes to an honest
+   * "scheduled for a later phase" placeholder. */
   builtInPhase1: boolean;
 }
 
@@ -41,7 +43,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'dispositions', label: 'Dispositions', path: '/dispositions', icon: Tag, builtInPhase1: false },
   { id: 'cdr', label: 'CDR', path: '/cdr', icon: FileText, builtInPhase1: false },
   { id: 'analytics', label: 'Analytics', path: '/analytics', icon: BarChart3, builtInPhase1: false },
-  { id: 'ai-agents', label: 'AI Agents', path: '/ai-agents', icon: Bot, builtInPhase1: false },
+  { id: 'ai-agents', label: 'AI Agents', path: '/ai-agents', icon: Bot, builtInPhase1: true },
   { id: 'voices', label: 'Voices', path: '/voices', icon: Mic, builtInPhase1: false },
   { id: 'dids', label: 'DIDs', path: '/dids', icon: Phone, builtInPhase1: false },
   { id: 'inbound-routes', label: 'Inbound Routes', path: '/inbound-routes', icon: Route, builtInPhase1: false },

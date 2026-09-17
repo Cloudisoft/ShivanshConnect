@@ -14,6 +14,9 @@ import { UsersPage } from './pages/UsersPage';
 import { LeadListsPage } from './pages/LeadListsPage';
 import { LeadsPage } from './pages/LeadsPage';
 import { LeadDetailPage } from './pages/LeadDetailPage';
+import { AgentsPage } from './pages/AgentsPage';
+import { AgentDetailPage } from './pages/AgentDetailPage';
+import { ScriptsPage } from './pages/ScriptsPage';
 import { SettingsLayout } from './pages/settings/SettingsLayout';
 import { OrganizationSettingsPage } from './pages/settings/OrganizationSettingsPage';
 import { ProfileSettingsPage } from './pages/settings/ProfileSettingsPage';
@@ -45,6 +48,9 @@ export default function App(): JSX.Element {
           <Route path="/lead-lists" element={<LeadListsPage />} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/:id" element={<LeadDetailPage />} />
+          <Route path="/ai-agents" element={<AgentsPage />} />
+          <Route path="/ai-agents/:id" element={<AgentDetailPage />} />
+          <Route path="/scripts" element={<ScriptsPage />} />
 
           <Route path="/settings" element={<SettingsLayout />}>
             <Route index element={<Navigate to="/settings/organization" replace />} />
