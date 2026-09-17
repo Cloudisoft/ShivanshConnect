@@ -1,0 +1,32 @@
+{
+  "name": "shivanshconnect",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ShivanshConnect - multi-tenant AI voice contact-center platform (Phase 1)",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "pnpm --parallel -r --filter=./apps/* run dev",
+    "dev:backend": "pnpm --filter @shivanshconnect/backend run dev",
+    "dev:frontend": "pnpm --filter @shivanshconnect/frontend run dev",
+    "dev:worker": "pnpm --filter @shivanshconnect/worker run dev",
+    "build": "pnpm -r --filter=./packages/* run build && pnpm -r --filter=./apps/* run build",
+    "test": "pnpm -r --filter=./apps/* run test",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+    "supabase:push": "supabase db push",
+    "supabase:reset": "supabase db reset"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3"
+  }
+}

@@ -1,0 +1,13 @@
+-- Local development seed data.
+--
+-- The permission catalog and the 5 system roles (SUPER_ADMIN, ADMIN,
+-- MANAGER, AGENT, VIEWER) are seeded by
+-- supabase/migrations/00000000000009_seed_roles_permissions.sql so that
+-- they are also applied on `supabase db push` against a real project, not
+-- just on local `supabase db reset` (which runs migrations then this file).
+--
+-- Phase 1 intentionally ships with no fake/demo organizations, users or
+-- audit log rows here - every organization and user in this system is
+-- created for real through POST /api/v1/auth/signup, which provisions a
+-- Supabase Auth user and its matching public.users row together. Seeding
+-- a fake tenant here would violate the "no fake data" rule for this build.
