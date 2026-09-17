@@ -1,21 +1,26 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-5** (organizations, auth, users, roles/permissions, audit logs, the overall
+build covers Phases 1-6** (organizations, auth, users, roles/permissions, audit logs, the overall
 app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; AI agents/agent versioning/
-prompt system/knowledge base (RAG)/scripts; voice providers/cloning; and now telephony number
-providers - Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry).
-Later phases (campaigns, dialing, live monitoring, messaging, analytics, and more) are deliberately
-**not** implemented yet - see [Phase plan status](#phase-plan-status) below.
+prompt system/knowledge base (RAG)/scripts; voice providers/cloning; telephony number providers -
+Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry; and now call
+orchestration - Vapi (managed) plus pipecat (a real, self-hosted second engine running as its own
+Python service, `apps/pipecat-service`), the one authoritative `calls` record regardless of engine,
+and idempotent webhook ingestion). Later phases (campaigns, dialing, live monitoring, messaging,
+analytics, and more) are deliberately **not** implemented yet - see
+[Phase plan status](#phase-plan-status) below.
 
 ## Architecture overview
 
 ```
-apps/backend    Fastify + TypeScript REST API, under /api/v1/*
-apps/frontend   React + TypeScript + Vite + Tailwind CSS
-apps/worker     Placeholder package for a future background worker (no real queues in Phase 1)
-packages/shared Shared TypeScript types used by both backend and frontend
-supabase/       SQL migrations + seed data (Supabase Postgres, Row Level Security)
+apps/backend         Fastify + TypeScript REST API, under /api/v1/*
+apps/frontend        React + TypeScript + Vite + Tailwind CSS
+apps/worker          Placeholder package for a future background worker (no real queues in Phase 1)
+apps/pipecat-service Phase 6 - Python/FastAPI service, the self-hosted call orchestration engine.
+                     A SEPARATE process/deployment from apps/backend - see its own README.
+packages/shared      Shared TypeScript types used by both backend and frontend
+supabase/            SQL migrations + seed data (Supabase Postgres, Row Level Security)
 ```
 
 - **Database**: Supabase Postgres. Every tenant-scoped table has Row Level Security enabled.
@@ -44,6 +49,9 @@ supabase/       SQL migrations + seed data (Supabase Postgres, Row Level Securit
     needs `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_BASE_URL`.
   - `shivanshconnect-worker` - Node service running `apps/worker`; currently a no-op placeholder,
     real job consumers land with the queue/Redis phase.
+  - `shivanshconnect-pipecat-service` (Phase 6) - a **fourth** Railway service, Python/uvicorn
+    running `apps/pipecat-service`, its own domain and environment variables. See that service's
+    README for its exact start command and variable list.
 
 ## Phase plan status
 
@@ -327,15 +335,121 @@ up real enforcement, not another migration.
   encrypted, a duplicate-E.164 import rejected with `409`, and assigning a number to an agent
   writing an `audit_logs` row.
 
+**Phase 6 (this build) - done:**
+
+- Database schema: `calls` - the ONE authoritative internal call record regardless of engine (spec
+  section 101 - a provider id is a property of a call, never a separate identity space): `engine`
+  (`vapi`/`pipecat`), `vapi_call_id`/`pipecat_call_id` (each globally unique when set), FKs to
+  `ai_agents`/`ai_agent_versions`/`phone_numbers`/`leads`, a deferred bare `campaign_id` uuid
+  (Phase 7, same deferred-FK pattern as every prior phase), the full Phase 50 call-state-machine
+  `status` enum, and `transfer_destination_e164` (only ever server-written, never client-supplied -
+  see below). `call_events` (append-only raw per-call event log, either engine). `webhook_events`
+  (the idempotent inbound-webhook ledger - `UNIQUE (provider, event_id)` is the actual guarantee a
+  replayed delivery is never double-processed) and `webhook_failures` (dead-letter tracking, spec
+  section 31). `vapi_credentials` (org-scoped, AES-256-GCM, reusing Phase 4's exact credential
+  helper). Two new permissions (`calls.manage`, `webhooks.manage` - `cdr.view`/`cdr.export` are
+  reserved for Phase 9's actual call-detail-record UI, so call origination and the webhook admin
+  log get their own narrower keys instead of overloading those). RLS on all 5 new tables, same
+  pattern as every prior phase.
+- **Two-engine architecture** - `apps/backend/src/lib/orchestration/` defines a
+  `CallOrchestrationProvider` interface (`createAssistant`, `updateAssistant`, `createCall`,
+  `getCall`, `endCall`, `transferCall`, `getArtifacts`/`getTranscript`/`getRecording`,
+  `getLiveMonitorUrls`, `registerWebhook`) mirroring the LLM/Voice/Telephony adapter pattern
+  exactly, with two real implementations:
+  - **`VapiProvider`** (managed engine) - real Vapi REST API: assistant create/update (maps an
+    `ai_agent_versions` row's prompt/personality/voice/LLM/transfer config into Vapi's documented
+    payload shape, storing `vapi_assistant_id`), phone-number import (`POST /phone-number`, linking
+    a Twilio/Telnyx number by credentials, or a BYON SIP trunk), call create/get/hangup, transfer
+    via the call's real `monitor.controlUrl` (refuses a non-E.164 destination before ever touching
+    the network), artifact/transcript/recording retrieval, `monitor.listenUrl`/`controlUrl` relay
+    for live monitoring, and account-wide webhook registration.
+  - **`PipecatProvider`** (self-hosted engine, the explicit second-engine ask) - a thin TypeScript
+    HTTP client against `apps/pipecat-service`, a **separate Python/FastAPI process** running the
+    real `pipecat-ai` framework. See "Two orchestration engines" below for the full architecture,
+    including exactly how call origination is split between Node and Python and why.
+  - Both adapters follow the same "never fabricate" rule as every prior phase: no credentials/
+    service configured -> a typed `OrchestrationProviderNotConfiguredError` -> an honest `422`,
+    never a simulated call.
+- Backend API: `GET`/`POST /vapi/credentials` + `POST /vapi/test-connection` (masked, encrypted,
+  real connection check via a lightweight `GET /assistant?limit=1`). `POST /calls` - the internal
+  call-origination endpoint (used directly now, and by Phase 7's campaign engine later): resolves
+  the agent's published version, its voice, the phone number, and the transfer destination (read
+  **only** from `ai_agent_versions.transfer_rules.transfer_to`, never from the request body - the
+  spec 19/8L hard rule that the AI/caller can never invent a transfer target, enforced at both the
+  route and the adapter layer); creates the local `calls` row in `queued` status **before** calling
+  the provider (documented ordering-based failure-recovery guarantee, since `supabase-js`/PostgREST
+  has no client-side transaction API and no route in this codebase uses one - see the handler's own
+  comment for the full reasoning) and marks it `failed` with the real error on any provider failure
+  rather than leaving it orphaned; lazily creates the Vapi assistant and lazily imports the phone
+  number into Vapi on first use. `GET /calls`/`GET /calls/:id` (with its `call_events`).
+  `POST /webhooks/vapi` and `POST /webhooks/pipecat` - unauthenticated receivers (idempotent via
+  the `UNIQUE (provider, event_id)` constraint - a duplicate delivery is caught and reported
+  `deduplicated: true`, never reprocessed; organization is resolved from the payload's own
+  `vapi_call_id`/`pipecat_call_id` lookup, **never** trusted from the payload directly; status
+  transitions only ever apply through `isValidCallTransition()`, an invalid/out-of-order transition
+  is logged and dropped, never force-applied). `GET /webhook-events` (`cdr.view`) + `POST
+  /webhook-events/:id/replay` (`webhooks.manage`, audited) - replay re-dispatches the exact stored
+  payload through the same receiver route (`app.inject`), so there is no second processing path to
+  drift from the original.
+- Frontend: Settings > Integrations gets a real Vapi credentials card (masked, Save, real Test
+  Connection - identical pattern to Phase 5's Twilio/Telnyx cards) and a Default Call Engine picker
+  (Vapi vs Pipecat, backed by the existing generic `organization_settings` jsonb merge - no new
+  endpoint needed). A new Settings > Webhook Events tab: a filterable table of the webhook log with
+  a working Replay button on failed deliveries.
+- Backend tests: adapter request-shaping against mocked `fetch` for both engines (Vapi's assistant/
+  call/transfer/webhook payload shapes; pipecat's HTTP client contract, including its `422 -> 
+  OrchestrationProviderNotConfiguredError` mapping), the call-state-machine's valid-transition table
+  (unit), plus a full integration test - originate a call via `VapiProvider` (HTTP mocked only at
+  the fetch boundary) -> local `calls` row created -> a simulated Vapi webhook sequence
+  (`status-update` -> `end-of-call-report`) drives real state transitions -> replaying the identical
+  webhook payload hits the unique constraint and is reported deduplicated with zero new rows (the
+  idempotency guarantee the task explicitly called out as critical) -> a webhook resolving to org
+  A's call can never touch org B's calls -> `POST /webhook-events/:id/replay` round-trips a stored
+  event back through the real receiver.
+- `apps/pipecat-service` - see its own README for full detail, summarized in "Two orchestration
+  engines" below.
+
+### Two orchestration engines: Vapi (managed) vs pipecat (self-hosted)
+
+Every call and every published agent version resolves to exactly **one** internal record
+(`calls`/`ai_agent_versions`) regardless of which engine handled it - `engine` is a column, not a
+different kind of row (spec section 101). An org picks a default engine (Settings > Integrations),
+and any `POST /calls` call can request the other engine explicitly.
+
+**Vapi** is a fully managed API - `VapiProvider` calls it directly over HTTPS from the Node
+backend, no extra infrastructure.
+
+**Pipecat** is a Python framework, so it runs as `apps/pipecat-service` - **its own separate
+process and, in production, its own Railway service**, never a route inside the Node backend.
+`PipecatProvider` (TypeScript) is a thin HTTP client against it. The architectural question the
+task brief posed - does pipecat-service call back to Node for credentials, or does Node originate
+the call and hand pipecat-service only the media stream - is answered as a variant of the first
+option: `routes/calls.ts` resolves and decrypts the org's already-stored Twilio/Telnyx credentials
+using Phase 5's **existing** tables/adapters (nothing new is ever persisted anywhere) and forwards
+them once, transiently, inside the single `POST /calls` request to pipecat-service; pipecat-service
+uses them synchronously to place the real outbound call via the carrier's own REST API and never
+stores them. pipecat-service then builds a real `pipecat-ai` pipeline (Deepgram STT -> OpenAI LLM
+-> ElevenLabs/Cartesia TTS) once the carrier's Media Streams WebSocket connects, and posts call
+lifecycle + transcript events back to Node's `POST /api/v1/webhooks/pipecat` - the exact same
+idempotent `webhook_events`/`call_events` pipeline Vapi calls flow through. If pipecat-service has
+no LLM/STT/TTS key or no public media-stream URL configured, or an org has no Twilio/Telnyx
+connected, every call attempt fails with a clear `422`-shaped "not configured: missing X" error -
+never a simulated call, in both the TypeScript and Python code. See
+`apps/pipecat-service/README.md` for exactly how to run and deploy it (its own venv, its own
+`requirements.txt`, its own environment variables) and what could not be verified live in this
+sandbox (no real phone calls are placed anywhere in this build).
+
 **Explicitly NOT built yet** (deferred to later phases):
 
-- Campaigns, Dialing Settings, Callbacks, Dispositions - campaign/dialer management
-- Live Monitor (listen/barge/whisper on live calls)
-- CDR (call detail records), call history/recordings/transcripts on the lead detail page
-- Vapi / actually placing or receiving a live call - Phase 5 only builds telephony number
-  *management* (providers, credentials, the org's DID registry, agent assignment); wiring a number
-  and a voice into a real live call via Vapi is Phase 6, and Inbound Routes/Queues (routing an
-  inbound call once it exists) remain deferred alongside it.
+- Campaigns, Dialing Settings, Callbacks, Dispositions - campaign/dialer management (Phase 6's
+  `POST /calls` is built to be the endpoint Phase 7's campaign engine calls, but nothing drives
+  calls automatically yet)
+- Live Monitor (listen/barge/whisper on live calls) - Vapi's real `monitor.listenUrl`/`controlUrl`
+  are already relayed by `getLiveMonitorUrls()`, but the UI to actually use them is Phase 10
+- CDR (call detail records) UI, call history/recordings/transcripts on the lead detail page -
+  Phase 6 correctly ingests and stores raw transcript/recording references in `call_events`/
+  provider artifact retrieval, but the structured, queryable transcript tables and CDR UI are
+  Phase 9
 - Inbound Routes, Queues (inbound call routing, ring groups)
 - Messaging
 - Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake)
@@ -389,6 +503,21 @@ CREDENTIAL_ENCRYPTION_NOT_CONFIGURED` way voice provider credentials do. `TWILIO
 `TWILIO_AUTH_TOKEN` and `TELNYX_API_KEY` in the backend env are optional platform-level defaults -
 each org's own stored credential under Settings > Phone Providers takes precedence, matching Phase
 4's pattern exactly. BYON needs none of these variables at all; it has no credentials to configure.
+
+### Phase 6 environment requirements
+
+`VAPI_API_KEY` in the backend env is an optional platform-level default (each org's own stored key
+under Settings > Integrations takes precedence, matching every prior provider). `VAPI_WEBHOOK_SECRET`
+is optional too - when set, Vapi webhook deliveries are checked against it (`x-vapi-secret` header);
+when unset the receiver still works safely (idempotency + payload-resolved org ownership are the
+primary defenses either way - see `routes/webhooks.ts`'s header comment for Vapi's real current
+signature mechanism). `PIPECAT_SERVICE_URL`/`PIPECAT_SERVICE_TOKEN` point the Node backend at a
+separately-running `apps/pipecat-service` deployment - without `PIPECAT_SERVICE_URL` set, selecting
+the pipecat engine fails with an honest `422` naming exactly that. `apps/pipecat-service` is
+configured entirely through **its own** environment (`apps/pipecat-service/.env`, not the Node
+backend's) - see its README for the full list (`OPENAI_API_KEY`, `DEEPGRAM_API_KEY`,
+`ELEVENLABS_API_KEY`/`CARTESIA_API_KEY`, `PUBLIC_MEDIA_STREAM_URL`, and the same
+`PIPECAT_SERVICE_TOKEN` shared secret).
 
 ## Running locally
 
@@ -539,6 +668,32 @@ were verified for real in both:
      exactly the 3 expected providers (`twilio`, `telnyx`, `byon`); the permission catalog seed still
      produces exactly 27 permissions (`numbers.manage` was already seeded in Phase 1, granted to
      SUPER_ADMIN/ADMIN/MANAGER - confirmed by a direct query - no new permission row needed).
+   - Phase 6: `apps/backend/src/orchestration.integration.test.ts` - agent create/version/publish,
+     Vapi + Twilio credentials, a BYON number import -> `POST /calls` (mocked only at `fetch`)
+     creates the local row before the provider call and resolves the transfer destination purely
+     from the agent version's own config -> a simulated Vapi webhook sequence (`status-update` ->
+     `end-of-call-report`) drives `calls.status` through valid transitions only -> replaying the
+     identical webhook payload hits the `UNIQUE (provider, event_id)` constraint and is reported
+     `deduplicated: true` with zero new `call_events`/`webhook_events` rows -> a webhook resolving
+     to org A's call never touches org B's calls (org B ends the test with zero call rows) and a
+     stray/unknown call id is recorded for audit but updates nothing -> `POST /webhook-events/:id/
+     replay` round-trips a stored event back through the real receiver route.
+   - Phase 6 added 3 new migrations (30 total: the original 27 plus
+     `00000000000028_orchestration_calls.sql`/`00000000000029_phase6_rls_policies.sql`/
+     `00000000000030_phone_numbers_vapi_id.sql`), applied cleanly both incrementally on top of the
+     existing Phase 1-5 verification database and from a completely fresh database (all 30
+     migrations, in order, auth stub included) - both runs land on **34 tables, every one with RLS
+     enabled and zero without**; the permission catalog now has exactly **29** permissions (the
+     original 27 plus the 2 new `calls.manage`/`webhooks.manage` keys this phase adds), each
+     confirmed granted to exactly 3 roles (`SUPER_ADMIN`/`ADMIN`/`MANAGER`) by direct query; the
+     `webhook_events_provider_event_id_key` unique index is confirmed present.
+   - Python: `apps/pipecat-service`'s own `pytest` suite (8 tests) - `/health` always `200`,
+     `/readiness` honestly reports `503` with a `missing` list when unconfigured and `200
+     {"ready": true}` once every requirement is set, `POST /calls` fails cleanly with a `422 "not
+     configured: missing X"` when no engine config exists (the exact scenario the task brief calls
+     out), telephony-credential validation, a mocked-Twilio successful call-origination round trip
+     asserting the real Twilio Calls API request shape (account SID, TwiML `<Stream>` URL), 404 on
+     an unknown call id, and 401 when a configured bearer token is missing/wrong.
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
@@ -549,7 +704,13 @@ endpoint first (no GPU exists in this build/sandbox) - both adapters' "not confi
 request-shaping logic are unit-tested instead. Same for Phase 5's Twilio and Telnyx REST APIs (no
 live network access to either carrier here; every adapter's request URL/headers/payload is built
 from each provider's current public API documentation, and their unit tests assert on those exact
-shapes against a mocked `fetch`).
+shapes against a mocked `fetch`), and Phase 6's Vapi and pipecat-service integrations - no live
+network access to Vapi's real API or to a real Twilio/Telnyx call here, and no real phone call is
+placed anywhere in this build; every request shape is built from each provider's current documented
+API and asserted against a mocked `fetch`/`httpx` boundary instead. The real `pipecat-ai` pipeline
+construction code (`apps/pipecat-service/app/pipeline.py`) is written against pipecat-ai 1.10.0's
+documented module layout but never run end-to-end against a live media stream here - see that
+service's own README for exactly what it does and doesn't verify.
 
 If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
