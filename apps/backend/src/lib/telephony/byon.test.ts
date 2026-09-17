@@ -11,10 +11,10 @@ describe('BYONProvider', () => {
 
   it('connect/disconnect/listNumbers/getNumberStatus all throw TelephonyProviderNotSupportedError - there is no provider API', async () => {
     const provider = new BYONProvider();
-    await expect(provider.connect({})).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
+    await expect(provider.connect()).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
     await expect(provider.disconnect()).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
     await expect(provider.listNumbers()).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
-    await expect(provider.getNumberStatus('anything')).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
+    await expect(provider.getNumberStatus()).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
   });
 
   it('never makes a network call - manual declaration only', async () => {

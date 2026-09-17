@@ -45,6 +45,9 @@ interface Tables {
   voice_providers: Row[];
   voice_provider_credentials: Row[];
   voices: Row[];
+  phone_number_providers: Row[];
+  phone_number_provider_credentials: Row[];
+  phone_numbers: Row[];
 }
 
 export interface FakeAuthUser {
@@ -81,6 +84,9 @@ export function createFakeSupabase() {
     voice_providers: [],
     voice_provider_credentials: [],
     voices: [],
+    phone_number_providers: [],
+    phone_number_provider_credentials: [],
+    phone_numbers: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -110,6 +116,7 @@ export function createFakeSupabase() {
       'leads.import',
       'agents.manage',
       'voices.manage',
+      'numbers.manage',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -147,6 +154,18 @@ export function createFakeSupabase() {
     }
   }
   seedVoiceProviders();
+
+  function seedPhoneNumberProviders() {
+    const catalog: Array<[string, string]> = [
+      ['twilio', 'Twilio'],
+      ['telnyx', 'Telnyx'],
+      ['byon', 'Bring Your Own Number (BYON)'],
+    ];
+    for (const [key, display_name] of catalog) {
+      tables.phone_number_providers.push({ id: randomUUID(), key, display_name, created_at: new Date().toISOString() });
+    }
+  }
+  seedPhoneNumberProviders();
 
   function matchesClause(actual: any, op: string, value: any): boolean {
     switch (op) {
@@ -282,6 +301,18 @@ export function createFakeSupabase() {
           is_cloned: false,
           clone_status: 'n/a',
           consent_confirmed: false,
+        };
+      case 'phone_number_provider_credentials':
+        return { status: 'not_connected', last_synced_at: null, last_error: null };
+      case 'phone_numbers':
+        return {
+          provider_number_id: null,
+          friendly_name: null,
+          capabilities: { voice_inbound: true, voice_outbound: true, sms: false },
+          status: 'active',
+          assigned_agent_id: null,
+          assigned_campaign_id: null,
+          sip_trunk_metadata: null,
         };
       default:
         return {};

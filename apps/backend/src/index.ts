@@ -28,6 +28,13 @@ import { voiceProviderRoutes } from './routes/voiceProviders.js';
 import { voiceRoutes } from './routes/voices.js';
 import { voiceStorageRoutes } from './routes/voiceStorage.js';
 import { VoiceCloningNotSupportedError, VoiceProviderNotConfiguredError, VoiceProviderError } from './lib/voice/types.js';
+import { phoneNumberProviderRoutes } from './routes/phoneNumberProviders.js';
+import { phoneNumberRoutes } from './routes/phoneNumbers.js';
+import {
+  TelephonyProviderError,
+  TelephonyProviderNotConfiguredError,
+  TelephonyProviderNotSupportedError,
+} from './lib/telephony/types.js';
 import { StorageNotConfiguredError } from './lib/storage/types.js';
 import { CredentialEncryptionNotConfiguredError } from './lib/crypto/credentials.js';
 
@@ -82,6 +89,8 @@ export function buildApp() {
       api.register(knowledgeBaseRoutes, { prefix: '/knowledge-bases' });
       api.register(voiceProviderRoutes, { prefix: '/voice-providers' });
       api.register(voiceRoutes, { prefix: '/voices' });
+      api.register(phoneNumberProviderRoutes, { prefix: '/phone-number-providers' });
+      api.register(phoneNumberRoutes, { prefix: '/phone-numbers' });
     },
     { prefix: '/api/v1' },
   );
@@ -128,6 +137,24 @@ export function buildApp() {
     }
     if (error instanceof VoiceProviderError) {
       reply.status(502).send(fail('VOICE_PROVIDER_ERROR', error.message, { requestId: req.id }));
+      return;
+    }
+
+    // Same honesty rule, for telephony number providers: no credentials
+    // configured is a client-actionable 422, a provider genuinely not
+    // supporting a method (BYON's connect/disconnect/listNumbers/
+    // getNumberStatus) is also a 422, and a real provider-side failure is
+    // a 502 - never fabricated numbers.
+    if (error instanceof TelephonyProviderNotConfiguredError) {
+      reply.status(422).send(fail('TELEPHONY_PROVIDER_NOT_CONFIGURED', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof TelephonyProviderNotSupportedError) {
+      reply.status(422).send(fail('TELEPHONY_PROVIDER_NOT_SUPPORTED', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof TelephonyProviderError) {
+      reply.status(502).send(fail('TELEPHONY_PROVIDER_ERROR', error.message, { requestId: req.id }));
       return;
     }
     if (error instanceof StorageNotConfiguredError) {
