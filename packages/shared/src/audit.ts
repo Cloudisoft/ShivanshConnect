@@ -53,6 +53,12 @@ export const AUDIT_ACTIONS = {
   KNOWLEDGE_DOCUMENT_UPLOADED: 'knowledge_document.uploaded',
   KNOWLEDGE_DOCUMENT_DELETED: 'knowledge_document.deleted',
   KNOWLEDGE_DOCUMENT_REPROCESSED: 'knowledge_document.reprocessed',
+
+  VOICE_PROVIDER_CREDENTIALS_SAVED: 'voice_provider.credentials_saved',
+  VOICE_PROVIDER_CONNECTION_TESTED: 'voice_provider.connection_tested',
+  VOICE_SYNCED: 'voice.synced',
+  VOICE_CLONE_REQUESTED: 'voice.clone_requested',
+  VOICE_DELETED: 'voice.deleted',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

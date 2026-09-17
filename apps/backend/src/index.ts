@@ -24,6 +24,12 @@ import { importJobRoutes } from './routes/importJobs.js';
 import { agentRoutes } from './routes/agents.js';
 import { scriptRoutes } from './routes/scripts.js';
 import { knowledgeBaseRoutes } from './routes/knowledgeBases.js';
+import { voiceProviderRoutes } from './routes/voiceProviders.js';
+import { voiceRoutes } from './routes/voices.js';
+import { voiceStorageRoutes } from './routes/voiceStorage.js';
+import { VoiceCloningNotSupportedError, VoiceProviderNotConfiguredError, VoiceProviderError } from './lib/voice/types.js';
+import { StorageNotConfiguredError } from './lib/storage/types.js';
+import { CredentialEncryptionNotConfiguredError } from './lib/crypto/credentials.js';
 
 export function buildApp() {
   const env = getEnv();
@@ -53,6 +59,10 @@ export function buildApp() {
 
   app.get('/health', async () => ({ status: 'ok', service: 'shivanshconnect-backend' }));
 
+  // Unauthenticated - serves locally-stored voice-preview audio bytes.
+  // See routes/voiceStorage.ts's header comment for the trust model.
+  app.register(voiceStorageRoutes);
+
   app.register(
     async (api) => {
       api.register(authRoutes, { prefix: '/auth' });
@@ -70,6 +80,8 @@ export function buildApp() {
       api.register(agentRoutes, { prefix: '/agents' });
       api.register(scriptRoutes, { prefix: '/scripts' });
       api.register(knowledgeBaseRoutes, { prefix: '/knowledge-bases' });
+      api.register(voiceProviderRoutes, { prefix: '/voice-providers' });
+      api.register(voiceRoutes, { prefix: '/voices' });
     },
     { prefix: '/api/v1' },
   );
@@ -100,6 +112,30 @@ export function buildApp() {
     }
     if (error instanceof LlmProviderError) {
       reply.status(502).send(fail('LLM_PROVIDER_ERROR', error.message, { requestId: req.id }));
+      return;
+    }
+
+    // Same honesty rule as the LLM adapter, for voice providers: no
+    // credentials/endpoint configured is a client-actionable 422, a
+    // genuine provider-side failure is a 502 - never fabricated.
+    if (error instanceof VoiceProviderNotConfiguredError) {
+      reply.status(422).send(fail('VOICE_PROVIDER_NOT_CONFIGURED', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof VoiceCloningNotSupportedError) {
+      reply.status(422).send(fail('VOICE_CLONING_NOT_SUPPORTED', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof VoiceProviderError) {
+      reply.status(502).send(fail('VOICE_PROVIDER_ERROR', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof StorageNotConfiguredError) {
+      reply.status(422).send(fail('STORAGE_NOT_CONFIGURED', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof CredentialEncryptionNotConfiguredError) {
+      reply.status(422).send(fail('CREDENTIAL_ENCRYPTION_NOT_CONFIGURED', error.message, { requestId: req.id }));
       return;
     }
 
