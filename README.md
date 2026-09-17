@@ -1,15 +1,17 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-6** (organizations, auth, users, roles/permissions, audit logs, the overall
+build covers Phases 1-7** (organizations, auth, users, roles/permissions, audit logs, the overall
 app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; AI agents/agent versioning/
 prompt system/knowledge base (RAG)/scripts; voice providers/cloning; telephony number providers -
-Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry; and now call
+Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry; call
 orchestration - Vapi (managed) plus pipecat (a real, self-hosted second engine running as its own
 Python service, `apps/pipecat-service`), the one authoritative `calls` record regardless of engine,
-and idempotent webhook ingestion). Later phases (campaigns, dialing, live monitoring, messaging,
-analytics, and more) are deliberately **not** implemented yet - see
-[Phase plan status](#phase-plan-status) below.
+and idempotent webhook ingestion; and now **campaigns and the real campaign execution engine** -
+snapshot-on-publish configuration versioning, a genuine queue-based dispatcher (not a `for each
+lead` loop) with race-safe lead claiming, real eligibility/preflight/retry/rotate logic, and org-
+level dialing defaults). Later phases (live monitoring, CDR, messaging, analytics, and more) are
+deliberately **not** implemented yet - see [Phase plan status](#phase-plan-status) below.
 
 ## Architecture overview
 
@@ -439,11 +441,107 @@ never a simulated call, in both the TypeScript and Python code. See
 `requirements.txt`, its own environment variables) and what could not be verified live in this
 sandbox (no real phone calls are placed anywhere in this build).
 
+**Phase 7 (this build) - done:**
+
+- Database schema: `campaigns` (calling window/days, concurrency/calls-per-minute limits, transfer
+  number, voicemail config, lead cooldown, background noise), `campaign_versions` (the immutable
+  publish-time **snapshot** per spec 84/85 - `ai_agent_version_id`/`voice_id`/
+  `knowledge_base_ids`/`transfer_number_e164`/`calling_rules`/`disposition_rules` are all locked in
+  at publish time and never re-resolved from the live agent/voice/knowledge-base tables afterward),
+  `campaign_leads` (the per-lead campaign state machine from spec section 11, with a
+  dispatch-critical composite index on `(campaign_id, status, next_eligible_at)` so the dispatcher's
+  eligibility query stays index-backed even at 10k+ leads), `campaign_lead_skip_log` (every
+  ineligibility reason is written here, so a lead is never silently dropped from consideration),
+  `campaign_settings` (free-form per-campaign dialing overrides) and `dialing_settings` (org-level
+  defaults). Wires up the deferred FKs from Phase 5 (`phone_numbers.assigned_campaign_id`) and Phase
+  6 (`calls.campaign_id`). RLS on all 6 new tables, same pattern as every prior phase.
+  `campaigns.view/create/edit/start/pause/delete` permissions already existed in the Phase 1 seed
+  catalog - no new permission rows needed.
+- **The campaign execution engine** (`services/campaignDispatcher.ts`) - the queue-based
+  architecture the spec explicitly requires (Campaign -> Eligibility Queue -> Dial Queue -> Worker
+  Pool -> Vapi/pipecat -> Webhook Events -> Event Processor -> Call State -> Disposition ->
+  Analytics), **not** a `for each lead: makeCall()` loop. Redis/BullMQ isn't wired up until Phase
+  15, so this runs today as an in-process `setInterval` tick (default every 3s, `tickInFlight`-
+  guarded against overlap) deliberately structured as a documented drop-in for a real queue later -
+  `runDispatchTick()` is what a repeatable BullMQ job would call, `processCampaign()` is what a
+  per-campaign job processor would become. Per running campaign, each tick: computes **effective
+  concurrency** via the spec's exact `minimum(campaign.concurrency_limit, org dialing_settings.
+  max_concurrency, WORKER_POOL_CAPACITY)` formula (`services/leadEligibility.ts`), counts active
+  calls, pulls the next eligible batch ordered by `next_eligible_at` and bounded by remaining
+  capacity **and** a rolling per-minute dispatch counter, re-checks full eligibility per candidate
+  (DNC, terminal/in-flight status, max attempts, cooldown, IANA-timezone-aware calling-window/day
+  checks via `Intl`, another active call already in progress for the same lead), then **atomically
+  claims** each eligible lead via a conditional `UPDATE campaign_leads SET status = 'dialing' ...
+  WHERE status = <expected>` (the actual no-double-dial guarantee - Postgres serializes concurrent
+  claims of the same row; a lost race is simply skipped, never double-dialed) before calling the
+  exact same origination logic Phase 6 built.
+- **`services/callOrigination.ts`** - Phase 6's `POST /calls` origination logic (queued-row-first
+  ordering, Vapi assistant/phone-number import, pipecat credential handoff, audit logging) was
+  extracted out of the route handler into `originateCall()`, which now also accepts a campaign
+  snapshot's transfer-number/voice overrides. `routes/calls.ts`'s POST handler and the campaign
+  dispatcher both call this one function - never duplicated, per the task's explicit requirement.
+- **`services/leadEligibility.ts`** - the full spec-16/51/52 exclusion list as a pure, DB-free
+  decision function with a reason code for every exclusion (`campaign_not_running`, `lead_dnc`,
+  `already_terminal`, `cooldown_active`, `max_attempts_reached`, `outside_calling_window`,
+  `outside_calling_days`, `lead_already_in_progress`), plus linear (fixed-delay) retry/cooldown
+  scheduling math - deliberately the documented simplification of "retry with backoff"; exponential
+  backoff is a follow-up, not a stub (something real ships today).
+- **`services/campaignLeadDisposition.ts`** extends (never duplicates) Phase 6's webhook event
+  processor: when a call reaches a terminal status, it drives the matching `campaign_leads` row to
+  `retry_pending` (with a real computed `next_eligible_at`) or a terminal state per the campaign
+  version's own snapshotted `disposition_rules` - DNC/successful-transfer/completed are never
+  retried; a retryable outcome under `max_attempts` always is.
+- **`services/campaignPreflight.ts`** (spec section 9) - real, DB-backed checks: agent
+  active+published version, that version's voice active with its provider connected, phone number
+  active with its telephony provider connected, attached knowledge base documents `ready`, a valid
+  E.164 transfer number, a valid calling window/days, at least one eligible lead, the orchestration
+  engine actually configured, and concurrency within a reasonable org cap - with exact, actionable
+  error messages ("Campaign cannot start because no eligible leads remain.", etc.).
+- **`services/campaignRotate.ts`** - the explicit lead-list rotation/reuse requirement: a pure
+  filter that excludes leads whose last outcome was a genuine terminal disposition (completed/
+  transferred/DNC/not-interested/hung-up/disconnected) and includes only never-attempted or
+  retryable-outcome leads, never a lead currently mid-call.
+- Backend API (`routes/campaigns.ts`, `routes/dialingSettings.ts`): full campaign CRUD (create as
+  draft), `POST /campaigns/:id/versions` + `POST /campaigns/:id/versions/:versionId/publish` (the
+  snapshot step), `GET /campaigns/:id/preflight`, `POST /campaigns/:id/{start,pause,resume,stop,
+  archive,duplicate}`, `PATCH /campaigns/:id/concurrency` (audited "changed from X to Y" per spec
+  59's explicit example), `GET /campaigns/:id` with real-time `COUNT() ... GROUP BY status`
+  aggregate live counts (never stale cached counters), bulk lead attach (`lead_ids` or an entire
+  `lead_list_id`, batched inserts so 10k+ leads never go row-by-row, DNC leads never queued),
+  `GET /campaigns/:id/leads`, `POST /campaigns/:id/leads/rotate` (dry-run preview + confirm), and
+  `GET/PATCH /dialing-settings` (org defaults, lazily created) + `GET/POST /campaigns/:id/settings`
+  (per-campaign overrides). Every route: `authenticate`, `requirePermission`, org-scoped, Zod
+  validated, audited on every lifecycle/config-changing action.
+- Frontend: Campaigns list (status badge, progress bar, called/remaining/connected/failed/DNC
+  counts, concurrency, calls-per-minute, start/pause/resume/stop/duplicate/archive); Campaign
+  detail with Overview (live stat tiles, a live concurrency editor), Configuration (prompt editor
+  with a `{{variable}}` insertion palette, agent/voice/script pickers, a knowledge-base checklist
+  scoped to the selected agent, transfer-number/voicemail/cooldown-preset/background-noise/calling-
+  window/calling-days fields, save-draft-then-explicit-publish), Leads (attach a lead list, a
+  paginated/filterable table of `campaign_leads`, and the Rotate/Reuse flow with a real preview of
+  exactly which leads will be re-queued vs excluded and why before a separate confirm step), and
+  Settings (per-campaign dialing overrides); a pre-launch confirmation modal (spec section 67) that
+  only enables Start once the real preflight reports ready; and a Dialing Settings page for the org
+  defaults. Replaces the "Campaigns"/"Dialing Settings" sidebar placeholders.
+- Tests: unit coverage for the effective-concurrency formula, every eligibility exclusion reason
+  (including a genuinely timezone-sensitive calling-window case), retry/cooldown scheduling math,
+  and the rotate filter's exact inclusion/exclusion per disposition; a full fake-Supabase
+  integration suite covering create -> attach 55 leads -> publish (snapshot) -> preflight fail
+  without a transfer number -> preflight pass -> start -> a real dispatcher tick claiming exactly
+  `concurrency_limit` leads and originating mocked-at-fetch Vapi calls -> simulated webhook
+  end-of-call events driving `retry_pending`/terminal outcomes with a real future
+  `next_eligible_at` -> a DNC lead attached mid-campaign never dialed -> rotate correctly filtering;
+  a dedicated test proving the publish-time snapshot is unchanged after the underlying agent is
+  re-published; a dedicated concurrent-dispatch-tick test proving no lead is ever claimed twice
+  (`Promise.all` racing `processCampaign()` against the same in-memory tables); cross-org isolation;
+  and a 1000-synthetic-lead batch proving the dispatch stays concurrency-bounded (never "claim
+  everything at once") and every one of the 1000 `campaign_leads` rows ends terminal, explicitly
+  pending, or in-flight - never silently lost.
+
 **Explicitly NOT built yet** (deferred to later phases):
 
-- Campaigns, Dialing Settings, Callbacks, Dispositions - campaign/dialer management (Phase 6's
-  `POST /calls` is built to be the endpoint Phase 7's campaign engine calls, but nothing drives
-  calls automatically yet)
+- Redis/BullMQ - Phase 7's campaign dispatcher runs today as a documented in-process `setInterval`
+  drop-in (see above); migrating it to a real queue is Phase 15 infra work, not a logic change
 - Live Monitor (listen/barge/whisper on live calls) - Vapi's real `monitor.listenUrl`/`controlUrl`
   are already relayed by `getLiveMonitorUrls()`, but the UI to actually use them is Phase 10
 - CDR (call detail records) UI, call history/recordings/transcripts on the lead detail page -
@@ -518,6 +616,17 @@ configured entirely through **its own** environment (`apps/pipecat-service/.env`
 backend's) - see its README for the full list (`OPENAI_API_KEY`, `DEEPGRAM_API_KEY`,
 `ELEVENLABS_API_KEY`/`CARTESIA_API_KEY`, `PUBLIC_MEDIA_STREAM_URL`, and the same
 `PIPECAT_SERVICE_TOKEN` shared secret).
+
+### Phase 7 environment requirements
+
+No new required variables - the campaign dispatcher reuses every credential Phases 4-6 already
+manage per organization. Two optional tuning variables: `WORKER_POOL_CAPACITY` (default `50`) is
+the hardcoded/env ceiling in the spec's effective-concurrency `minimum(...)` formula - a
+process-wide cap regardless of what any campaign or org configures, so a misconfigured org can
+never exceed what this backend process can actually handle. `CAMPAIGN_DISPATCH_INTERVAL_MS`
+(default `3000`) controls how often the in-process dispatch loop ticks. The dispatcher is started
+only from `main()` (real process boot), never from `buildApp()` itself, so the test suite never has
+a background timer racing its fake Supabase client.
 
 ## Running locally
 
@@ -694,6 +803,24 @@ were verified for real in both:
      out), telephony-credential validation, a mocked-Twilio successful call-origination round trip
      asserting the real Twilio Calls API request shape (account SID, TwiML `<Stream>` URL), 404 on
      an unknown call id, and 401 when a configured bearer token is missing/wrong.
+   - Phase 7: `apps/backend/src/campaigns.integration.test.ts` (5 tests) plus
+     `apps/backend/src/services/leadEligibility.test.ts` (17 unit tests) and
+     `apps/backend/src/services/campaignRotate.test.ts` (4 unit tests) - see the "Phase 7" section
+     above for exactly what each integration test proves (full lifecycle including a real dispatcher
+     tick and simulated webhook outcomes, publish-time snapshot immutability across a
+     re-publish of the underlying agent, concurrent-dispatch-tick race safety via `Promise.all`
+     against the shared fake tables, cross-org isolation, and a 1000-synthetic-lead no-lost-lead
+     batch). Phase 7 added 2 new migrations (32 total: the original 30 plus
+     `00000000000031_campaigns.sql`/`00000000000032_phase7_rls_policies.sql`), applied cleanly both
+     incrementally on top of the existing Phase 1-6 verification database and from a completely
+     fresh database (all 32 migrations, in order, auth stub included) - both runs land on **40
+     tables, every one with RLS enabled and zero without**; the permission catalog is unchanged at
+     29 (the Phase 1 seed already included every `campaigns.*` key, each confirmed already granted
+     to `SUPER_ADMIN`/`ADMIN`, `MANAGER` getting all but role/user/settings admin per that seed's
+     existing rule); the `campaign_leads_dispatch_idx` composite index and the deferred
+     `calls.campaign_id`/`phone_numbers.assigned_campaign_id` foreign keys are confirmed in place.
+     The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass clean after this phase
+     (197 backend tests total).
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
