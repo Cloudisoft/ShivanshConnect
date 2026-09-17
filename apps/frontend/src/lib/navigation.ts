@@ -34,8 +34,8 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard, builtInPhase1: true },
-  { id: 'campaigns', label: 'Campaigns', path: '/campaigns', icon: Megaphone, builtInPhase1: false },
-  { id: 'dialing-settings', label: 'Dialing Settings', path: '/dialing-settings', icon: Settings2, builtInPhase1: false },
+  { id: 'campaigns', label: 'Campaigns', path: '/campaigns', icon: Megaphone, builtInPhase1: true },
+  { id: 'dialing-settings', label: 'Dialing Settings', path: '/dialing-settings', icon: Settings2, builtInPhase1: true },
   { id: 'callbacks', label: 'Callbacks', path: '/callbacks', icon: PhoneCall, builtInPhase1: false },
   { id: 'live-monitor', label: 'Live Monitor', path: '/live-monitor', icon: Headphones, builtInPhase1: false },
   { id: 'leads', label: 'Leads', path: '/leads', icon: UserPlus, builtInPhase1: true },
