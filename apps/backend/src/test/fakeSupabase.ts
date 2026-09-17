@@ -166,6 +166,16 @@ export function createFakeSupabase() {
       'campaigns.delete',
       'callbacks.manage',
       'cdr.export',
+      // Phase 10: live_monitor.* - mirrors
+      // 00000000000009_seed_roles_permissions.sql's real catalog/role
+      // mapping exactly (MANAGER gets everything except roles/users/
+      // settings management, which includes these; AGENT gets
+      // live_monitor.view only) so permission-gating tests against this
+      // harness reflect the real seeded tiers.
+      'live_monitor.view',
+      'live_monitor.listen',
+      'live_monitor.barge',
+      'live_monitor.whisper',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -178,9 +188,26 @@ export function createFakeSupabase() {
     for (const perm of tables.permissions) {
       tables.role_permissions.push({ role_id: admin.id, permission_id: perm.id });
     }
+    // MANAGER: everything except role/user/settings-level administration
+    // (real seed migration's exact carve-out).
+    const manager = tables.roles.find((r) => r.name === 'MANAGER')!;
+    for (const perm of tables.permissions) {
+      if (['roles.manage', 'users.manage', 'settings.manage'].includes(perm.key)) continue;
+      tables.role_permissions.push({ role_id: manager.id, permission_id: perm.id });
+    }
+    // AGENT: day-to-day operational permissions only (real seed
+    // migration's exact list, trimmed to keys this fixture actually
+    // seeds).
+    const agent = tables.roles.find((r) => r.name === 'AGENT')!;
+    for (const key of ['dashboard.view', 'campaigns.view', 'leads.view', 'live_monitor.view', 'cdr.view']) {
+      const perm = tables.permissions.find((p) => p.key === key);
+      if (perm) tables.role_permissions.push({ role_id: agent.id, permission_id: perm.id });
+    }
     const viewer = tables.roles.find((r) => r.name === 'VIEWER')!;
-    const dashboardPerm = tables.permissions.find((p) => p.key === 'dashboard.view')!;
-    tables.role_permissions.push({ role_id: viewer.id, permission_id: dashboardPerm.id });
+    for (const key of ['dashboard.view', 'campaigns.view', 'leads.view', 'live_monitor.view', 'cdr.view']) {
+      const perm = tables.permissions.find((p) => p.key === key);
+      if (perm) tables.role_permissions.push({ role_id: viewer.id, permission_id: perm.id });
+    }
   }
   seedRolesAndPermissions();
 
@@ -505,6 +532,10 @@ export function createFakeSupabase() {
    */
   const UNIQUE_CONSTRAINTS: Partial<Record<keyof Tables, string[][]>> = {
     webhook_events: [['provider', 'event_id']],
+    // Phase 10: mirrors call_transcript_segments_transcript_index_key
+    // (00000000000035_phase9_cdr.sql) - the real dedupe key live
+    // transcript ingestion relies on (services/liveTranscriptIngestion.ts).
+    call_transcript_segments: [['transcript_id', 'segment_index']],
   };
 
   function violatesUniqueConstraint(table: keyof Tables, candidate: Row): boolean {
