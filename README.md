@@ -1,7 +1,7 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-9** (organizations, auth, users, roles/permissions, audit logs, the overall
+build covers Phases 1-10** (organizations, auth, users, roles/permissions, audit logs, the overall
 app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; AI agents/agent versioning/
 prompt system/knowledge base (RAG)/scripts; voice providers/cloning; telephony number providers -
 Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry; call
@@ -23,9 +23,15 @@ searchable per-utterance segments) and actual recording bytes (downloaded and du
 never just a passthrough of the provider's own possibly-ephemeral URL) through the existing Phase
 6 orchestration adapters and Phase 4 `StorageAdapter`, a real LLM-generated call summary when an
 LLM provider is configured (never a fabricated one otherwise), a fully joined/paginated/filterable
-CDR API with Postgres full-text transcript search, and background CSV/XLSX export jobs). Later
-phases (live monitoring, messaging, analytics, and more) are deliberately **not** implemented yet -
-see [Phase plan status](#phase-plan-status) below.
+CDR API with Postgres full-text transcript search, and background CSV/XLSX export jobs); and now
+**Live Monitor** - real-time listen/whisper/barge/transfer/end supervisor controls over a real
+WebSocket stream (`WS /api/v1/live-monitor/stream`), driven directly by Phase 8's call-state-machine
+event bus and a new live (mid-call, not just post-call) transcript-segment ingestion path, with
+listen/whisper/barge implemented genuinely differently for Vapi (the real, honestly-limited
+`listenUrl`/`controlUrl` mechanism) versus pipecat (real audio-frame tapping/injection/mixing in
+our own pipeline) - see [Phase 10](#phase-10-this-build---done) below for the full writeup. Later
+phases (messaging, analytics, the AI evaluator/improvement system, and more) are deliberately
+**not** implemented yet - see [Phase plan status](#phase-plan-status) below.
 
 ## Architecture overview
 
@@ -743,15 +749,119 @@ than a bearer-token-free temporary link - a real signed-URL mechanism needs prod
 compatible or Supabase Storage (still Phase 4's documented `LocalDiskStorageAdapter` limitation),
 which is not live in this sandbox.
 
+**Phase 10 (this build) - done:**
+
+- **Real-time transport** (`apps/backend/src/ws/`): `WS /api/v1/live-monitor/stream`, registered via
+  `@fastify/websocket`, authenticated with the exact same Supabase JWT `authenticate()` middleware
+  every REST route uses (as an ordinary Fastify `preHandler` that runs before the HTTP connection is
+  ever upgraded - an invalid/missing token gets a plain HTTP 401 and the upgrade never happens), plus
+  `live_monitor.view`. A browser `WebSocket` cannot set an `Authorization` header on its handshake, so
+  the token is also accepted as `?token=`. On connect: one `{ type: 'SNAPSHOT', calls: [...] }`
+  message (the caller's org's currently-active calls, `LIVE_MONITOR_ACTIVE_STATUSES` in
+  `packages/shared/src/liveMonitor.ts`), then real push events for as long as the socket stays open.
+  **No interval polling anywhere in this path** - `ws/liveMonitorBroadcaster.ts` subscribes directly
+  to Phase 8's `callEventBus` (`'call.transitioned'`) and a new `transcriptEventBus` (`'segment'`),
+  filters strictly by `organizationId` (the hard cross-org-isolation requirement - see Tests below),
+  and `ws/liveMonitorEvents.ts` is a pure, unit-tested mapping from a status transition to exactly the
+  spec's event-type strings: `CALL_STARTED`, `CALL_RINGING`, `CALL_CONNECTED`, `TRANSCRIPT_UPDATED`,
+  `CALL_TRANSFER_STARTED`/`CALL_TRANSFER_CONNECTED`/`CALL_TRANSFER_FAILED`, `CALL_ENDED`.
+- **Live (mid-call) transcript ingestion** (`services/liveTranscriptIngestion.ts`): both webhook
+  receivers now write real `call_transcript_segments` rows as an engine delivers each utterance
+  *during* the call, not only from the Phase 9 post-call fetch. Vapi's `transcript` webhook message
+  carries a `transcriptType` of `'partial'` or `'final'` - only `'final'` is ever persisted, so a
+  stream of in-progress deltas for one utterance never produces more than one segment. pipecat's own
+  pipeline (below) posts one `transcript` event per genuinely completed utterance by construction.
+  Each write emits on `transcriptEventBus` so the WS stream pushes `TRANSCRIPT_UPDATED` immediately,
+  reusing Phase 9's existing `(transcript_id, segment_index)` unique index as the dedupe key. Phase
+  9's `processCallArtifacts.ts` post-call fetch is now **reconciliation, not the source of truth**:
+  if live segments already exist for a call it never re-inserts or duplicates them, and only runs the
+  full historical parse-and-insert path when live ingestion produced nothing at all for that call
+  (e.g. a very short/failed call, or a delivery that never arrived).
+- **Supervisor actions** (`routes/liveMonitor.ts`, mounted under `/calls`): `POST /calls/:id/listen`,
+  `/whisper`, `/barge`, `/transfer`, `/end` - each requires `live_monitor.listen`/`whisper`/`barge`
+  respectively (already seeded in Phase 1's catalog: MANAGER+ get all three, AGENT gets
+  `live_monitor.view` only), asserts the call belongs to the caller's own organization (a mismatched
+  org 404s exactly like a nonexistent call - never leaks existence), and writes a real audit log entry
+  naming who did what to which call and when. Transfer reuses Phase 6's `transferCall()`/
+  `transitionCallState()` unchanged, refuses any destination that isn't byte-for-byte the call's own
+  server-resolved `transfer_destination_e164` (never a freely-supplied number), and records the new
+  `calls.transfer_initiated_by = 'supervisor'` column (migration `00000000000037`) so it's
+  distinguishable from the AI-initiated flow. End calls the orchestration provider's real `endCall()`.
+  **Listen/whisper/barge are realized genuinely differently per engine, and this is documented in code
+  (`routes/liveMonitor.ts`'s header comment), not glossed over:**
+  - **Vapi** (managed - we don't run it): `listen` relays the real `call.monitor.listenUrl` verbatim
+    (a WSS PCM stream `getLiveMonitorUrls()` already exposed since Phase 6). `whisper` posts a real
+    `'say'` control message to `call.monitor.controlUrl` (new `VapiProvider.say()`) - **Vapi's public
+    API has no distinct silent whisper-only-to-the-agent channel**, because the "agent" on a Vapi call
+    is Vapi's own AI, not a human on a separate leg; the text becomes real synthesized speech, audible
+    on the live call, exactly as documented rather than pretended otherwise. `barge` is therefore
+    implemented as the **honest composition** the task explicitly calls for when a real distinct
+    primitive doesn't exist: the same real `listenUrl` opened alongside the same real `'say'`
+    mechanism - never a fabricated third capability.
+  - **pipecat** (self-hosted - we own the whole pipeline, so real audio-frame manipulation is
+    genuinely achievable): a new WS `/supervisor/{pipecat_call_id}/{action}` endpoint in
+    `apps/pipecat-service`, authorized by a short-lived, call-and-action-scoped HMAC token
+    (`lib/pipecatSupervisorToken.ts` on the Node side, `app/supervisor_auth.py` on the Python side -
+    same shared `PIPECAT_SERVICE_TOKEN` secret, no new credential to manage). `app/supervisor_hub.py`
+    is the real per-call coupling point to two actual pipecat `FrameProcessor`s wired directly into
+    the live `Pipeline` (`app/pipeline.py`): `SupervisorTapProcessor` mirrors real `AudioRawFrame`s
+    (both the caller leg and the AI/TTS leg) out to connected listen/barge sockets - genuine tapped
+    audio, not a stub; `SupervisorInjectProcessor` drains queued whisper/barge PCM audio and pushes a
+    real `OutputAudioRawFrame` into the outbound (caller-facing) leg - genuine injection. `barge` opens
+    the same real two-way channel (tap **and** inject at once) for actual three-way mixing; a
+    `CallerTranscriptEmitter`/`AssistantTranscriptEmitter` pair feeds the live transcript ingestion
+    above the moment an utterance completes.
+- Frontend (`pages/LiveMonitorPage.tsx`, replacing the sidebar placeholder): an active-calls table
+  (Call/Campaign/Lead/Phone/AI Agent/Voice/live-ticking Duration/State/Started) driven entirely by
+  `hooks/useLiveMonitor.ts`'s WebSocket connection (auto-reconnect with backoff, zero polling); a
+  click opens `components/liveMonitor/CallDetailPanel.tsx` - an auto-scrolling, speaker-labeled live
+  transcript in the spec's exact `AI: .../Caller: ...` format, the five state indicators (Connected/
+  Listening/Whispering/Barged In/Transferring/Disconnected), and real Listen/Whisper/Barge/Transfer/
+  End controls. `lib/pcmAudio.ts` is real Web Audio playback (`PcmStreamPlayer`, gapless scheduled
+  `AudioBufferSourceNode`s) and microphone capture (`startMicPcmCapture`, real `getUserMedia` + PCM16
+  framing) for the raw-PCM WebSocket streams neither Vapi's `listenUrl` nor pipecat's supervisor
+  endpoint expose as a plain HTTP media URL an `<audio>` tag could consume directly. Transfer shows
+  the call's own server-resolved `transfer_destination_e164` for confirmation only - never editable.
+- Tests: `ws/liveMonitorEvents.test.ts` (pure transition-to-event-type mapping), `ws/
+  liveMonitorBroadcaster.test.ts` (**the explicit cross-org isolation test** - org B's subscriber
+  receives zero events from org A's call transitions and zero from org A's transcript segments -
+  plus unsubscribe-stops-delivery and the full started->ringing->connected->transferring->transferred
+  sequence arriving in order), `services/liveTranscriptIngestion.test.ts` (sequential `segment_index`
+  assignment, one `call_transcripts` row per call, the unique-index dedupe safety net, blank-utterance
+  rejection), and `phase10.integration.test.ts` (real route handlers via `app.inject()`: an AGENT is
+  rejected on all five actions, a MANAGER - invited into the same org via the real invite/accept flow
+  and promoted by the org owner's own never-downgraded token - succeeds with an audit log entry each;
+  supervisor transfer validation reused correctly from Phase 6; cross-org 404s). Python:
+  `test_supervisor_auth.py` (HMAC token verification/tamper/expiry/scope rejection),
+  `test_supervisor_hub.py` (queue priority/isolation/broadcast/dead-socket cleanup in full isolation),
+  `test_supervisor_ws.py` (the WS endpoint's real auth/call-id validation and correct wiring into the
+  hub via `TestClient.websocket_connect`) - each file documents plainly what is/isn't provable without
+  pipecat-ai installed and a live call (see below).
+
+### Phase 10 environment requirements
+
+No new required variables - reuses the existing `PIPECAT_SERVICE_TOKEN` (Phase 6) as the HMAC key for
+the new short-lived pipecat supervisor tokens (`lib/pipecatSupervisorToken.ts` /
+`app/supervisor_auth.py`), unset in local/dev exactly like every other Phase 6 default (both sides
+then skip verification, matching the existing documented posture). `@fastify/websocket`/`ws` are new
+Node dependencies; no new Python dependency was needed. **pipecat-ai itself is not installed in this
+sandbox** (see `apps/pipecat-service/app/pipeline.py`'s own long-standing header comment on why every
+pipecat-ai import there is lazy) - `SupervisorTapProcessor`/`SupervisorInjectProcessor`/the transcript
+emitters are real code written directly against pipecat-ai's actual documented `FrameProcessor`/
+`AudioRawFrame`/`TranscriptionFrame`/`LLMFullResponse*Frame` APIs, but exercising them against the
+genuine package (and a real or staged call) needs an environment with pipecat-ai installed - the
+Python tests added this phase prove everything on the WS/auth/hub side of that boundary instead (see
+each test file's own header comment for the exact line).
+
 **Explicitly NOT built yet** (deferred to later phases):
 
 - Redis/BullMQ - Phase 7's campaign dispatcher runs today as a documented in-process `setInterval`
   drop-in (see above); migrating it to a real queue is Phase 15 infra work, not a logic change
-- Live Monitor (listen/barge/whisper on live calls) - Vapi's real `monitor.listenUrl`/`controlUrl`
-  are already relayed by `getLiveMonitorUrls()`, but the UI to actually use them is Phase 10
 - Inbound Routes, Queues (inbound call routing, ring groups)
 - Messaging
 - Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake)
+- AI evaluator / call-scoring / agent-improvement suggestion system (spec section 23's fuller
+  scope beyond the call summaries Phase 9 already ships) - Phase 11
 - SMTP-backed email delivery
 - Background job queues / Redis (the async import in Phase 2, the Phase 3 knowledge-document
   pipeline and Phase 4's voice cloning all use `setImmediate` on the backend process itself - see
@@ -1072,6 +1182,24 @@ were verified for real in both:
      were already seeded in Phase 1); `search_call_transcripts()` is confirmed present alongside
      `match_knowledge_chunks()`. The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all
      pass clean after this phase (268 backend tests total).
+   - Phase 10: `apps/backend/src/phase10.integration.test.ts` (5 tests) plus
+     `apps/backend/src/ws/liveMonitorEvents.test.ts` (6 unit tests),
+     `apps/backend/src/ws/liveMonitorBroadcaster.test.ts` (5 tests, including the explicit cross-org
+     isolation and full-event-sequence-in-order tests) and
+     `apps/backend/src/services/liveTranscriptIngestion.test.ts` (5 unit tests) - see the "Phase 10"
+     section above for exactly what each proves. Phase 10 added 1 new migration (37 total: the
+     original 36 plus `00000000000037_phase10_live_monitor.sql`, adding only
+     `calls.transfer_initiated_by` - no new tables were needed, see that section), applied cleanly
+     both incrementally on top of the existing Phase 1-9 verification database and from a
+     completely fresh database (all 37 migrations, in order, auth stub included) - both runs land
+     on **48 tables** (unchanged from Phase 9 - this phase added a column, not a table), RLS
+     confirmed still enabled everywhere it was before; the permission catalog is unchanged at 30
+     (`live_monitor.view`/`listen`/`barge`/`whisper` were already seeded in Phase 1) and the
+     real per-role permission counts now confirm the intended supervisor tier split: MANAGER 27,
+     AGENT 9 (gained `live_monitor.view` plus the rest of the day-to-day set), VIEWER 7,
+     ADMIN/SUPER_ADMIN 30. The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass
+     clean after this phase (289 backend tests total), and the separate `apps/pipecat-service`
+     Python suite (`pytest`) passes 31/31, up from 8/8 before this phase.
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
@@ -1088,7 +1216,17 @@ placed anywhere in this build; every request shape is built from each provider's
 API and asserted against a mocked `fetch`/`httpx` boundary instead. The real `pipecat-ai` pipeline
 construction code (`apps/pipecat-service/app/pipeline.py`) is written against pipecat-ai 1.10.0's
 documented module layout but never run end-to-end against a live media stream here - see that
-service's own README for exactly what it does and doesn't verify. Same for Phase 8's tool-call
+service's own README for exactly what it does and doesn't verify. Phase 10 adds to that same gap:
+`SupervisorTapProcessor`/`SupervisorInjectProcessor`/`CallerTranscriptEmitter`/
+`AssistantTranscriptEmitter` (`app/pipeline.py`) are written directly against pipecat-ai's real,
+documented `FrameProcessor`/`AudioRawFrame`/`OutputAudioRawFrame`/`TranscriptionFrame`/
+`LLMFullResponseStartFrame`/`LLMFullResponseEndFrame` classes, but pipecat-ai itself could not be
+installed in this sandbox (a `pip install pipecat-ai` attempt here timed out fetching from
+PyPI/files.pythonhosted.org) and there is no live call to run them against regardless - everything
+on THIS side of that boundary (the WS endpoint's auth/call-id validation, `supervisor_hub.py`'s
+queueing/broadcast/isolation logic, correct wiring of a WS connection into the hub) is instead
+proven directly, for real, in `test_supervisor_auth.py`/`test_supervisor_hub.py`/
+`test_supervisor_ws.py`. Same for Phase 8's tool-call
 webhook handling: `services/toolCallHandler.ts`'s parsing is built from Vapi's currently documented
 `tool-calls` message shape (`toolCallList`/`toolCalls`, `function.name`/`function.arguments`) and
 exercised against synthetic fixtures, never a live Vapi assistant actually invoking a configured
