@@ -11,3 +11,5 @@ export * from './voice.js';
 export * from './telephony.js';
 export * from './orchestration.js';
 export * from './campaign.js';
+export * from './disposition.js';
+export * from './callback.js';

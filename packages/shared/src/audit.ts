@@ -88,6 +88,17 @@ export const AUDIT_ACTIONS = {
   CAMPAIGN_LEADS_ATTACHED: 'campaign.leads_attached',
   CAMPAIGN_LEADS_ROTATED: 'campaign.leads_rotated',
   DIALING_SETTINGS_UPDATED: 'dialing_settings.updated',
+
+  DISPOSITION_CREATED: 'disposition.created',
+  DISPOSITION_UPDATED: 'disposition.updated',
+  DISPOSITION_DELETED: 'disposition.deleted',
+  CALL_DISPOSITION_OVERRIDDEN: 'call_disposition.overridden',
+
+  CALLBACK_CREATED: 'callback.created',
+  CALLBACK_UPDATED: 'callback.updated',
+  CALLBACK_CANCELLED: 'callback.cancelled',
+
+  LEAD_DNC_REQUESTED_ON_CALL: 'lead.dnc_requested_on_call',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
