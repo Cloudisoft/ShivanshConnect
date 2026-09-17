@@ -11,11 +11,15 @@ import { VerifyEmailPendingPage } from './pages/auth/VerifyEmailPendingPage';
 import { AcceptInvitationPage } from './pages/auth/AcceptInvitationPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { UsersPage } from './pages/UsersPage';
+import { LeadListsPage } from './pages/LeadListsPage';
+import { LeadsPage } from './pages/LeadsPage';
+import { LeadDetailPage } from './pages/LeadDetailPage';
 import { SettingsLayout } from './pages/settings/SettingsLayout';
 import { OrganizationSettingsPage } from './pages/settings/OrganizationSettingsPage';
 import { ProfileSettingsPage } from './pages/settings/ProfileSettingsPage';
 import { SecuritySettingsPage } from './pages/settings/SecuritySettingsPage';
 import { RolesSettingsPage } from './pages/settings/RolesSettingsPage';
+import { ComplianceSettingsPage } from './pages/settings/ComplianceSettingsPage';
 import { IntegrationsSettingsPage } from './pages/settings/IntegrationsSettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
@@ -38,6 +42,9 @@ export default function App(): JSX.Element {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/users" element={<UsersPage />} />
+          <Route path="/lead-lists" element={<LeadListsPage />} />
+          <Route path="/leads" element={<LeadsPage />} />
+          <Route path="/leads/:id" element={<LeadDetailPage />} />
 
           <Route path="/settings" element={<SettingsLayout />}>
             <Route index element={<Navigate to="/settings/organization" replace />} />
@@ -46,6 +53,7 @@ export default function App(): JSX.Element {
             <Route path="security" element={<SecuritySettingsPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="roles" element={<RolesSettingsPage />} />
+            <Route path="compliance" element={<ComplianceSettingsPage />} />
             <Route path="integrations" element={<IntegrationsSettingsPage />} />
           </Route>
 

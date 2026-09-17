@@ -50,7 +50,19 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     const { data, error, count } = await builder;
     if (error) throw error;
 
-    return ok(data ?? [], { pagination: paginationMeta(query.page, query.page_size, count ?? 0) });
+    const leads = data ?? [];
+    const listIds = Array.from(new Set(leads.map((l: any) => l.lead_list_id).filter(Boolean)));
+    let listNames = new Map<string, string>();
+    if (listIds.length > 0) {
+      const { data: lists } = await supabase.from('lead_lists').select('id, name').in('id', listIds as string[]);
+      listNames = new Map((lists ?? []).map((l: any) => [l.id, l.name]));
+    }
+    const withListNames = leads.map((l: any) => ({
+      ...l,
+      lead_list_name: l.lead_list_id ? listNames.get(l.lead_list_id) ?? null : null,
+    }));
+
+    return ok(withListNames, { pagination: paginationMeta(query.page, query.page_size, count ?? 0) });
   });
 
   // ---------------------------------------------------------------

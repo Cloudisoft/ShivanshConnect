@@ -81,6 +81,12 @@ export interface LeadWithLists extends Lead {
   lists: { id: string; name: string }[];
 }
 
+/** Shape returned by GET /leads (list endpoint) - includes the primary
+ * list's name so the table doesn't need a second round trip per row. */
+export interface LeadListRow extends Lead {
+  lead_list_name: string | null;
+}
+
 export interface LeadCustomField {
   id: string;
   organization_id: string;

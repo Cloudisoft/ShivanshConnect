@@ -8,6 +8,7 @@ const TABS = [
   { path: '/settings/security', label: 'Security', permission: null },
   { path: '/settings/users', label: 'Users', permission: 'users.manage' },
   { path: '/settings/roles', label: 'Roles', permission: 'roles.manage' },
+  { path: '/settings/compliance', label: 'Compliance', permission: 'leads.view' },
   { path: '/settings/integrations', label: 'Integrations', permission: null },
 ];
 
