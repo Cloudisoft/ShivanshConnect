@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ insert: vi.fn(async () => ({ error: null })), from: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  insert: vi.fn(async (): Promise<{ error: { message: string } | null }> => ({ error: null })),
+  from: vi.fn(),
+}));
 
 vi.mock('./supabase.js', () => ({
   getSupabaseAdmin: () => ({ from: mocks.from }),
