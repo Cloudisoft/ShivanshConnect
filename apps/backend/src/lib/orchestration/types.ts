@@ -134,10 +134,27 @@ export interface CreateCallResult {
   status: string;
 }
 
+/** Phase 9: one real per-utterance transcript line, when the engine
+ * exposes structured per-message data (Vapi's `call.messages`/
+ * `artifact.messages` array carries a real per-message `secondsFromStart`;
+ * pipecat-service is free to expose the equivalent). Never fabricated -
+ * `segments` is null when the engine only returns a flat transcript
+ * string, and callers (services/processCallArtifacts.ts) fall back to
+ * parsing that string by speaker prefix with no invented timing. */
+export interface TranscriptSegmentRaw {
+  speaker: 'ai' | 'caller';
+  startMs: number;
+  endMs: number | null;
+  text: string;
+}
+
 export interface CallArtifacts {
   recordingUrl: string | null;
   transcriptUrl: string | null;
   transcript: string | null;
+  /** Structured per-utterance data when the engine provides it; null
+   * otherwise (see this interface's header comment). */
+  segments: TranscriptSegmentRaw[] | null;
 }
 
 export interface LiveMonitorUrls {

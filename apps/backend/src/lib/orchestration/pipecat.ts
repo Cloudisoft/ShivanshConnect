@@ -44,6 +44,7 @@ import {
   type CreateCallParams,
   type CreateCallResult,
   type LiveMonitorUrls,
+  type TranscriptSegmentRaw,
   OrchestrationProviderError,
   OrchestrationProviderNotConfiguredError,
 } from './types.js';
@@ -173,11 +174,19 @@ export class PipecatProvider implements CallOrchestrationProvider {
   }
 
   async getArtifacts(providerCallId: string): Promise<CallArtifacts> {
-    const artifacts = await this.request<{ recording_url: string | null; transcript_url: string | null; transcript: string | null }>(
-      'GET',
-      `/calls/${encodeURIComponent(providerCallId)}/artifacts`,
-    );
-    return { recordingUrl: artifacts.recording_url, transcriptUrl: artifacts.transcript_url, transcript: artifacts.transcript };
+    const artifacts = await this.request<{
+      recording_url: string | null;
+      transcript_url: string | null;
+      transcript: string | null;
+      // Optional - pipecat-service exposes this only when it has real
+      // per-utterance STT timing to report; absent (undefined/null) is
+      // treated the same as "no structured segments", never fabricated.
+      segments?: Array<{ speaker: 'ai' | 'caller'; start_ms: number; end_ms: number | null; text: string }> | null;
+    }>('GET', `/calls/${encodeURIComponent(providerCallId)}/artifacts`);
+    const segments: TranscriptSegmentRaw[] | null = artifacts.segments?.length
+      ? artifacts.segments.map((s) => ({ speaker: s.speaker, startMs: s.start_ms, endMs: s.end_ms, text: s.text }))
+      : null;
+    return { recordingUrl: artifacts.recording_url, transcriptUrl: artifacts.transcript_url, transcript: artifacts.transcript, segments };
   }
 
   async getTranscript(providerCallId: string): Promise<string | null> {

@@ -19,6 +19,7 @@ import type { CallTransitionEvent } from '../lib/callStateMachine.js';
 import { isTerminalCallStatus } from '../lib/callStateMachine.js';
 import { assignDispositionForCall } from './dispositionEngine.js';
 import { applyCallOutcomeToCampaignLead } from './campaignLeadDisposition.js';
+import { processCallArtifacts } from './processCallArtifacts.js';
 import type { getSupabaseAdmin } from '../lib/supabase.js';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
@@ -44,4 +45,23 @@ export async function handleTerminalCall(supabase: Supabase, event: CallTransiti
     event.to,
     dispositionCode,
   );
+
+  // Phase 9: real transcript/recording ingestion + AI summary generation
+  // (spec sections 21/22/23-partial). Deliberately NOT awaited here - it
+  // involves real outbound HTTP calls to the orchestration engine and to
+  // this call's provider recording URL, which must never make the webhook
+  // handler (or a test) that triggered this terminal transition wait on
+  // them. 'cancelled' is excluded, same as the disposition engine above -
+  // a cancelled call never actually took place, so there is nothing to
+  // fetch. setImmediate is the same fire-and-forget-but-scheduled pattern
+  // every prior phase's async ingestion (importLeads.ts, processKnowledge
+  // Document.ts) already uses.
+  if (event.to !== 'cancelled') {
+    setImmediate(() => {
+      processCallArtifacts(event.callId).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('processCallArtifacts failed for call', event.callId, err);
+      });
+    });
+  }
 }

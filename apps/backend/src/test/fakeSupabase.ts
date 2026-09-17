@@ -62,6 +62,11 @@ interface Tables {
   dispositions: Row[];
   call_dispositions: Row[];
   callbacks: Row[];
+  call_transcripts: Row[];
+  call_transcript_segments: Row[];
+  call_recordings: Row[];
+  call_summaries: Row[];
+  exports: Row[];
 }
 
 export interface FakeAuthUser {
@@ -115,6 +120,11 @@ export function createFakeSupabase() {
     dispositions: [],
     call_dispositions: [],
     callbacks: [],
+    call_transcripts: [],
+    call_transcript_segments: [],
+    call_recordings: [],
+    call_summaries: [],
+    exports: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -155,6 +165,7 @@ export function createFakeSupabase() {
       'campaigns.pause',
       'campaigns.delete',
       'callbacks.manage',
+      'cdr.export',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -460,6 +471,22 @@ export function createFakeSupabase() {
           busy_behavior: 'retry',
           no_answer_behavior: 'retry',
         };
+      case 'call_transcripts':
+        return { full_text: null, status: 'pending', failure_reason: null, source_url: null };
+      case 'call_recordings':
+        return {
+          provider_recording_url: null,
+          storage_path: null,
+          format: null,
+          duration_seconds: null,
+          size_bytes: null,
+          status: 'pending',
+          failure_reason: null,
+        };
+      case 'call_summaries':
+        return { key_points: [], customer_intent: null, objections: null, questions: null, next_action: null, outcome: null, generated_at: new Date().toISOString() };
+      case 'exports':
+        return { filters: {}, status: 'pending', file_storage_path: null, row_count: null, failure_reason: null, completed_at: null };
       default:
         return {};
     }
@@ -744,6 +771,32 @@ export function createFakeSupabase() {
     return { data: scored, error: null };
   }
 
+  /**
+   * Minimal stand-in for supabase.rpc('search_call_transcripts', ...) -
+   * see supabase/migrations/00000000000035_phase9_cdr.sql. Ranks by a
+   * simple case-insensitive occurrence count rather than real
+   * ts_rank/tsvector math (that's the whole point of only running this
+   * against real Postgres for the actual SQL - see README's Verification
+   * Notes), but applies the exact same org-scoping + "only ready
+   * transcripts" + "must actually match" filters the real function does,
+   * which is what the cross-org isolation and correctness tests exercise.
+   */
+  function searchCallTranscripts(args: { search_query: string; match_organization_id: string; match_count?: number; match_offset?: number }): { data: Row[]; error: null } {
+    const { search_query: query, match_organization_id: orgId, match_count: count = 20, match_offset: offset = 0 } = args;
+    const needle = query.trim().toLowerCase();
+    const scored = tables.call_transcripts
+      .filter((t) => t.organization_id === orgId && t.status === 'ready' && typeof t.full_text === 'string')
+      .map((t) => {
+        const haystack = String(t.full_text).toLowerCase();
+        const occurrences = needle.length === 0 ? 0 : haystack.split(needle).length - 1;
+        return { transcript_id: t.id, call_id: t.call_id, full_text: t.full_text, rank: occurrences };
+      })
+      .filter((r) => r.rank > 0)
+      .sort((a, b) => b.rank - a.rank)
+      .slice(offset, offset + count);
+    return { data: scored, error: null };
+  }
+
   const supabase = {
     from(table: keyof Tables) {
       return new QueryBuilder(table);
@@ -751,6 +804,9 @@ export function createFakeSupabase() {
     async rpc(fnName: string, args: Record<string, any>) {
       if (fnName === 'match_knowledge_chunks') {
         return matchKnowledgeChunks(args as any);
+      }
+      if (fnName === 'search_call_transcripts') {
+        return searchCallTranscripts(args as any);
       }
       return { data: null, error: { message: `Unknown RPC function in fake client: ${fnName}` } };
     },

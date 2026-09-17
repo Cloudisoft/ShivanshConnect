@@ -154,7 +154,7 @@ describe('VapiProvider', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     const provider = new VapiProvider('sk-test');
-    expect(await provider.getArtifacts('call_abc')).toEqual({ recordingUrl: 'https://rec', transcriptUrl: 'https://tx', transcript: 'hello world' });
+    expect(await provider.getArtifacts('call_abc')).toEqual({ recordingUrl: 'https://rec', transcriptUrl: 'https://tx', transcript: 'hello world', segments: null });
     expect(await provider.getTranscript('call_abc')).toBe('hello world');
     expect(await provider.getRecording('call_abc')).toBe('https://rec');
   });

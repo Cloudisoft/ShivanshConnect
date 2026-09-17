@@ -51,21 +51,59 @@ import {
   type CreateCallParams,
   type CreateCallResult,
   type LiveMonitorUrls,
+  type TranscriptSegmentRaw,
   OrchestrationProviderError,
   OrchestrationProviderNotConfiguredError,
 } from './types.js';
 
 const VAPI_API_BASE = 'https://api.vapi.ai';
 
+interface VapiArtifactMessage {
+  role?: string; // 'assistant' | 'bot' | 'user' | 'customer' | ...
+  message?: string;
+  /** Vapi's real per-message offset from call start, in seconds. */
+  secondsFromStart?: number;
+  endSecondsFromStart?: number;
+}
+
 interface VapiCallObject {
   id: string;
   status: string;
   endedReason?: string;
   monitor?: { listenUrl?: string; controlUrl?: string };
-  artifact?: { recordingUrl?: string; transcript?: string; transcriptUrl?: string };
+  artifact?: { recordingUrl?: string; transcript?: string; transcriptUrl?: string; messages?: VapiArtifactMessage[] };
+  messages?: VapiArtifactMessage[];
   cost?: number;
   startedAt?: string;
   endedAt?: string;
+}
+
+/** Maps Vapi's real per-message role strings to our two-party speaker
+ * enum. Anything not recognized as the customer side is treated as the
+ * AI side (Vapi's own roles for the assistant vary: 'assistant', 'bot',
+ * 'system' framing lines are filtered out entirely). Returns null for a
+ * role that carries no actual spoken content (e.g. 'system' or 'tool'). */
+function vapiRoleToSpeaker(role: string | undefined): 'ai' | 'caller' | null {
+  const normalized = (role ?? '').toLowerCase();
+  if (normalized === 'user' || normalized === 'customer') return 'caller';
+  if (normalized === 'assistant' || normalized === 'bot') return 'ai';
+  return null;
+}
+
+function toSegments(messages: VapiArtifactMessage[] | undefined): TranscriptSegmentRaw[] | null {
+  if (!messages || messages.length === 0) return null;
+  const segments: TranscriptSegmentRaw[] = [];
+  for (const m of messages) {
+    const speaker = vapiRoleToSpeaker(m.role);
+    if (!speaker || !m.message) continue;
+    segments.push({
+      speaker,
+      startMs: Math.max(0, Math.round((m.secondsFromStart ?? 0) * 1000)),
+      endMs: m.endSecondsFromStart != null ? Math.round(m.endSecondsFromStart * 1000) : null,
+      text: m.message,
+    });
+  }
+  return segments.length > 0 ? segments : null;
 }
 
 export class VapiProvider implements CallOrchestrationProvider {
@@ -271,6 +309,7 @@ export class VapiProvider implements CallOrchestrationProvider {
       recordingUrl: call.artifact?.recordingUrl ?? null,
       transcriptUrl: call.artifact?.transcriptUrl ?? null,
       transcript: call.artifact?.transcript ?? null,
+      segments: toSegments(call.artifact?.messages ?? call.messages),
     };
   }
 
