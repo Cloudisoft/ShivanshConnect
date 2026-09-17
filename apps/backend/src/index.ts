@@ -41,6 +41,9 @@ import { vapiRoutes } from './routes/vapi.js';
 import { callRoutes } from './routes/calls.js';
 import { webhookReceiverRoutes, webhookAdminRoutes } from './routes/webhooks.js';
 import { OrchestrationProviderError, OrchestrationProviderNotConfiguredError } from './lib/orchestration/types.js';
+import { campaignRoutes } from './routes/campaigns.js';
+import { dialingSettingsRoutes, campaignSettingsRoutes } from './routes/dialingSettings.js';
+import { startCampaignDispatcher } from './services/campaignDispatcher.js';
 
 export function buildApp() {
   const env = getEnv();
@@ -97,6 +100,12 @@ export function buildApp() {
       api.register(phoneNumberRoutes, { prefix: '/phone-numbers' });
       api.register(vapiRoutes, { prefix: '/vapi' });
       api.register(callRoutes, { prefix: '/calls' });
+      api.register(campaignRoutes, { prefix: '/campaigns' });
+      // Per-campaign settings overrides share the /campaigns/:id prefix
+      // but are a separate plugin registration so their own preHandler
+      // hook doesn't collide with campaignRoutes's.
+      api.register(campaignSettingsRoutes, { prefix: '/campaigns' });
+      api.register(dialingSettingsRoutes, { prefix: '/dialing-settings' });
       // Unauthenticated webhook receivers (external engines) vs the
       // authenticated admin log/replay routes are deliberately two
       // separate Fastify plugin registrations under the same prefix so
@@ -232,6 +241,14 @@ async function main() {
   const app = buildApp();
   try {
     await app.listen({ port: env.PORT, host: '0.0.0.0' });
+    // Phase 7: starts the in-process campaign dispatch loop (see
+    // services/campaignDispatcher.ts's header comment for exactly why
+    // this is a setInterval loop today and how it maps onto a real
+    // BullMQ repeatable job once Phase 15 wires up Redis). Deliberately
+    // NOT started by buildApp() itself so the test suite (which imports
+    // buildApp() directly via app.inject(), never main()) never has a
+    // background timer running against its fake Supabase client.
+    startCampaignDispatcher();
   } catch (err) {
     app.log.error(err);
     process.exit(1);

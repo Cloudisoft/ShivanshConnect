@@ -12,7 +12,7 @@
  * directly unit-testable without any fake DB harness.
  */
 
-import type { CampaignCallingRulesSnapshot, CampaignLeadStatus } from '@shivanshconnect/shared';
+import { CAMPAIGN_LEAD_TERMINAL_STATUSES, type CampaignCallingRulesSnapshot, type CampaignLeadStatus } from '@shivanshconnect/shared';
 
 export type EligibilityReasonCode =
   | 'campaign_not_running'
@@ -131,7 +131,7 @@ export interface EvaluateEligibilityInput {
   now: Date;
 }
 
-const TERMINAL_STATUSES: CampaignLeadStatus[] = ['completed', 'skipped', 'dnc'];
+const TERMINAL_STATUSES: CampaignLeadStatus[] = CAMPAIGN_LEAD_TERMINAL_STATUSES;
 const IN_FLIGHT_STATUSES: CampaignLeadStatus[] = ['queued', 'dialing', 'ringing', 'connected', 'in_progress', 'transferring'];
 
 /** The single source of truth for "is this campaign_leads row eligible to

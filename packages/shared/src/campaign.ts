@@ -47,11 +47,15 @@ export const CAMPAIGN_LEAD_STATUSES = [
 export type CampaignLeadStatus = (typeof CAMPAIGN_LEAD_STATUSES)[number];
 
 /** Terminal campaign_leads statuses - once reached, the dispatcher and
- * webhook processor never move the lead again (spec 11/52). Every other
- * status is either still pending dispatch or awaiting a scheduled retry -
- * the invariant this platform guarantees is that every campaign_leads row
- * is always in exactly one of these two buckets, never silently lost. */
-export const CAMPAIGN_LEAD_TERMINAL_STATUSES: CampaignLeadStatus[] = ['completed', 'skipped', 'dnc'];
+ * webhook processor never move the lead again (spec 11/52). `failed` is
+ * terminal too: the webhook processor only ever sets it for a
+ * non-retryable ended_reason or once attempt_count has exhausted
+ * max_attempts - a genuinely retryable outcome always goes to
+ * `retry_pending` instead. Every other status is either still pending
+ * dispatch or awaiting a scheduled retry - the invariant this platform
+ * guarantees is that every campaign_leads row is always in exactly one of
+ * these two buckets, never silently lost. */
+export const CAMPAIGN_LEAD_TERMINAL_STATUSES: CampaignLeadStatus[] = ['completed', 'skipped', 'dnc', 'failed'];
 
 export const BACKGROUND_NOISE_OPTIONS = ['off', 'low', 'medium', 'high'] as const;
 export type BackgroundNoise = (typeof BACKGROUND_NOISE_OPTIONS)[number];

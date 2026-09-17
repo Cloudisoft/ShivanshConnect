@@ -9,6 +9,7 @@ import { listWebhookEventsQuerySchema } from '../schemas/orchestration.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS, type CallStatus } from '@shivanshconnect/shared';
 import { isValidCallTransition } from '../lib/orchestration/callStateMachine.js';
+import { applyCallOutcomeToCampaignLead } from '../services/campaignLeadDisposition.js';
 
 /**
  * Phase 6 webhook receivers (spec sections 31/58).
@@ -126,7 +127,11 @@ async function markWebhookFailed(supabase: ReturnType<typeof getSupabaseAdmin>, 
 
 /** Applies a call-status update only when the transition is valid (spec
  * 50). An invalid transition is logged (never applied, never crashes the
- * webhook). */
+ * webhook). Phase 7: when the call belongs to a campaign and the new
+ * status is a terminal one, also drives that campaign_leads row's
+ * disposition/retry bookkeeping (services/campaignLeadDisposition.ts) -
+ * this is the one place Phase 6's webhook processor and Phase 7's
+ * campaign engine actually meet, extending rather than duplicating it. */
 async function applyCallStatus(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   call: Record<string, any>,
@@ -144,6 +149,17 @@ async function applyCallStatus(
   }
   if (call.status === nextStatus) return; // idempotent no-op redelivery
   await supabase.from('calls').update({ status: nextStatus, ...extra }).eq('id', call.id);
+  await applyCallOutcomeToCampaignLead(
+    supabase,
+    {
+      id: call.id,
+      organization_id: call.organization_id,
+      campaign_id: call.campaign_id ?? null,
+      lead_id: call.lead_id ?? null,
+      ended_reason: (extra.ended_reason as string | null | undefined) ?? call.ended_reason ?? null,
+    },
+    nextStatus,
+  );
 }
 
 export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void> {
