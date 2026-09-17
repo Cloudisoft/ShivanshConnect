@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { X, Play, Pause, Download } from 'lucide-react';
+import { EVALUATION_SCORE_CATEGORY_LABELS } from '@shivanshconnect/shared';
 import { useCdrDetail, fetchRecordingObjectUrl } from '../../hooks/useCdr';
+import { useCallEvaluation } from '../../hooks/useEvaluations';
 import { Badge, Button, Input } from '../ui';
 
 function formatMs(ms: number): string {
@@ -136,9 +138,92 @@ export function CallDetailDrawer({ callId, onClose }: { callId: string; onClose:
                 </div>
               )}
             </section>
+
+            <section>
+              <h3 className="text-sm font-semibold text-ink-900">AI Evaluation</h3>
+              <EvaluationPanel callId={callId} />
+            </section>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Phase 11: the AI Evaluation panel (spec sections 24/86) - overall
+ * score, the full sub-score rubric as a simple bar list (per the task
+ * brief, not an over-invested visualization), qualitative findings, and
+ * an honest "not evaluated"/"evaluation skipped" state when
+ * GET /calls/:id/evaluation says so - never a fabricated score. A 403
+ * (viewer lacks the agents.manage permission this route requires) is
+ * treated the same as "nothing to show" rather than an alarming error,
+ * since not every CDR viewer manages agents.
+ */
+function EvaluationPanel({ callId }: { callId: string }): JSX.Element | null {
+  const { data, isLoading, isError } = useCallEvaluation(callId);
+
+  if (isLoading) return <p className="mt-2 text-sm text-ink-500">Loading evaluation...</p>;
+  if (isError) return null;
+  if (!data) return null;
+
+  if (data.state !== 'evaluated') {
+    return <p className="mt-2 rounded-md border border-ink-200 bg-ink-50 p-3 text-sm text-ink-500">{data.reason}</p>;
+  }
+
+  const { evaluation } = data;
+  const scoreEntries = Object.entries(evaluation.scores) as [keyof typeof EVALUATION_SCORE_CATEGORY_LABELS, number][];
+
+  return (
+    <div className="mt-2 space-y-4 rounded-md border border-ink-200 p-3 text-sm">
+      <div className="flex items-center gap-3">
+        <span className="text-2xl font-semibold text-ink-900">{Math.round(evaluation.overall_score)}</span>
+        <span className="text-xs text-ink-500">/ 100 overall &middot; {evaluation.llm_model}</span>
+      </div>
+
+      <div className="space-y-1.5">
+        {scoreEntries.map(([key, value]) => (
+          <div key={key} className="flex items-center gap-2">
+            <span className="w-40 shrink-0 text-xs text-ink-600">{EVALUATION_SCORE_CATEGORY_LABELS[key] ?? key}</span>
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-ink-100">
+              <div className="h-full rounded-full bg-gold-500" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+            </div>
+            <span className="w-8 shrink-0 text-right text-xs text-ink-500">{Math.round(value)}</span>
+          </div>
+        ))}
+      </div>
+
+      {evaluation.what_went_well.length > 0 && (
+        <FindingList title="What went well" items={evaluation.what_went_well} />
+      )}
+      {evaluation.what_went_poorly.length > 0 && (
+        <FindingList title="What went poorly" items={evaluation.what_went_poorly} />
+      )}
+      {evaluation.missed_opportunities.length > 0 && (
+        <FindingList title="Missed opportunities" items={evaluation.missed_opportunities} />
+      )}
+      {evaluation.incorrect_statements.length > 0 && (
+        <FindingList title="Incorrect statements" items={evaluation.incorrect_statements} />
+      )}
+      {evaluation.customer_objections.length > 0 && (
+        <FindingList title="Customer objections" items={evaluation.customer_objections} />
+      )}
+      {evaluation.recommended_improvement && (
+        <p><span className="font-semibold text-ink-700">Recommended improvement: </span>{evaluation.recommended_improvement}</p>
+      )}
+    </div>
+  );
+}
+
+function FindingList({ title, items }: { title: string; items: string[] }): JSX.Element {
+  return (
+    <div>
+      <p className="font-semibold text-ink-700">{title}</p>
+      <ul className="ml-4 list-disc text-ink-700">
+        {items.map((item, i) => (
+          <li key={i}>{item}</li>
+        ))}
+      </ul>
     </div>
   );
 }

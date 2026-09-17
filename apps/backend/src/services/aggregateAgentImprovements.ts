@@ -37,8 +37,6 @@ import { getSupabaseAdmin } from '../lib/supabase.js';
 import { getLlmProvider } from '../lib/llm/index.js';
 import type { AgentImprovementEvidence, CallEvaluation } from '@shivanshconnect/shared';
 
-type Supabase = ReturnType<typeof getSupabaseAdmin>;
-
 const SUGGESTION_MODEL = process.env.AGENT_IMPROVEMENT_MODEL ?? 'gpt-4o-mini';
 const MAX_ITEMS_PER_CATEGORY = 5;
 const SIMILARITY_MATCH_THRESHOLD = 0.5;

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Play } from 'lucide-react';
 import {
   BEHAVIOR_TRAITS,
+  EVALUATION_SCORE_CATEGORY_LABELS,
   PERSONALITY_TONES,
   PERSONALITY_TRAITS,
   PROMPT_VARIABLES,
@@ -14,9 +15,57 @@ import {
   usePublishAgentVersion,
   useUpdateAgentVersion,
 } from '../../hooks/useAgents';
+import { useAgentEvaluationSummary } from '../../hooks/useEvaluations';
 import { usePreviewVoice, useVoices } from '../../hooks/useVoices';
 import { Alert, Button, Card, Input, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
+
+/** Phase 11: the evaluation-summary widget (spec sections 24/86) - real
+ * server-aggregated (GROUP BY/AVG) average overall score and per-category
+ * averages over the agent's last 30 days of evaluated calls. An honest
+ * "no evaluated calls yet" state when call_count is 0 - never a
+ * fabricated trend. */
+function EvaluationSummaryWidget({ agentId }: { agentId: string }): JSX.Element | null {
+  const summaryQuery = useAgentEvaluationSummary(agentId, 30);
+  if (summaryQuery.isLoading || summaryQuery.isError || !summaryQuery.data) return null;
+  const summary = summaryQuery.data;
+
+  if (summary.call_count === 0) {
+    return (
+      <Card>
+        <h3 className="text-sm font-semibold text-ink-900">Call quality (last 30 days)</h3>
+        <p className="mt-2 text-sm text-ink-500">No calls have been evaluated for this agent in the last 30 days yet.</p>
+      </Card>
+    );
+  }
+
+  const categoryEntries = Object.entries(summary.category_averages) as [keyof typeof EVALUATION_SCORE_CATEGORY_LABELS, number][];
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-ink-900">Call quality (last 30 days)</h3>
+        <span className="text-xs text-ink-500">{summary.call_count} evaluated call{summary.call_count === 1 ? '' : 's'}</span>
+      </div>
+      <div className="mt-2 flex items-center gap-3">
+        <span className="text-3xl font-semibold text-ink-900">
+          {summary.average_overall_score != null ? Math.round(summary.average_overall_score) : '-'}
+        </span>
+        <span className="text-xs text-ink-500">/ 100 average overall score</span>
+      </div>
+      {categoryEntries.length > 0 && (
+        <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3">
+          {categoryEntries.map(([key, value]) => (
+            <div key={key} className="flex items-center justify-between text-xs">
+              <span className="text-ink-600">{EVALUATION_SCORE_CATEGORY_LABELS[key] ?? key}</span>
+              <span className="font-medium text-ink-900">{Math.round(value)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function VariablePalette(): JSX.Element {
   return (
@@ -267,6 +316,8 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
           {published.version_number} stays published until you publish the new one.
         </Alert>
       )}
+
+      <EvaluationSummaryWidget agentId={agentId} />
 
       <Card>
         <h3 className="text-sm font-semibold text-ink-900">Personality</h3>

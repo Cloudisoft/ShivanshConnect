@@ -13,6 +13,7 @@ import {
   updateAgentSchema,
   updateAgentVersionSchema,
 } from '../schemas/agents.js';
+import { evaluationSummaryQuerySchema, listAgentImprovementsQuerySchema } from '../schemas/agentImprovements.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS, DEFAULT_AGENT_PERSONALITY, DEFAULT_CALL_ENDING_RULES, DEFAULT_TRANSFER_RULES } from '@shivanshconnect/shared';
 import { getLlmProvider, LlmNotConfiguredError } from '../lib/llm/index.js';
@@ -45,6 +46,61 @@ async function getOwnedVersion(
     throw new NotFoundError('Agent version not found.');
   }
   return version;
+}
+
+/** Creates a new DRAFT version for an agent, copying every field from
+ * `source` except any keys present in `overrides`. Used by both
+ * POST /:id/versions/:versionId/restore (no overrides - an exact copy)
+ * and Phase 11's POST /agent-improvements/:id/apply (overrides the
+ * relevant prompt field) - the ONE place a new agent_versions row is
+ * actually inserted from an existing version, so every "create a draft
+ * from this config" path (restore, apply-improvement) shares the exact
+ * same version-numbering and field-copy logic. Never marks the result
+ * anything but 'draft' - publishing is always a separate, explicit human
+ * action (POST /:id/versions/:versionId/publish).
+ */
+export async function createDraftVersionFromSource(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  agentId: string,
+  orgId: string,
+  source: Record<string, any>,
+  createdBy: string | null,
+  overrides: Record<string, unknown> = {},
+) {
+  const { data: existingVersions } = await supabase
+    .from('ai_agent_versions')
+    .select('version_number')
+    .eq('agent_id', agentId)
+    .order('version_number', { ascending: false });
+  const nextVersionNumber = ((existingVersions ?? [])[0]?.version_number ?? 0) + 1;
+
+  const { data: created, error } = await supabase
+    .from('ai_agent_versions')
+    .insert({
+      agent_id: agentId,
+      organization_id: orgId,
+      version_number: nextVersionNumber,
+      personality: source.personality,
+      language: source.language,
+      accent: source.accent,
+      greeting_template: source.greeting_template,
+      system_prompt: source.system_prompt,
+      fallback_behavior: source.fallback_behavior,
+      transfer_rules: source.transfer_rules,
+      call_ending_rules: source.call_ending_rules,
+      llm_provider: source.llm_provider,
+      llm_model: source.llm_model,
+      llm_temperature: source.llm_temperature,
+      llm_max_tokens: source.llm_max_tokens,
+      voice_id: source.voice_id,
+      status: 'draft',
+      created_by: createdBy,
+      ...overrides,
+    })
+    .select(VERSION_COLUMNS)
+    .single();
+  if (error) throw error;
+  return { version: created, versionNumber: nextVersionNumber };
 }
 
 export async function agentRoutes(app: FastifyInstance): Promise<void> {
@@ -398,38 +454,13 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     await getOwnedAgent(supabase, id, orgId);
     const source = await getOwnedVersion(supabase, id, versionId, orgId);
 
-    const { data: existingVersions } = await supabase
-      .from('ai_agent_versions')
-      .select('version_number')
-      .eq('agent_id', id)
-      .order('version_number', { ascending: false });
-    const nextVersionNumber = ((existingVersions ?? [])[0]?.version_number ?? 0) + 1;
-
-    const { data: restored, error } = await supabase
-      .from('ai_agent_versions')
-      .insert({
-        agent_id: id,
-        organization_id: orgId,
-        version_number: nextVersionNumber,
-        personality: source.personality,
-        language: source.language,
-        accent: source.accent,
-        greeting_template: source.greeting_template,
-        system_prompt: source.system_prompt,
-        fallback_behavior: source.fallback_behavior,
-        transfer_rules: source.transfer_rules,
-        call_ending_rules: source.call_ending_rules,
-        llm_provider: source.llm_provider,
-        llm_model: source.llm_model,
-        llm_temperature: source.llm_temperature,
-        llm_max_tokens: source.llm_max_tokens,
-        voice_id: source.voice_id,
-        status: 'draft',
-        created_by: req.user!.id,
-      })
-      .select(VERSION_COLUMNS)
-      .single();
-    if (error) throw error;
+    const { version: restored, versionNumber: nextVersionNumber } = await createDraftVersionFromSource(
+      supabase,
+      id,
+      orgId,
+      source,
+      req.user!.id,
+    );
 
     await writeAuditLog({
       organizationId: orgId,
@@ -446,23 +477,54 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // =================================================================
-  // Improvements (Phase 11 populates this - read-only, honest empty
-  // state here)
+  // Improvements (Phase 11: real data, mined by services/
+  // aggregateAgentImprovements.ts after every evaluated call)
   // =================================================================
   app.get('/:id/improvements', async (req) => {
     const { id } = req.params as { id: string };
     uuidSchema.parse(id);
+    const query = listAgentImprovementsQuerySchema.parse(req.query);
     const supabase = getSupabaseAdmin();
     const orgId = req.user!.organizationId;
     await getOwnedAgent(supabase, id, orgId);
 
-    const { data: improvements, error } = await supabase
-      .from('ai_agent_improvements')
-      .select('*')
-      .eq('agent_id', id)
-      .order('created_at', { ascending: false });
+    let builder = supabase.from('ai_agent_improvements').select('*').eq('agent_id', id);
+    if (query.status) builder = builder.eq('status', query.status);
+    const { data: improvements, error } = await builder.order('created_at', { ascending: false });
     if (error) throw error;
     return ok(improvements ?? []);
+  });
+
+  // GET /api/v1/agents/:id/evaluation-summary - aggregate view (spec
+  // section 24/86): real GROUP BY/AVG over call_evaluations via
+  // agent_evaluation_summary() (00000000000041), not client-computed from
+  // a full row dump. Defaults to the last 30 days, trend-friendly.
+  app.get('/:id/evaluation-summary', async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const query = evaluationSummaryQuerySchema.parse(req.query);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    await getOwnedAgent(supabase, id, orgId);
+
+    const sinceDays = query.days ?? 30;
+    const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data, error } = await supabase.rpc('agent_evaluation_summary', {
+      match_organization_id: orgId,
+      match_agent_id: id,
+      match_since: since,
+    });
+    if (error) throw error;
+    const row = (data ?? [])[0] ?? { call_count: 0, average_overall_score: null, category_averages: {} };
+
+    return ok({
+      agent_id: id,
+      since,
+      call_count: Number(row.call_count ?? 0),
+      average_overall_score: row.average_overall_score === null ? null : Number(row.average_overall_score),
+      category_averages: row.category_averages ?? {},
+    });
   });
 
   // =================================================================

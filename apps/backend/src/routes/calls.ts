@@ -57,6 +57,33 @@ export async function callRoutes(app: FastifyInstance): Promise<void> {
     return ok({ ...call, events: events ?? [] });
   });
 
+  // GET /api/v1/calls/:id/evaluation - Phase 11 (spec sections 24/86).
+  // Uses agents.manage rather than calls.manage since evaluations are
+  // agent-quality data, gated the same way the rest of Phase 11's routes
+  // are. Returns an honest state discriminator - never a fabricated
+  // evaluation - when the call was never evaluated or evaluation was
+  // structurally skipped (no transcript/no LLM configured/etc).
+  app.get('/:id/evaluation', { preHandler: requirePermission('agents.manage') }, async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const { data: call, error } = await supabase.from('calls').select('id, organization_id').eq('id', id).maybeSingle();
+    if (error) throw error;
+    if (!call || call.organization_id !== orgId) throw new NotFoundError('Call not found.');
+
+    const { data: evaluation } = await supabase.from('call_evaluations').select('*').eq('call_id', id).maybeSingle();
+    if (evaluation) return ok({ state: 'evaluated', evaluation });
+
+    const { data: transcript } = await supabase.from('call_transcripts').select('status').eq('call_id', id).maybeSingle();
+    if (!transcript || transcript.status !== 'ready') {
+      return ok({ state: 'skipped', reason: 'This call has no ready transcript to evaluate (failed, very short, or still processing).' });
+    }
+
+    return ok({ state: 'not_evaluated', reason: 'This call has a transcript but has not been evaluated yet (no LLM provider configured, or evaluation is still pending).' });
+  });
+
   // POST /api/v1/calls - internal call-origination endpoint. This handler
   // resolves/authorizes the request; the actual origination logic lives
   // in services/callOrigination.ts's originateCall(), which is the SAME

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { FileText, Download, History } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useCdrList, useCreateCdrExport, useExports, downloadExportFile, type CdrFilters } from '../hooks/useCdr';
@@ -29,8 +30,26 @@ export function CdrPage(): JSX.Element {
   const canExport = hasPermission('cdr.export');
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<CdrFilters>({});
-  const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedCallId, setSelectedCallId] = useState<string | null>(() => searchParams.get('call'));
   const [showExportHistory, setShowExportHistory] = useState(false);
+
+  // Deep-link support (Phase 11): the Improvements tab's evidence links
+  // land here as /cdr?call=<id>, opening that call's detail drawer
+  // directly rather than requiring the person to find it in the list.
+  useEffect(() => {
+    const fromUrl = searchParams.get('call');
+    if (fromUrl && fromUrl !== selectedCallId) setSelectedCallId(fromUrl);
+  }, [searchParams, selectedCallId]);
+
+  function closeDrawer() {
+    setSelectedCallId(null);
+    if (searchParams.get('call')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('call');
+      setSearchParams(next, { replace: true });
+    }
+  }
 
   const campaignsQuery = useCampaigns(1, 100);
   const campaigns = campaignsQuery.data?.data ?? [];
@@ -175,7 +194,7 @@ export function CdrPage(): JSX.Element {
         </div>
       )}
 
-      {selectedCallId && <CallDetailDrawer callId={selectedCallId} onClose={() => setSelectedCallId(null)} />}
+      {selectedCallId && <CallDetailDrawer callId={selectedCallId} onClose={closeDrawer} />}
       {showExportHistory && <ExportHistoryModal onClose={() => setShowExportHistory(false)} />}
     </div>
   );

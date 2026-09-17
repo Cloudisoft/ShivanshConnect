@@ -23,6 +23,7 @@ import { leadCustomFieldRoutes } from './routes/leadCustomFields.js';
 import { dncRoutes } from './routes/dnc.js';
 import { importJobRoutes } from './routes/importJobs.js';
 import { agentRoutes } from './routes/agents.js';
+import { agentImprovementRoutes } from './routes/agentImprovements.js';
 import { scriptRoutes } from './routes/scripts.js';
 import { knowledgeBaseRoutes } from './routes/knowledgeBases.js';
 import { voiceProviderRoutes } from './routes/voiceProviders.js';
@@ -114,6 +115,7 @@ export function buildApp() {
       api.register(dncRoutes, { prefix: '/dnc' });
       api.register(importJobRoutes, { prefix: '/import-jobs' });
       api.register(agentRoutes, { prefix: '/agents' });
+      api.register(agentImprovementRoutes, { prefix: '/agent-improvements' });
       api.register(scriptRoutes, { prefix: '/scripts' });
       api.register(knowledgeBaseRoutes, { prefix: '/knowledge-bases' });
       api.register(voiceProviderRoutes, { prefix: '/voice-providers' });
