@@ -25,8 +25,12 @@ const TERMINAL_STATUSES: ReadonlySet<CallStatus> = new Set([
  * transfer attempt rather than getting stuck. */
 const TRANSITIONS: Record<CallStatus, ReadonlySet<CallStatus>> = {
   queued: new Set(['dialing', 'cancelled', 'failed', 'dnc']),
-  dialing: new Set(['ringing', 'answered', 'failed', 'cancelled', 'voicemail', 'answering_machine']),
-  ringing: new Set(['answered', 'failed', 'cancelled', 'voicemail', 'answering_machine']),
+  // 'in_progress' is reachable directly from 'dialing'/'ringing' too:
+  // some engines (Vapi's own 'in-progress' status in particular) report
+  // dial-connect-and-answer as a single transition without a distinct
+  // separately-observable 'ringing'/'answered' event in between.
+  dialing: new Set(['ringing', 'answered', 'in_progress', 'failed', 'cancelled', 'voicemail', 'answering_machine']),
+  ringing: new Set(['answered', 'in_progress', 'failed', 'cancelled', 'voicemail', 'answering_machine']),
   answered: new Set(['in_progress', 'failed', 'completed']),
   in_progress: new Set(['transfer_pending', 'completed', 'failed', 'voicemail', 'answering_machine']),
   voicemail: new Set(['completed', 'failed']),

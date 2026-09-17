@@ -48,6 +48,11 @@ interface Tables {
   phone_number_providers: Row[];
   phone_number_provider_credentials: Row[];
   phone_numbers: Row[];
+  vapi_credentials: Row[];
+  calls: Row[];
+  call_events: Row[];
+  webhook_events: Row[];
+  webhook_failures: Row[];
 }
 
 export interface FakeAuthUser {
@@ -87,6 +92,11 @@ export function createFakeSupabase() {
     phone_number_providers: [],
     phone_number_provider_credentials: [],
     phone_numbers: [],
+    vapi_credentials: [],
+    calls: [],
+    call_events: [],
+    webhook_events: [],
+    webhook_failures: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -117,6 +127,9 @@ export function createFakeSupabase() {
       'agents.manage',
       'voices.manage',
       'numbers.manage',
+      'calls.manage',
+      'webhooks.manage',
+      'cdr.view',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -314,9 +327,56 @@ export function createFakeSupabase() {
           assigned_campaign_id: null,
           sip_trunk_metadata: null,
         };
+      case 'vapi_credentials':
+        return { status: 'not_connected', last_verified_at: null, last_error: null, webhook_url: null };
+      case 'calls':
+        return {
+          vapi_call_id: null,
+          pipecat_call_id: null,
+          campaign_id: null,
+          lead_id: null,
+          status: 'queued',
+          started_at: null,
+          answered_at: null,
+          ended_at: null,
+          duration_seconds: null,
+          talk_duration_seconds: null,
+          ended_reason: null,
+          transfer_destination_e164: null,
+          transfer_status: null,
+          cost: null,
+        };
+      case 'webhook_events':
+        return { organization_id: null, processed_at: null, processing_status: 'pending', error: null, retry_count: 0, received_at: new Date().toISOString() };
+      case 'webhook_failures':
+        return { replayed_at: null, failed_at: new Date().toISOString() };
       default:
         return {};
     }
+  }
+
+  /**
+   * Tables that carry a real UNIQUE index in the migrations, whose
+   * enforcement the Phase 6 webhook-idempotency test relies on being
+   * simulated here too (a replayed identical delivery must fail to
+   * insert a second row) - see 00000000000028_orchestration_calls.sql's
+   * `webhook_events_provider_event_id_key`. Each entry is the list of
+   * columns whose combined value must be unique among existing rows;
+   * a row where any of those columns is null is exempt (mirrors a
+   * partial/nullable unique index), matching every other partial unique
+   * index in this schema.
+   */
+  const UNIQUE_CONSTRAINTS: Partial<Record<keyof Tables, string[][]>> = {
+    webhook_events: [['provider', 'event_id']],
+  };
+
+  function violatesUniqueConstraint(table: keyof Tables, candidate: Row): boolean {
+    const constraints = UNIQUE_CONSTRAINTS[table];
+    if (!constraints) return false;
+    return constraints.some((cols) => {
+      if (cols.some((c) => candidate[c] === null || candidate[c] === undefined)) return false;
+      return tables[table].some((existing) => cols.every((c) => existing[c] === candidate[c]));
+    });
   }
 
   class QueryBuilder {
@@ -428,6 +488,14 @@ export function createFakeSupabase() {
           ...defaultsFor(this.table),
           ...r,
         }));
+        for (const row of inserted) {
+          if (violatesUniqueConstraint(this.table, row)) {
+            // Mirrors PostgREST's real shape closely enough for route
+            // code to detect (error.code === '23505') - see
+            // routes/webhooks.ts's recordWebhookEvent().
+            return { data: null, error: { code: '23505', message: `duplicate key value violates unique constraint on ${this.table}` } };
+          }
+        }
         tables[this.table].push(...inserted);
         return { data: Array.isArray(this.payload) ? inserted : inserted[0], error: null };
       }
