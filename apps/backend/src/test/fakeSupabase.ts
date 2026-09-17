@@ -35,6 +35,13 @@ interface Tables {
   dnc_entries: Row[];
   import_jobs: Row[];
   import_job_rows: Row[];
+  ai_agents: Row[];
+  ai_agent_versions: Row[];
+  ai_agent_improvements: Row[];
+  scripts: Row[];
+  knowledge_bases: Row[];
+  knowledge_documents: Row[];
+  knowledge_chunks: Row[];
 }
 
 export interface FakeAuthUser {
@@ -61,6 +68,13 @@ export function createFakeSupabase() {
     dnc_entries: [],
     import_jobs: [],
     import_job_rows: [],
+    ai_agents: [],
+    ai_agent_versions: [],
+    ai_agent_improvements: [],
+    scripts: [],
+    knowledge_bases: [],
+    knowledge_documents: [],
+    knowledge_chunks: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -88,6 +102,7 @@ export function createFakeSupabase() {
       'leads.edit',
       'leads.delete',
       'leads.import',
+      'agents.manage',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -211,6 +226,26 @@ export function createFakeSupabase() {
         };
       case 'lead_custom_fields':
         return { field_type: 'text' };
+      case 'ai_agents':
+        return { status: 'draft', current_version_id: null };
+      case 'ai_agent_versions':
+        return {
+          personality: { tone: null, personality_traits: [], behavior_traits: [] },
+          language: 'en-US',
+          greeting_template: '',
+          system_prompt: '',
+          transfer_rules: { on_no_match: 'end_call', transfer_to: null, conditions: [] },
+          call_ending_rules: { max_call_duration_seconds: null, end_phrases: [], summarize_before_ending: true },
+          llm_provider: 'openai',
+          llm_model: 'gpt-4o-mini',
+          llm_temperature: 0.7,
+          llm_max_tokens: 800,
+          status: 'draft',
+        };
+      case 'scripts':
+        return { version: 1, source: 'editor' };
+      case 'knowledge_documents':
+        return { status: 'uploaded', size_bytes: 0 };
       default:
         return {};
     }
@@ -382,9 +417,73 @@ export function createFakeSupabase() {
     }
   }
 
+  /**
+   * Minimal stand-in for supabase.rpc('match_knowledge_chunks', ...) -
+   * the one Postgres function this codebase calls (see
+   * supabase/migrations/00000000000023_knowledge_chunk_search_fn.sql).
+   * Computes cosine similarity in JS against the in-memory
+   * knowledge_chunks table, with the exact same organization_id (and
+   * optional agent_id, via each chunk's document -> knowledge_base
+   * chain) scoping the real SQL function applies - this is what lets
+   * the cross-org retrieval isolation test exercise real route code
+   * without a live Postgres/pgvector instance.
+   */
+  function cosineSimilarity(a: number[], b: number[]): number {
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < a.length; i += 1) {
+      dot += a[i] * b[i];
+      normA += a[i] * a[i];
+      normB += b[i] * b[i];
+    }
+    if (normA === 0 || normB === 0) return 0;
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  function matchKnowledgeChunks(args: {
+    query_embedding: number[];
+    match_organization_id: string;
+    match_agent_id?: string | null;
+    match_count?: number;
+  }): { data: Row[]; error: null } {
+    const { query_embedding: queryEmbedding, match_organization_id: orgId, match_agent_id: agentId, match_count: count = 5 } = args;
+
+    const scored = tables.knowledge_chunks
+      .filter((chunk) => chunk.organization_id === orgId && chunk.embedding)
+      .map((chunk) => {
+        const doc = tables.knowledge_documents.find((d) => d.id === chunk.document_id);
+        const kb = doc ? tables.knowledge_bases.find((k) => k.id === doc.knowledge_base_id) : undefined;
+        return { chunk, doc, kb };
+      })
+      .filter(({ doc, kb }) => {
+        if (!doc || doc.organization_id !== orgId) return false;
+        if (!kb || kb.organization_id !== orgId) return false;
+        if (agentId && kb.agent_id !== agentId) return false;
+        return true;
+      })
+      .map(({ chunk }) => ({
+        id: chunk.id,
+        document_id: chunk.document_id,
+        chunk_index: chunk.chunk_index,
+        content: chunk.content,
+        similarity: cosineSimilarity(queryEmbedding, chunk.embedding as number[]),
+      }))
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, count);
+
+    return { data: scored, error: null };
+  }
+
   const supabase = {
     from(table: keyof Tables) {
       return new QueryBuilder(table);
+    },
+    async rpc(fnName: string, args: Record<string, any>) {
+      if (fnName === 'match_knowledge_chunks') {
+        return matchKnowledgeChunks(args as any);
+      }
+      return { data: null, error: { message: `Unknown RPC function in fake client: ${fnName}` } };
     },
     auth: {
       async signUp({ email, password }: { email: string; password: string; options?: any }) {

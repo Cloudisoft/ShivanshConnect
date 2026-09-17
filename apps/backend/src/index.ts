@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { getEnv } from './env.js';
 import { fail } from './lib/response.js';
 import { AppError } from './lib/errors.js';
+import { LlmNotConfiguredError, LlmProviderError } from './lib/llm/index.js';
 import { authRoutes } from './routes/auth.js';
 import { meRoutes } from './routes/me.js';
 import { userRoutes } from './routes/users.js';
@@ -85,6 +86,20 @@ export function buildApp() {
       reply.status(error.statusCode).send(
         fail(error.code, error.message, { details: error.details, requestId: req.id }),
       );
+      return;
+    }
+
+    // LLM provider not configured (no OPENAI_API_KEY) is a client-actionable
+    // 422 with the exact honest message the route set - never a 500, and
+    // never fabricated output. A genuine provider-side failure (network
+    // error, non-2xx from OpenAI) is a 502 - it's not the caller's fault,
+    // but it's not "something went wrong on our end" either.
+    if (error instanceof LlmNotConfiguredError) {
+      reply.status(422).send(fail('LLM_NOT_CONFIGURED', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof LlmProviderError) {
+      reply.status(502).send(fail('LLM_PROVIDER_ERROR', error.message, { requestId: req.id }));
       return;
     }
 
