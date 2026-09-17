@@ -158,6 +158,13 @@ export class VapiProvider implements CallOrchestrationProvider {
     return payload;
   }
 
+  /** Lightweight authenticated read used purely to verify a stored API
+   * key actually works (POST /vapi/test-connection) - lists at most one
+   * assistant, the cheapest real read Vapi's API offers. */
+  async ping(): Promise<void> {
+    await this.request('GET', '/assistant?limit=1');
+  }
+
   async createAssistant(config: AssistantConfig): Promise<AssistantResult> {
     const payload = this.toVapiAssistantPayload(config);
     const created = await this.request<{ id: string }>('POST', '/assistant', payload);

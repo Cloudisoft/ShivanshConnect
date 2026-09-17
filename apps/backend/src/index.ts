@@ -37,6 +37,10 @@ import {
 } from './lib/telephony/types.js';
 import { StorageNotConfiguredError } from './lib/storage/types.js';
 import { CredentialEncryptionNotConfiguredError } from './lib/crypto/credentials.js';
+import { vapiRoutes } from './routes/vapi.js';
+import { callRoutes } from './routes/calls.js';
+import { webhookReceiverRoutes, webhookAdminRoutes } from './routes/webhooks.js';
+import { OrchestrationProviderError, OrchestrationProviderNotConfiguredError } from './lib/orchestration/types.js';
 
 export function buildApp() {
   const env = getEnv();
@@ -91,6 +95,14 @@ export function buildApp() {
       api.register(voiceRoutes, { prefix: '/voices' });
       api.register(phoneNumberProviderRoutes, { prefix: '/phone-number-providers' });
       api.register(phoneNumberRoutes, { prefix: '/phone-numbers' });
+      api.register(vapiRoutes, { prefix: '/vapi' });
+      api.register(callRoutes, { prefix: '/calls' });
+      // Unauthenticated webhook receivers (external engines) vs the
+      // authenticated admin log/replay routes are deliberately two
+      // separate Fastify plugin registrations under the same prefix so
+      // neither accidentally inherits the other's preHandler hooks.
+      api.register(webhookReceiverRoutes, { prefix: '/webhooks' });
+      api.register(webhookAdminRoutes, { prefix: '/webhook-events' });
     },
     { prefix: '/api/v1' },
   );
@@ -163,6 +175,18 @@ export function buildApp() {
     }
     if (error instanceof CredentialEncryptionNotConfiguredError) {
       reply.status(422).send(fail('CREDENTIAL_ENCRYPTION_NOT_CONFIGURED', error.message, { requestId: req.id }));
+      return;
+    }
+
+    // Same honesty rule, for call orchestration engines (Vapi/pipecat):
+    // no credentials/service configured is a client-actionable 422, a
+    // genuine engine-side failure is a 502 - never a simulated call.
+    if (error instanceof OrchestrationProviderNotConfiguredError) {
+      reply.status(422).send(fail('ORCHESTRATION_PROVIDER_NOT_CONFIGURED', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof OrchestrationProviderError) {
+      reply.status(502).send(fail('ORCHESTRATION_PROVIDER_ERROR', error.message, { requestId: req.id }));
       return;
     }
 
