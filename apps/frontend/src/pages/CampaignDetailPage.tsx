@@ -587,6 +587,7 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
               <th className="px-2 py-1">Name</th>
               <th className="px-2 py-1">Phone</th>
               <th className="px-2 py-1">Status</th>
+              <th className="px-2 py-1">Disposition</th>
               <th className="px-2 py-1">Attempts</th>
               <th className="px-2 py-1">Next eligible</th>
             </tr>
@@ -598,6 +599,9 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
                 <td className="px-2 py-1">{row.leads?.phone_normalized ?? '-'}</td>
                 <td className="px-2 py-1">
                   <Badge>{row.status}</Badge>
+                </td>
+                <td className="px-2 py-1">
+                  {row.final_disposition ? <Badge tone="neutral">{row.final_disposition}</Badge> : <span className="text-ink-400">-</span>}
                 </td>
                 <td className="px-2 py-1">{row.attempt_count}</td>
                 <td className="px-2 py-1">{row.next_eligible_at ? new Date(row.next_eligible_at).toLocaleString() : '-'}</td>

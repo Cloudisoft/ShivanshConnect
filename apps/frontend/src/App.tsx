@@ -13,6 +13,8 @@ import { DashboardPage } from './pages/DashboardPage';
 import { CampaignsPage } from './pages/CampaignsPage';
 import { CampaignDetailPage } from './pages/CampaignDetailPage';
 import { DialingSettingsPage } from './pages/DialingSettingsPage';
+import { DispositionsPage } from './pages/DispositionsPage';
+import { CallbacksPage } from './pages/CallbacksPage';
 import { UsersPage } from './pages/UsersPage';
 import { LeadListsPage } from './pages/LeadListsPage';
 import { LeadsPage } from './pages/LeadsPage';
@@ -53,6 +55,8 @@ export default function App(): JSX.Element {
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
           <Route path="/dialing-settings" element={<DialingSettingsPage />} />
+          <Route path="/dispositions" element={<DispositionsPage />} />
+          <Route path="/callbacks" element={<CallbacksPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/lead-lists" element={<LeadListsPage />} />
           <Route path="/leads" element={<LeadsPage />} />
