@@ -1,11 +1,11 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-2** (organizations, auth, users, roles/permissions, audit logs, the overall
-app shell, and now leads/lead lists/phone normalization/DNC/CSV-XLSX import). Later phases
-(campaigns, dialing, live monitoring, AI agents, voices, telephony numbers, messaging, analytics,
-and more) are deliberately **not** implemented yet - see [Phase plan status](#phase-plan-status)
-below.
+build covers Phases 1-3** (organizations, auth, users, roles/permissions, audit logs, the overall
+app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; and now AI agents/agent
+versioning/prompt system/knowledge base (RAG)/scripts). Later phases (campaigns, dialing, live
+monitoring, voices, telephony numbers, messaging, analytics, and more) are deliberately **not**
+implemented yet - see [Phase plan status](#phase-plan-status) below.
 
 ## Architecture overview
 
@@ -112,22 +112,106 @@ up real enforcement, not another migration.
   poll the async job -> commit -> verify the final lead count, job summary and error-report CSV,
   plus cross-tenant isolation on lists/leads/import jobs).
 
+**Phase 3 (this build) - done:**
+
+- Database schema: `ai_agents` + `ai_agent_versions` (every configuration change creates a new,
+  immutable version - draft -> published -> archived on the next publish - never mutating history;
+  `current_version_id` points at whichever version is live), `ai_agent_improvements` (table only,
+  stays empty until Phase 11's call evaluator populates it - no fake data or stub evaluator),
+  `scripts` (`{{variable}}` call scripts, optionally attached to an agent), and the unified document
+  pipeline `knowledge_bases` / `knowledge_documents` / `knowledge_chunks`. Adds
+  `CREATE EXTENSION vector` (pgvector) and an ivfflat cosine-similarity index on
+  `knowledge_chunks.embedding vector(1536)` - 1536 dims matches OpenAI's `text-embedding-3-small`,
+  the only embedding model this build wires up. `ai_agent_versions.voice_id` is a bare column for
+  now (its FK to a future `voices` table is deferred to Phase 4, same pattern as `scripts`/
+  `knowledge_bases.campaign_id` deferring to Phase 7). RLS on all 7 new tables, same pattern as
+  Phase 1/2. `agents.manage` was already in the Phase 1 permission catalog, granted to
+  SUPER_ADMIN/ADMIN/MANAGER - no new seed migration needed.
+- `apps/backend/src/lib/llm/`: an `LLMProviderAdapter` interface (`generateText`, `embedText`) with
+  one real implementation, `OpenAIProvider`, calling the OpenAI API directly via `fetch` using
+  `OPENAI_API_KEY` from the environment - no second provider in this build. If the key is unset,
+  every call throws a typed `LlmNotConfiguredError` immediately; the central error handler maps that
+  to a `422 LLM_NOT_CONFIGURED` response with an honest, specific message - **knowledge-base
+  embedding and agent preview never fabricate output when no provider is configured.**
+- Backend API: `/agents` (CRUD, `agents.manage` + explicit org checks + Zod validation + audit log
+  on every mutation), `/agents/:id/versions` (create draft / edit draft / publish - archives any
+  previously-published version and flips `ai_agents.current_version_id` - / list for compare /
+  restore-as-new-draft, which never mutates the version it restores from), `/agents/:id/improvements`
+  (reads the empty `ai_agent_improvements` table honestly), `/agents/:id/preview` (renders the
+  published system prompt/greeting against a sample lead payload, then calls the LLM provider),
+  `/agents/:id/knowledge/search` (embeds the query, then `supabase.rpc('match_knowledge_chunks', ...)`
+  for real pgvector cosine search with `organization_id` baked into the SQL function itself),
+  `/scripts` (CRUD, `GET /scripts/templates` for the 3 starter templates, template-clone on create,
+  file upload parsed through the same doc-extraction pipeline as knowledge-base ingestion), and
+  `/knowledge-bases` (create scoped to an agent, list/get, list documents, multipart upload ->
+  `knowledge_documents` row (`status=uploaded`) -> async processing, delete a document (cascades its
+  chunks), reprocess).
+- Knowledge-base ingestion pipeline (`apps/backend/src/services/processKnowledgeDocument.ts`),
+  deliberately following Phase 2's `services/importLeads.ts` shape: no queue/worker infra yet
+  (Redis/BullMQ is Phase 15), so a freshly-uploaded document is processed via `setImmediate` on the
+  same backend process right after upload. Extracts text (`pdf-parse` for PDF, `mammoth` for DOCX,
+  plain UTF-8 decode for TXT/MD, CSV-to-text flattening for CSV) -> chunks it (~500-800 tokens with
+  overlap, `apps/backend/src/lib/chunking.ts`) -> embeds each chunk through the LLM provider adapter
+  -> stores `knowledge_chunks` -> marks the document `ready`. No embedding provider configured ->
+  `status=failed` with a clear `error_message`, never a fabricated embedding. Every exported function
+  takes plain arguments and does its own Supabase reads/writes, ready for a future BullMQ worker to
+  call unchanged.
+- Frontend: replaces the "AI Agents" sidebar placeholder with a real module - agent list, a create
+  wizard (name/role/description), and an agent detail page with 6 tabs (Configuration - personality
+  presets as toggle pills, prompt/greeting editors with a visible `{{variable}}` palette, transfer
+  and call-ending rules, LLM settings, save-draft/publish-with-confirmation; Versions - list,
+  two-way field comparison, publish, restore; Scripts - attach/create, template-clone; Knowledge Base
+  - upload/status/delete/reprocess with a live "Test retrieval" box against the real search endpoint;
+  Preview - chat-style UI against the real preview endpoint with an honest "no LLM configured" empty
+  state; Improvements - honest empty state naming Phase 11). A standalone Scripts page
+  (list/create/edit/upload/template-clone) is reachable from the Agents module.
+- Backend tests: agent version lifecycle (create draft -> publish -> archive-on-republish -> restore
+  never mutates the source version) as a full integration test verifying `current_version_id` +
+  status flip + an `agent_version.published` audit log row; personality/tone/behavior/LLM-setting
+  schema validation; the chunk-splitting function (including a forward-progress guard so
+  overlap >= target chunk size can't loop or walk backward); the LLM provider adapter's
+  not-configured error paths (unit) and a real successful/failed OpenAI call against a stubbed
+  `fetch` (unit); a knowledge-document integration test that uploads a small TXT file, processes it
+  for real (chunking, storage) with only the OpenAI embedding call mocked at the provider-adapter
+  boundary (documented as test-only, never shipped app behavior), verifies chunks + `status=ready`,
+  and retrieves the right chunk by similarity; and a **cross-org retrieval isolation test** - a
+  second, legitimately authenticated organization with its own agent asks the identical query and
+  gets zero results, and is separately rejected outright (404) addressing the first organization's
+  agent id directly.
+
 **Explicitly NOT built yet** (deferred to later phases):
 
 - Campaigns, Dialing Settings, Callbacks, Dispositions - campaign/dialer management
 - Live Monitor (listen/barge/whisper on live calls)
 - CDR (call detail records), call history/recordings/transcripts on the lead detail page
-- AI Agents, Voices (Vapi / ElevenLabs / Cartesia integration)
+- Voices (Vapi / ElevenLabs / Cartesia integration) - `ai_agent_versions.voice_id` exists as a bare
+  column today, its FK and any real voice catalog/selection land in Phase 4
 - DIDs, Inbound Routes, Queues (Twilio/Telnyx number management, inbound call routing)
 - Messaging
 - Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake)
 - SMTP-backed email delivery
-- Background job queues / Redis (the async import in Phase 2 uses `setImmediate` on the backend
-  process itself - see above - specifically so this later migration is mechanical)
-- Real object storage for uploaded import files (Phase 2 parses the upload in memory on receipt and
-  never writes it to disk/S3; `import_jobs.file_storage_path` records a synthetic
-  `memory:<org>/<file>` locator so the schema already matches a later phase that adds real storage)
+- Background job queues / Redis (the async import in Phase 2 and the Phase 3 knowledge-document
+  pipeline both use `setImmediate` on the backend process itself - see above - specifically so this
+  later migration is mechanical for both)
+- Real object storage for uploaded import files and knowledge-base documents (both are parsed in
+  memory on receipt and never written to disk/S3; their `*_storage_path` columns record a synthetic
+  `memory:<...>` locator so the schema already matches a later phase that adds real storage - this is
+  also why knowledge-document "reprocess" in this build resets status and asks for a fresh upload
+  rather than fabricating a re-embed from bytes that were never persisted)
+- A second LLM/embedding provider - only `OpenAIProvider` is implemented; `LLMProviderAdapter` is
+  provider-agnostic so a second one can be added without touching call sites
 - Railway service provisioning
+
+### Phase 3 environment requirements
+
+Knowledge-base document processing, knowledge search and agent preview all require a real
+`OPENAI_API_KEY` set in the backend environment (`apps/backend/.env` / Railway service variables).
+Without it, uploads land in `status=failed` with an honest `error_message`, and the preview/search
+endpoints return a `422 LLM_NOT_CONFIGURED` response - never fabricated output. The database
+requires the `pgvector` Postgres extension (`CREATE EXTENSION vector`, migration
+`00000000000021_knowledge_base.sql`); a hosted Supabase project has this available already, and a
+self-managed Postgres needs the `pgvector` extension package installed first (e.g.
+`apt install postgresql-16-pgvector` on Debian/Ubuntu, matching the server's major version).
 
 ## Running locally
 
@@ -214,6 +298,15 @@ were verified for real in both:
      in order, to a fresh database; RLS confirmed enabled on all 16 tables including the 7 new ones
      (`lead_lists`, `leads`, `lead_list_members`, `lead_custom_fields`, `dnc_entries`,
      `import_jobs`, `import_job_rows`).
+   - Phase 3: all 23 migrations (the original 16 plus the 7 new Phase 3 ones) applied cleanly, in
+     order, to a fresh database, including `CREATE EXTENSION vector` (pgvector 0.6.0, installed via
+     `apt install postgresql-16-pgvector` in this sandbox) and the `match_knowledge_chunks` pgvector
+     cosine-similarity SQL function; RLS confirmed enabled on all 23 tables including the 7 new ones
+     (`ai_agents`, `ai_agent_versions`, `ai_agent_improvements`, `scripts`, `knowledge_bases`,
+     `knowledge_documents`, `knowledge_chunks`); the permission catalog seed still produces exactly
+     27 permissions including `agents.manage`. `match_knowledge_chunks` was also exercised directly
+     with real vector literals: a query scoped to the real organization returns its chunk, and the
+     same query with a different (non-existent) `organization_id` returns zero rows.
 2. **Backend integration tests** exercise the real Fastify route handlers end-to-end over HTTP
    (`app.inject()`) against an in-memory fake of the Supabase client
    (`apps/backend/src/test/fakeSupabase.ts`), since no live Supabase project or local PostgREST was
@@ -225,6 +318,16 @@ were verified for real in both:
      real multipart request, poll the async import job to completion, commit, and verify the final
      lead count, import job summary and error-report CSV, plus cross-tenant isolation on
      lists/leads/import jobs.
+   - Phase 3: `apps/backend/src/agents.integration.test.ts` - agent create -> draft version ->
+     publish -> `current_version_id` + status + audit log verified -> published version rejects
+     direct edits -> restore creates a new draft without mutating the published one -> versions list
+     order -> honest empty Improvements -> honest "not configured" preview, plus a cross-tenant 404.
+     `apps/backend/src/knowledgeBase.integration.test.ts` - upload a small TXT document, process it
+     for real (only the OpenAI embedding call mocked at the LLM provider adapter boundary, documented
+     as test-only), verify chunks + `status=ready`, retrieve by similarity, and the cross-org
+     retrieval isolation test (a second organization's identical query returns zero results; a
+     guessed agent id from another org is rejected with 404), plus a no-provider-configured ->
+     `status=failed` case.
 
 If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
