@@ -67,6 +67,7 @@ export async function buildLiveMonitorActiveCalls(supabase: Supabase, calls: Rec
       ai_agent_name: agent?.name ?? null,
       voice_id: version?.voice_id ?? null,
       voice_name: voice?.name ?? null,
+      transfer_destination_e164: call.transfer_destination_e164 ?? null,
     };
   });
 }
@@ -77,7 +78,7 @@ export async function fetchActiveCallsSnapshot(supabase: Supabase, organizationI
   const { data, error } = await supabase
     .from('calls')
     .select(
-      'id, organization_id, engine, status, direction, customer_number, started_at, answered_at, campaign_id, lead_id, ai_agent_id, ai_agent_version_id',
+      'id, organization_id, engine, status, direction, customer_number, started_at, answered_at, campaign_id, lead_id, ai_agent_id, ai_agent_version_id, transfer_destination_e164',
     )
     .eq('organization_id', organizationId)
     .in('status', [...LIVE_MONITOR_ACTIVE_STATUSES]);

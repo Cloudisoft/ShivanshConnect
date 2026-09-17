@@ -37,7 +37,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'campaigns', label: 'Campaigns', path: '/campaigns', icon: Megaphone, builtInPhase1: true },
   { id: 'dialing-settings', label: 'Dialing Settings', path: '/dialing-settings', icon: Settings2, builtInPhase1: true },
   { id: 'callbacks', label: 'Callbacks', path: '/callbacks', icon: PhoneCall, builtInPhase1: true },
-  { id: 'live-monitor', label: 'Live Monitor', path: '/live-monitor', icon: Headphones, builtInPhase1: false },
+  { id: 'live-monitor', label: 'Live Monitor', path: '/live-monitor', icon: Headphones, builtInPhase1: true },
   { id: 'leads', label: 'Leads', path: '/leads', icon: UserPlus, builtInPhase1: true },
   { id: 'lead-lists', label: 'Lead Lists', path: '/lead-lists', icon: ListChecks, builtInPhase1: true },
   { id: 'dispositions', label: 'Dispositions', path: '/dispositions', icon: Tag, builtInPhase1: true },

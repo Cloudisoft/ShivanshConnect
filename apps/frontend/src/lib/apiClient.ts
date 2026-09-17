@@ -1,7 +1,7 @@
 import type { ApiResponse, PaginationMeta } from '@shivanshconnect/shared';
 import { supabase } from './supabaseClient';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000/api/v1';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000/api/v1';
 
 export class ApiClientError extends Error {
   code: string;

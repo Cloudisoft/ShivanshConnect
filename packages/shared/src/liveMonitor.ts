@@ -51,6 +51,12 @@ export interface LiveMonitorActiveCall {
   ai_agent_name: string | null;
   voice_id: string | null;
   voice_name: string | null;
+  /** The call's own server-resolved transfer destination (set at
+   * call-creation time from the campaign/agent's configuration, spec
+   * 19/8L) - shown by the frontend's Transfer confirmation, never
+   * editable there. Null when this call has no transfer destination
+   * configured at all. */
+  transfer_destination_e164: string | null;
 }
 
 export interface LiveMonitorTranscriptSegment {
