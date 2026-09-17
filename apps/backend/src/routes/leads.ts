@@ -440,7 +440,7 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
 // Bulk-action helpers
 // -----------------------------------------------------------------
 
-async function resolveLeadIds(
+export async function resolveLeadIds(
   supabase: ReturnType<typeof getSupabaseAdmin>,
   orgId: string,
   body: { lead_ids?: string[]; filter?: Record<string, unknown> },

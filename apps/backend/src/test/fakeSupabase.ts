@@ -28,6 +28,13 @@ interface Tables {
   user_roles: Row[];
   audit_logs: Row[];
   user_invitations: Row[];
+  lead_lists: Row[];
+  leads: Row[];
+  lead_list_members: Row[];
+  lead_custom_fields: Row[];
+  dnc_entries: Row[];
+  import_jobs: Row[];
+  import_job_rows: Row[];
 }
 
 export interface FakeAuthUser {
@@ -47,6 +54,13 @@ export function createFakeSupabase() {
     user_roles: [],
     audit_logs: [],
     user_invitations: [],
+    lead_lists: [],
+    leads: [],
+    lead_list_members: [],
+    lead_custom_fields: [],
+    dnc_entries: [],
+    import_jobs: [],
+    import_job_rows: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -63,7 +77,18 @@ export function createFakeSupabase() {
         created_at: new Date().toISOString(),
       });
     }
-    const permKeys = ['dashboard.view', 'users.manage', 'roles.manage', 'settings.manage', 'audit.view'];
+    const permKeys = [
+      'dashboard.view',
+      'users.manage',
+      'roles.manage',
+      'settings.manage',
+      'audit.view',
+      'leads.view',
+      'leads.create',
+      'leads.edit',
+      'leads.delete',
+      'leads.import',
+    ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
     }
@@ -81,26 +106,31 @@ export function createFakeSupabase() {
   }
   seedRolesAndPermissions();
 
-  function matchesFilters(row: Row, filters: Array<[string, string, any]>): boolean {
-    return filters.every(([field, op, value]) => {
-      const actual = row[field];
-      switch (op) {
-        case 'eq':
-          return actual === value;
-        case 'in':
-          return (value as any[]).includes(actual);
-        case 'ilike': {
-          const pattern = String(value).replace(/%/g, '').toLowerCase();
-          return String(actual ?? '').toLowerCase().includes(pattern);
-        }
-        case 'gte':
-          return actual >= value;
-        case 'lte':
-          return actual <= value;
-        default:
-          return true;
+  function matchesClause(actual: any, op: string, value: any): boolean {
+    switch (op) {
+      case 'eq':
+        return actual === value;
+      case 'neq':
+        return actual !== value;
+      case 'in':
+        return (value as any[]).includes(actual);
+      case 'ilike': {
+        const pattern = String(value).replace(/%/g, '').toLowerCase();
+        return String(actual ?? '').toLowerCase().includes(pattern);
       }
-    });
+      case 'is':
+        return value === 'null' ? actual === null || actual === undefined : actual === value;
+      case 'gte':
+        return actual >= value;
+      case 'lte':
+        return actual <= value;
+      default:
+        return true;
+    }
+  }
+
+  function matchesFilters(row: Row, filters: Array<[string, string, any]>): boolean {
+    return filters.every(([field, op, value]) => matchesClause(row[field], op, value));
   }
 
   /**
@@ -123,6 +153,11 @@ export function createFakeSupabase() {
     if (table === 'role_permissions' && selectStr.includes('permissions(')) {
       const perm = tables.permissions.find((p) => p.id === row.permission_id);
       out.permissions = perm ? { key: perm.key } : null;
+    }
+
+    if (table === 'lead_list_members' && selectStr.includes('lead_lists(')) {
+      const list = tables.lead_lists.find((l) => l.id === row.lead_list_id);
+      out.lead_lists = list ? { id: list.id, name: list.name } : null;
     }
 
     if (table === 'users' && selectStr.includes('user_roles(')) {
@@ -150,6 +185,32 @@ export function createFakeSupabase() {
           status: 'pending',
           expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
         };
+      case 'leads':
+        return {
+          first_name: '',
+          last_name: '',
+          country_code: 'US',
+          country: 'US',
+          status: 'NEW',
+          attempts: 0,
+          is_dnc: false,
+          custom_fields: {},
+        };
+      case 'dnc_entries':
+        return { source: 'manual' };
+      case 'import_jobs':
+        return {
+          status: 'pending',
+          column_mapping: {},
+          total_rows: 0,
+          valid_rows: 0,
+          invalid_rows: 0,
+          duplicate_rows: 0,
+          dnc_rows: 0,
+          imported_rows: 0,
+        };
+      case 'lead_custom_fields':
+        return { field_type: 'text' };
       default:
         return {};
     }
@@ -212,7 +273,15 @@ export function createFakeSupabase() {
       return this;
     }
 
-    order(): this {
+    private orderBy: [string, boolean] | null = null;
+
+    order(field: string, opts?: { ascending?: boolean }): this {
+      this.orderBy = [field, opts?.ascending !== false];
+      return this;
+    }
+
+    neq(field: string, value: any): this {
+      this.filters.push([field, 'neq', value]);
       return this;
     }
 
@@ -241,7 +310,7 @@ export function createFakeSupabase() {
     private matched(): Row[] {
       let rows = tables[this.table];
       if (this.orFilters) {
-        rows = rows.filter((r) => this.orFilters!.some(([f, , v]) => r[f] === v));
+        rows = rows.filter((r) => this.orFilters!.some(([f, op, v]) => matchesClause(r[f], op, v)));
       }
       return rows.filter((r) => matchesFilters(r, this.filters));
     }
@@ -275,6 +344,17 @@ export function createFakeSupabase() {
       // select
       let rows = this.matched();
       const count = rows.length;
+      if (this.orderBy) {
+        const [field, ascending] = this.orderBy;
+        rows = [...rows].sort((a, b) => {
+          const av = a[field];
+          const bv = b[field];
+          if (av === bv) return 0;
+          if (av === undefined || av === null) return ascending ? -1 : 1;
+          if (bv === undefined || bv === null) return ascending ? 1 : -1;
+          return (av > bv ? 1 : -1) * (ascending ? 1 : -1);
+        });
+      }
       rows = rows.map((r) => embedRelations(this.table, r, this.selectStr));
       if (this.rangeVal) rows = rows.slice(this.rangeVal[0], this.rangeVal[1] + 1);
       return { data: rows, error: null, count: this.wantCount ? count : undefined };
