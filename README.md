@@ -1,11 +1,12 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-3** (organizations, auth, users, roles/permissions, audit logs, the overall
-app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; and now AI agents/agent
-versioning/prompt system/knowledge base (RAG)/scripts). Later phases (campaigns, dialing, live
-monitoring, voices, telephony numbers, messaging, analytics, and more) are deliberately **not**
-implemented yet - see [Phase plan status](#phase-plan-status) below.
+build covers Phases 1-5** (organizations, auth, users, roles/permissions, audit logs, the overall
+app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; AI agents/agent versioning/
+prompt system/knowledge base (RAG)/scripts; voice providers/cloning; and now telephony number
+providers - Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry).
+Later phases (campaigns, dialing, live monitoring, messaging, analytics, and more) are deliberately
+**not** implemented yet - see [Phase plan status](#phase-plan-status) below.
 
 ## Architecture overview
 
@@ -263,15 +264,79 @@ up real enforcement, not another migration.
   org's sync) - plus voice cloning rejecting a request with no consent and completing one with
   consent once the (mocked) provider call resolves.
 
+**Phase 5 (this build) - done:**
+
+- Database schema: `phone_number_providers` (fixed 3-provider catalog - `twilio`, `telnyx`, `byon`
+  - seeded), `phone_number_provider_credentials` (org-scoped, AES-256-GCM encrypted Twilio Account
+  SID+Auth Token / Telnyx API key - reuses Phase 4's exact `lib/crypto/credentials.ts` helper; BYON
+  never has a row here, it has no credentials), `phone_numbers` (the org's registered DIDs - synced
+  from Twilio/Telnyx or declared via BYON; E.164-normalized with Phase 2's `lib/phone.ts`, unique
+  per org on `(provider_key, provider_number_id)` when present and unconditionally unique on
+  `phone_number`, per spec section 57; `assigned_agent_id` FK to `ai_agents`, `assigned_campaign_id`
+  a deferred bare `uuid` with no FK until Phase 7's `campaigns` table exists, same pattern as Phase
+  3/4's other deferred FKs). RLS on all 3 new tables, same pattern as Phases 1-4.
+- `apps/backend/src/lib/telephony/`: a `TelephonyNumberProviderAdapter` interface (`connect`,
+  `disconnect`, `listNumbers`, `importNumber`, `validateNumber`, `getNumberStatus`) mirroring Phase
+  4's `VoiceProviderAdapter` shape, with **three real adapters**:
+  - `TwilioProvider` - real Twilio REST API over HTTP Basic Auth (Account SID + Auth Token) against
+    the actual documented endpoints: `Accounts/{sid}.json` (credential check), `IncomingPhoneNumbers`
+    list/get, and Lookup v2 (`validateNumber`).
+  - `TelnyxProvider` - real Telnyx REST API over a Bearer API key against `/v2/phone_numbers`
+    list/get and `/v2/number_lookup` (`validateNumber`).
+  - `BYONProvider` ("Bring Your Own Number") is **explicitly not a third-party API integration** -
+    there is no BYON company or endpoint anywhere. It is a manual-declaration flow for a number the
+    org already controls (its own SIP trunk, or a number ported through its own carrier outside this
+    platform). `connect`/`disconnect`/`listNumbers`/`getNumberStatus` all throw a typed
+    `TelephonyProviderNotSupportedError` (documented in the class header, never called by any BYON
+    route path); only `importNumber()` (validates the declared E.164 via Phase 2's `lib/phone.ts`,
+    no external call) and `validateNumber()` (the same local format check) do real work.
+  - Neither Twilio's nor Telnyx's adapter ever releases a real phone number: `disconnect()` is a
+    documented no-op (Twilio/Telnyx's REST APIs are stateless - there is no session to tear down),
+    and `DELETE /phone-numbers/:id` removes the row from ShivanshConnect's own registry only, never
+    the carrier account (see the route's response message and code comment).
+- Backend API: `/phone-number-providers` (3-provider catalog + this org's connection status, masked
+  credentials only; BYON always shown as `is_manual_only`), `POST
+  /phone-number-providers/:key/credentials` (Twilio/Telnyx only - BYON returns a clear "use Import
+  instead" `422`), `POST /phone-number-providers/:key/test-connection` (a real `adapter.connect()`
+  call, persists genuine `status`/`last_error`); `/phone-numbers` (paginated, provider/status/
+  assignment filters), `POST /phone-numbers/sync/:providerKey` (`listNumbers()` -> upsert deduped on
+  `provider_number_id`, and a remote E.164 already registered under a different provider is skipped,
+  never duplicated), `POST /phone-numbers/import` (BYON manual declaration - bad E.164/missing
+  capabilities map to a client `422`, not a provider `502`; a duplicate E.164 within the same org is
+  rejected with `409`; an optional SIP trunk password is encrypted and never echoed back even
+  encrypted; also supports a single Twilio/Telnyx number import by provider id), `PATCH
+  /phone-numbers/:id` (assign/unassign to an agent - a cross-org agent id is rejected -, rename,
+  activate/deactivate), `DELETE /phone-numbers/:id` (local-registry-only release, see above). Every
+  route requires `numbers.manage` (already in the Phase 1 permission catalog, granted to
+  SUPER_ADMIN/ADMIN/MANAGER), scopes every query to the caller's `organization_id`, validates with
+  Zod, and audit-logs credential saves/connection tests/syncs/imports/assignments/deletes.
+- Frontend: replaces the "DIDs" sidebar placeholder with a real module at `/dids` (Phone Numbers
+  tab: table with per-row assign-to-agent select, activate/deactivate, and a delete confirmation
+  that explicitly warns a Twilio/Telnyx delete never releases the real carrier number; an Import
+  modal offering either "Sync from a connected provider" with live created/updated counts, or a
+  "Bring Your Own Number" form with E.164 + capability checkboxes + optional SIP trunk fields;
+  Provider Connections tab: Twilio/Telnyx credential cards with a masked existing value and a real
+  Test Connection button, and a BYON card explaining it has no connection step at all).
+- Backend tests: each adapter's real request shape against fetch mocks, asserting on the exact
+  documented URLs/headers/payloads (unit, Twilio + Telnyx); BYON's manual-import validation (rejects
+  an invalid E.164 or a number with no declared capability, accepts a valid one, and makes zero
+  network calls - unit); plus a full integration test - connect Twilio (HTTP mocked only at the
+  fetch boundary), a real test-connection call, sync, a number list scoped to the connecting org
+  only (a second org's list/provider status stays untouched, and a re-sync updates rather than
+  duplicates), a BYON import with zero fetch calls and the SIP password never returned even
+  encrypted, a duplicate-E.164 import rejected with `409`, and assigning a number to an agent
+  writing an `audit_logs` row.
+
 **Explicitly NOT built yet** (deferred to later phases):
 
 - Campaigns, Dialing Settings, Callbacks, Dispositions - campaign/dialer management
 - Live Monitor (listen/barge/whisper on live calls)
 - CDR (call detail records), call history/recordings/transcripts on the lead detail page
-- Vapi / real telephony (Twilio/Telnyx) integration for actually placing/receiving calls with a
-  chosen voice - Phase 4 only builds voice *management* (providers, credentials, the org's voice
-  catalog, cloning, preview); wiring a voice into a live call is Phase 5/6.
-- DIDs, Inbound Routes, Queues (Twilio/Telnyx number management, inbound call routing)
+- Vapi / actually placing or receiving a live call - Phase 5 only builds telephony number
+  *management* (providers, credentials, the org's DID registry, agent assignment); wiring a number
+  and a voice into a real live call via Vapi is Phase 6, and Inbound Routes/Queues (routing an
+  inbound call once it exists) remain deferred alongside it.
+- Inbound Routes, Queues (inbound call routing, ring groups)
 - Messaging
 - Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake)
 - SMTP-backed email delivery
@@ -315,6 +380,15 @@ platform-level default an org's own stored credential overrides. `STORAGE_LOCAL_
 where generated voice-preview audio and cloning reference samples are written
 (`LocalDiskStorageAdapter`); it defaults to `apps/backend/.data/voice-storage` and needs no other
 configuration to work, but see the storage bullet above for why this isn't production storage.
+
+### Phase 5 environment requirements
+
+Reuses the same `CREDENTIAL_ENCRYPTION_KEY` Phase 4 requires - without it, saving Twilio/Telnyx
+credentials or a BYON SIP trunk password fails the same honest `422
+CREDENTIAL_ENCRYPTION_NOT_CONFIGURED` way voice provider credentials do. `TWILIO_ACCOUNT_SID`/
+`TWILIO_AUTH_TOKEN` and `TELNYX_API_KEY` in the backend env are optional platform-level defaults -
+each org's own stored credential under Settings > Phone Providers takes precedence, matching Phase
+4's pattern exactly. BYON needs none of these variables at all; it has no credentials to configure.
 
 ## Running locally
 
@@ -448,6 +522,23 @@ were verified for real in both:
      (`false` for `elevenlabs`/`cartesia`, `true` for `omnivoice`/`voxcpm`); and the deferred
      `ai_agent_versions.voice_id -> voices.id` foreign key is confirmed in place after converting
      the column from `text` to `uuid`.
+   - Phase 5: `apps/backend/src/phoneNumbers.integration.test.ts` - connect Twilio credentials (HTTP
+     mocked only at the fetch boundary, real route/adapter code unmocked), verify the raw Account
+     SID/Auth Token never appear in the save response, a real test-connection call, sync numbers,
+     and a number list scoped to the connecting org only (a second org's list/provider status stay
+     untouched, and a re-sync updates the same 2 rows rather than duplicating them); a BYON manual
+     import creates a number with zero `fetch` calls and never echoes the SIP trunk password back
+     even encrypted, an invalid E.164 is rejected with a client `422`, and a duplicate E.164 within
+     the same org is rejected with `409`; assigning a number to an agent writes an `audit_logs` row,
+     and delete only removes the local registry row.
+   - Phase 5 added 2 new migrations (27 total: the original 25 plus
+     `00000000000026_phone_numbers.sql`/`00000000000027_phase5_rls_policies.sql`), applied cleanly
+     both incrementally on top of the existing Phase 1-4 verification database and from a completely
+     fresh database (all 27 migrations, in order, auth stub included) - both runs land on 29 tables,
+     every one with RLS enabled and zero without; the `phone_number_providers` catalog seed produces
+     exactly the 3 expected providers (`twilio`, `telnyx`, `byon`); the permission catalog seed still
+     produces exactly 27 permissions (`numbers.manage` was already seeded in Phase 1, granted to
+     SUPER_ADMIN/ADMIN/MANAGER - confirmed by a direct query - no new permission row needed).
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
@@ -455,7 +546,10 @@ request URL/headers/payload is built from each provider's current public API doc
 their unit tests assert on those exact shapes against a mocked `fetch`), and OmniVoice/VoxCPM
 end-to-end synthesis/cloning, which requires an organization to actually deploy a serverless GPU
 endpoint first (no GPU exists in this build/sandbox) - both adapters' "not configured" and
-request-shaping logic are unit-tested instead.
+request-shaping logic are unit-tested instead. Same for Phase 5's Twilio and Telnyx REST APIs (no
+live network access to either carrier here; every adapter's request URL/headers/payload is built
+from each provider's current public API documentation, and their unit tests assert on those exact
+shapes against a mocked `fetch`).
 
 If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
