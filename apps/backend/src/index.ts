@@ -46,6 +46,8 @@ import { dialingSettingsRoutes, campaignSettingsRoutes } from './routes/dialingS
 import { startCampaignDispatcher } from './services/campaignDispatcher.js';
 import { dispositionRoutes } from './routes/dispositions.js';
 import { callbackRoutes } from './routes/callbacks.js';
+import { cdrRoutes } from './routes/cdr.js';
+import { exportRoutes } from './routes/exports.js';
 import { registerTerminalCallHandler } from './lib/callStateMachine.js';
 import { handleTerminalCall } from './services/callTerminalHandler.js';
 
@@ -121,6 +123,8 @@ export function buildApp() {
       api.register(dialingSettingsRoutes, { prefix: '/dialing-settings' });
       api.register(dispositionRoutes, { prefix: '/dispositions' });
       api.register(callbackRoutes, { prefix: '/callbacks' });
+      api.register(cdrRoutes, { prefix: '/cdr' });
+      api.register(exportRoutes, { prefix: '/exports' });
       // Unauthenticated webhook receivers (external engines) vs the
       // authenticated admin log/replay routes are deliberately two
       // separate Fastify plugin registrations under the same prefix so
