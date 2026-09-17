@@ -27,6 +27,8 @@ from .schemas import (
     WebhookConfigRequest,
 )
 from .store import CallRecord, call_store
+from .supervisor_auth import authorize_supervisor_connection
+from .supervisor_hub import supervisor_hub
 from .telephony import TelephonyOriginationError, originate_telnyx_call, originate_twilio_call
 from .webhook_client import post_event
 
@@ -236,6 +238,7 @@ async def media_stream(websocket: WebSocket, pipecat_call_id: str) -> None:
             transport=transport,
             agent_config={"agent_version_id": record.agent_version_id},
             transfer_destination_e164=record.transfer_destination_e164,
+            pipecat_call_id=pipecat_call_id,
         )
         await runner.run(task)
     except PipelineNotAvailableError as exc:
@@ -252,3 +255,86 @@ async def media_stream(websocket: WebSocket, pipecat_call_id: str) -> None:
 
         record.ended_at = _time.time()
         await post_event(pipecat_call_id=pipecat_call_id, event_type=record.status, extra={"ended_reason": record.ended_reason})
+        # Phase 10: the call is over - drop its supervisor hub state
+        # (queued whisper/barge audio, listener set) so nothing leaks
+        # into a future call that happens to reuse process memory.
+        supervisor_hub.discard_call(pipecat_call_id)
+
+
+@app.websocket("/supervisor/{pipecat_call_id}/{action}")
+async def supervisor_channel(websocket: WebSocket, pipecat_call_id: str, action: str) -> None:
+    """
+    Phase 10: the real-time channel Node's routes/liveMonitor.ts hands a
+    browser client a URL+token for. One endpoint, three `action` values:
+
+      - listen:  read-only. This service pushes binary frames
+                 (1 direction-tag byte ['ai' or 'caller'] + raw PCM audio)
+                 as SupervisorTapProcessor observes them in the live
+                 pipeline (pipeline.py). The client sends nothing.
+      - whisper: write-only (from the client's perspective). Every binary
+                 message received is raw PCM audio, queued via
+                 supervisor_hub.push_whisper_audio() for
+                 SupervisorInjectProcessor to mix into the OUTBOUND
+                 (caller-facing) leg - real injection, audible to the
+                 caller (see pipeline.py's docstring for exactly why
+                 there is no "AI-only, caller can't hear it" channel here
+                 either - the AI has no separate leg of its own to
+                 whisper into, same honest limitation as Vapi, just
+                 implemented with our own real mixing instead of a
+                 documented-absent Vapi primitive).
+      - barge:   read+write. Behaves like 'listen' (this service pushes
+                 tapped audio so the supervisor hears both sides) AND
+                 like 'whisper' (binary messages received are queued into
+                 supervisor_hub's barge queue) at the same time - genuine
+                 two-way, real audio mixing in both directions, which is
+                 exactly what "barge" means and pipecat's own
+                 frame-processing architecture makes honestly achievable
+                 (unlike Vapi - see routes/liveMonitor.ts on the Node
+                 side for that comparison).
+
+    Auth: `?token=` must be a valid, unexpired, call-and-action-scoped
+    token minted by Node's lib/pipecatSupervisorToken.ts (see
+    supervisor_auth.py) - verified BEFORE `websocket.accept()`, so an
+    invalid/missing/mismatched token gets a WS close with code 4401 and
+    the connection is never accepted.
+    """
+    if action not in ("listen", "whisper", "barge"):
+        await websocket.close(code=4400)
+        return
+
+    token = websocket.query_params.get("token")
+    if not authorize_supervisor_connection(token=token, secret=settings.PIPECAT_SERVICE_TOKEN, pipecat_call_id=pipecat_call_id, action=action):
+        await websocket.close(code=4401)
+        return
+
+    record = call_store.get(pipecat_call_id)
+    if not record:
+        await websocket.close(code=4404)
+        return
+
+    await websocket.accept()
+    wants_listen = action in ("listen", "barge")
+    wants_inject = action in ("whisper", "barge")
+
+    if wants_listen:
+        supervisor_hub.add_listener(pipecat_call_id, websocket)
+    if action == "barge":
+        supervisor_hub.set_barge_active(pipecat_call_id, True)
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            if wants_inject and message.get("bytes") is not None:
+                if action == "whisper":
+                    supervisor_hub.push_whisper_audio(pipecat_call_id, message["bytes"])
+                else:
+                    supervisor_hub.push_barge_audio(pipecat_call_id, message["bytes"])
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if wants_listen:
+            supervisor_hub.remove_listener(pipecat_call_id, websocket)
+        if action == "barge":
+            supervisor_hub.set_barge_active(pipecat_call_id, False)

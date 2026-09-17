@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from .config import settings
+from .supervisor_hub import supervisor_hub
 
 
 class PipelineNotAvailableError(Exception):
@@ -46,11 +47,148 @@ def build_system_prompt(agent_config: dict[str, Any]) -> str:
     return "\n\n".join(line for line in lines if line)
 
 
+def _build_supervisor_processors(pipecat_call_id: str):
+    """
+    Phase 10: two real pipecat FrameProcessors that give Live Monitor's
+    listen/whisper/barge a genuine place to attach, using pipecat-ai's own
+    frame-processing architecture (this is the "we own the whole
+    pipeline, implement real audio mixing" half of Phase 10 - see
+    routes/liveMonitor.ts on the Node side for the full Vapi-vs-pipecat
+    writeup).
+
+    - SupervisorTapProcessor: never mutates what passes through it - every
+      AudioRawFrame it sees is forwarded downstream completely unchanged,
+      and a COPY of its raw bytes is fire-and-forget broadcast to
+      supervisor_hub for any connected /supervisor/{id}/listen (and,
+      while barged in, /supervisor/{id}/barge) socket. Placed twice in
+      the pipeline: right after transport.input() (tags frames 'caller')
+      and right after the TTS service (tags frames 'ai') - together this
+      is the complete "supervisor hears both sides" listen feed.
+    - SupervisorInjectProcessor: placed immediately before
+      transport.output(). On every frame it drains any pending
+      whisper/barge audio bytes queued by a connected supervisor
+      WebSocket (supervisor_hub.drain_injection_audio) and, when present,
+      pushes a REAL new OutputAudioRawFrame carrying that audio into the
+      outbound stream ahead of the current frame - this is actual
+      injection into the caller-facing leg, not a logged-and-discarded
+      no-op. Whisper and barge use the exact same injection path; the
+      only difference is which hub queue fed it (see supervisor_hub.py).
+
+    Both classes are defined here (not at module scope) because they
+    subclass pipecat-ai's own FrameProcessor, which - like every other
+    pipecat-ai symbol in this file - is only importable once the real
+    package is installed (see this file's header comment on lazy
+    imports).
+    """
+    from pipecat.frames.frames import AudioRawFrame, OutputAudioRawFrame
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+    class SupervisorTapProcessor(FrameProcessor):
+        def __init__(self, label: str):
+            super().__init__()
+            self._label = label  # 'caller' | 'ai'
+
+        async def process_frame(self, frame, direction: "FrameDirection"):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, AudioRawFrame):
+                try:
+                    import asyncio
+
+                    asyncio.create_task(supervisor_hub.broadcast_audio(pipecat_call_id, self._label, bytes(frame.audio)))
+                except Exception:  # pragma: no cover - broadcast is best-effort, never blocks the call
+                    logger = __import__("logging").getLogger("pipecat_service.supervisor")
+                    logger.exception("supervisor audio tap broadcast failed for call %s", pipecat_call_id)
+            await self.push_frame(frame, direction)
+
+    class SupervisorInjectProcessor(FrameProcessor):
+        async def process_frame(self, frame, direction: "FrameDirection"):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, AudioRawFrame):
+                injected = supervisor_hub.drain_injection_audio(pipecat_call_id)
+                if injected:
+                    sample_rate = getattr(frame, "sample_rate", 16000)
+                    num_channels = getattr(frame, "num_channels", 1)
+                    await self.push_frame(
+                        OutputAudioRawFrame(audio=injected, sample_rate=sample_rate, num_channels=num_channels),
+                        direction,
+                    )
+            await self.push_frame(frame, direction)
+
+    return SupervisorTapProcessor("caller"), SupervisorTapProcessor("ai"), SupervisorInjectProcessor()
+
+
+def _build_transcript_emitter(pipecat_call_id: str):
+    """
+    Phase 10: real-time transcript emission (the pipecat half of "live
+    transcript, not just post-call" - see apps/backend/src/services/
+    liveTranscriptIngestion.ts for the Node side that receives this).
+
+    Two instances are inserted into the pipeline:
+      - one right after the STT service, tapping pipecat-ai's own
+        `TranscriptionFrame` (STT services only emit this once an
+        utterance is finalized, never for interim/partial hypotheses -
+        so, unlike Vapi, there is no separate partial/final flag to check
+        here; every TranscriptionFrame this sees is already a complete
+        caller utterance).
+      - one right after the LLM service, accumulating `TextFrame` chunks
+        between `LLMFullResponseStartFrame`/`LLMFullResponseEndFrame`
+        (pipecat-ai's own documented boundary markers for one complete
+        assistant turn) and posting the assistant's utterance exactly
+        once it's complete - never one event per token/chunk.
+
+    Both post to Node's POST /api/v1/webhooks/pipecat with
+    `event_type: 'transcript'` via webhook_client.post_event, fire-and-
+    forget (a lost transcript-update delivery does not fail the call -
+    the post-call artifact fetch still backfills it, see
+    processCallArtifacts.ts's reconciliation logic).
+    """
+    from pipecat.frames.frames import LLMFullResponseEndFrame, LLMFullResponseStartFrame, TextFrame, TranscriptionFrame
+    from pipecat.processors.frame_processor import FrameProcessor
+
+    from .webhook_client import post_event
+
+    class CallerTranscriptEmitter(FrameProcessor):
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, TranscriptionFrame) and getattr(frame, "text", "").strip():
+                import asyncio
+
+                asyncio.create_task(
+                    post_event(pipecat_call_id=pipecat_call_id, event_type="transcript", extra={"speaker": "caller", "text": frame.text})
+                )
+            await self.push_frame(frame, direction)
+
+    class AssistantTranscriptEmitter(FrameProcessor):
+        def __init__(self):
+            super().__init__()
+            self._buffer = ""
+
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, LLMFullResponseStartFrame):
+                self._buffer = ""
+            elif isinstance(frame, TextFrame):
+                self._buffer += frame.text
+            elif isinstance(frame, LLMFullResponseEndFrame):
+                text = self._buffer.strip()
+                self._buffer = ""
+                if text:
+                    import asyncio
+
+                    asyncio.create_task(
+                        post_event(pipecat_call_id=pipecat_call_id, event_type="transcript", extra={"speaker": "ai", "text": text})
+                    )
+            await self.push_frame(frame, direction)
+
+    return CallerTranscriptEmitter(), AssistantTranscriptEmitter()
+
+
 async def build_pipeline(
     *,
     transport: Any,
     agent_config: dict[str, Any],
     transfer_destination_e164: Optional[str],
+    pipecat_call_id: Optional[str] = None,
 ):
     """
     Builds a real pipecat-ai Pipeline: `transport.input()` -> STT -> LLM
@@ -116,17 +254,30 @@ async def build_pipeline(
     context = OpenAILLMContext(messages)
     context_aggregator = llm_service.create_context_aggregator(context)
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt_service,
-            context_aggregator.user(),
-            llm_service,
-            tts_service,
-            transport.output(),
-            context_aggregator.assistant(),
-        ]
-    )
+    stages: list[Any] = [transport.input()]
+    caller_tap = ai_tap = injector = None
+    if pipecat_call_id:
+        # Phase 10: only wired up when the caller (main.py) knows this
+        # call's pipecat_call_id, i.e. always for a real carrier-originated
+        # call - see this function's docstring / _build_supervisor_
+        # processors()'s for exactly what these do.
+        caller_tap, ai_tap, injector = _build_supervisor_processors(pipecat_call_id)
+        stages.append(caller_tap)
+    stages.append(stt_service)
+    if pipecat_call_id:
+        caller_transcript, assistant_transcript = _build_transcript_emitter(pipecat_call_id)
+        stages.append(caller_transcript)
+    stages += [context_aggregator.user(), llm_service]
+    if pipecat_call_id:
+        stages.append(assistant_transcript)
+    stages.append(tts_service)
+    if ai_tap:
+        stages.append(ai_tap)
+    if injector:
+        stages.append(injector)
+    stages += [transport.output(), context_aggregator.assistant()]
+
+    pipeline = Pipeline(stages)
 
     task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
     runner = PipelineRunner()
