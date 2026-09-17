@@ -6,3 +6,4 @@ export * from './permission.js';
 export * from './audit.js';
 export * from './me.js';
 export * from './lead.js';
+export * from './agent.js';

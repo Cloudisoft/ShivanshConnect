@@ -38,6 +38,21 @@ export const AUDIT_ACTIONS = {
   DNC_ENTRY_REMOVED: 'dnc.entry_removed',
   IMPORT_JOB_CREATED: 'import_job.created',
   IMPORT_JOB_COMMITTED: 'import_job.committed',
+
+  AGENT_CREATED: 'agent.created',
+  AGENT_UPDATED: 'agent.updated',
+  AGENT_DELETED: 'agent.deleted',
+  AGENT_VERSION_CREATED: 'agent_version.created',
+  AGENT_VERSION_UPDATED: 'agent_version.updated',
+  AGENT_VERSION_PUBLISHED: 'agent_version.published',
+  AGENT_VERSION_RESTORED: 'agent_version.restored',
+  SCRIPT_CREATED: 'script.created',
+  SCRIPT_UPDATED: 'script.updated',
+  SCRIPT_DELETED: 'script.deleted',
+  KNOWLEDGE_BASE_CREATED: 'knowledge_base.created',
+  KNOWLEDGE_DOCUMENT_UPLOADED: 'knowledge_document.uploaded',
+  KNOWLEDGE_DOCUMENT_DELETED: 'knowledge_document.deleted',
+  KNOWLEDGE_DOCUMENT_REPROCESSED: 'knowledge_document.reprocessed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];
