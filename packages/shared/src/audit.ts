@@ -101,6 +101,18 @@ export const AUDIT_ACTIONS = {
   LEAD_DNC_REQUESTED_ON_CALL: 'lead.dnc_requested_on_call',
 
   CDR_EXPORT_CREATED: 'cdr.export_created',
+
+  // Phase 10: Live Monitor supervisor actions (listen/whisper/barge/
+  // transfer/end) - every one of these is audit logged with who did what
+  // to which call and when (master spec sections 18/19).
+  CALL_LISTEN_STARTED: 'call.listen_started',
+  CALL_WHISPER_STARTED: 'call.whisper_started',
+  CALL_WHISPER_MESSAGE_SENT: 'call.whisper_message_sent',
+  CALL_WHISPER_ENDED: 'call.whisper_ended',
+  CALL_BARGE_STARTED: 'call.barge_started',
+  CALL_BARGE_ENDED: 'call.barge_ended',
+  CALL_TRANSFER_SUPERVISOR_INITIATED: 'call.transfer_supervisor_initiated',
+  CALL_ENDED_BY_SUPERVISOR: 'call.ended_by_supervisor',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

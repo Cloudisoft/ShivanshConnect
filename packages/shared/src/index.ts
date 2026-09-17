@@ -14,3 +14,4 @@ export * from './campaign.js';
 export * from './disposition.js';
 export * from './callback.js';
 export * from './cdr.js';
+export * from './liveMonitor.js';

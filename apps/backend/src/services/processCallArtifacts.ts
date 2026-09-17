@@ -22,33 +22,17 @@
  */
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { getStorageAdapter } from '../lib/storage/index.js';
-import { decryptCredentials, type EncryptedEnvelope } from '../lib/crypto/credentials.js';
 import {
-  createOrchestrationProvider,
   OrchestrationProviderError,
   OrchestrationProviderNotConfiguredError,
   type CallArtifacts,
-  type CallOrchestrationProvider,
   type TranscriptSegmentRaw,
 } from '../lib/orchestration/index.js';
-import { VapiProvider } from '../lib/orchestration/vapi.js';
 import { generateCallSummary } from './generateCallSummary.js';
+import { hasLiveTranscriptSegments } from './liveTranscriptIngestion.js';
+import { resolveProviderForCall } from '../lib/orchestration/resolveProvider.js';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
-
-/** Resolves the real orchestration provider adapter for a call's own
- * engine, decrypting the org's stored Vapi credential exactly the way
- * services/callOrigination.ts does (no separate credential-resolution
- * mechanism invented here). */
-async function resolveProviderForCall(supabase: Supabase, call: Record<string, any>): Promise<CallOrchestrationProvider> {
-  if (call.engine === 'vapi') {
-    const { data: credRow } = await supabase.from('vapi_credentials').select('encrypted_credentials').eq('organization_id', call.organization_id).maybeSingle();
-    if (!credRow) throw new OrchestrationProviderNotConfiguredError('Vapi is not connected for this organization.');
-    const apiKey = decryptCredentials<{ api_key: string }>(credRow.encrypted_credentials as EncryptedEnvelope).api_key;
-    return createOrchestrationProvider('vapi', { api_key: apiKey }) as VapiProvider;
-  }
-  return createOrchestrationProvider('pipecat');
-}
 
 /** Splits a flat "AI: ...\nCaller: ...\nAI: ..." style transcript string
  * into ordered segments by speaker prefix. This is the fallback path when
@@ -126,32 +110,54 @@ async function ingestTranscript(supabase: Supabase, call: Record<string, any>, a
   const rawSegments = artifacts.segments ?? parseFlatTranscript(artifacts.transcript);
   const segments = estimateTimingIfMissing(rawSegments, call.duration_seconds ?? null);
 
-  const transcript = await upsertByCallId(supabase, 'call_transcripts', call.id, {
+  // Phase 10: this fetch is now a RECONCILIATION/BACKFILL step, not the
+  // sole source of segments - services/liveTranscriptIngestion.ts may
+  // already have written real per-utterance rows for this call as they
+  // arrived DURING the call (see that module's header comment). If any
+  // live segments exist, they are trusted as-is and this step only
+  // upgrades the transcript's own status/full_text/source_url - it never
+  // deletes or duplicates what live ingestion already wrote. Only when
+  // NO live segment ever arrived (this engine/call never delivered
+  // incremental transcript events) does this fall back to the original
+  // Phase 9 behavior: a full parse-and-insert from the post-call
+  // artifact, which is safe to (re-)run idempotently since nothing else
+  // could have raced to insert segments for this transcript_id.
+  const alreadyLive = await hasLiveTranscriptSegments(supabase, call.id);
+
+  const transcriptValues: Record<string, unknown> = {
     organization_id: call.organization_id,
-    full_text: artifacts.transcript,
     status: 'ready',
     failure_reason: null,
     source_url: artifacts.transcriptUrl ?? null,
-  });
+  };
+  // Only overwrite full_text from the post-call artifact when nothing was
+  // built up live - live ingestion's own full_text (the real, incremental
+  // concatenation of segments as they actually arrived) is the better
+  // record of what was actually said, never clobbered by a backfill.
+  if (!alreadyLive) transcriptValues.full_text = artifacts.transcript;
 
-  // Idempotent re-run (e.g. a webhook replay): clear any previously
-  // inserted segments for this transcript before re-inserting, so a
-  // second run never duplicates rows.
-  await supabase.from('call_transcript_segments').delete().eq('transcript_id', transcript.id);
+  const transcript = await upsertByCallId(supabase, 'call_transcripts', call.id, transcriptValues);
 
-  if (segments.length > 0) {
-    await supabase.from('call_transcript_segments').insert(
-      segments.map((s, index) => ({
-        transcript_id: transcript.id,
-        call_id: call.id,
-        organization_id: call.organization_id,
-        speaker: s.speaker,
-        segment_index: index,
-        start_ms: s.startMs,
-        end_ms: s.endMs,
-        text: s.text,
-      })),
-    );
+  if (!alreadyLive) {
+    // Idempotent re-run (e.g. a webhook replay) of the backfill path
+    // only: clear any previously backfilled segments for this transcript
+    // before re-inserting, so a second run never duplicates rows.
+    await supabase.from('call_transcript_segments').delete().eq('transcript_id', transcript.id);
+
+    if (segments.length > 0) {
+      await supabase.from('call_transcript_segments').insert(
+        segments.map((s, index) => ({
+          transcript_id: transcript.id,
+          call_id: call.id,
+          organization_id: call.organization_id,
+          speaker: s.speaker,
+          segment_index: index,
+          start_ms: s.startMs,
+          end_ms: s.endMs,
+          text: s.text,
+        })),
+      );
+    }
   }
 
   return true;

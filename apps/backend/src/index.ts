@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
+import websocket from '@fastify/websocket';
 import { ZodError } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { getEnv } from './env.js';
@@ -50,6 +51,8 @@ import { cdrRoutes } from './routes/cdr.js';
 import { exportRoutes } from './routes/exports.js';
 import { registerTerminalCallHandler } from './lib/callStateMachine.js';
 import { handleTerminalCall } from './services/callTerminalHandler.js';
+import { liveMonitorWsRoutes } from './ws/liveMonitorRoutes.js';
+import { liveMonitorActionRoutes } from './routes/liveMonitor.js';
 
 export function buildApp() {
   const env = getEnv();
@@ -85,6 +88,10 @@ export function buildApp() {
   app.register(multipart, {
     limits: { fileSize: 25 * 1024 * 1024, files: 1 },
   });
+
+  // Phase 10: WebSocket support (Live Monitor's real-time stream). See
+  // ws/liveMonitorRoutes.ts's header comment for the auth/upgrade model.
+  app.register(websocket);
 
   app.get('/health', async () => ({ status: 'ok', service: 'shivanshconnect-backend' }));
 
@@ -131,6 +138,13 @@ export function buildApp() {
       // neither accidentally inherits the other's preHandler hooks.
       api.register(webhookReceiverRoutes, { prefix: '/webhooks' });
       api.register(webhookAdminRoutes, { prefix: '/webhook-events' });
+      // Phase 10: Live Monitor - the WS stream and the listen/whisper/
+      // barge/transfer/end supervisor action routes are two separate
+      // plugin registrations under the same prefix (same pattern as the
+      // webhook receiver/admin split above) since the WS route's
+      // `websocket: true` option only applies to itself.
+      api.register(liveMonitorWsRoutes, { prefix: '/live-monitor' });
+      api.register(liveMonitorActionRoutes, { prefix: '/calls' });
     },
     { prefix: '/api/v1' },
   );

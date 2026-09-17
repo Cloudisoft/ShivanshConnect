@@ -10,6 +10,8 @@ import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS, type CallStatus } from '@shivanshconnect/shared';
 import { transitionCallState } from '../lib/callStateMachine.js';
 import { extractPipecatToolCalls, extractVapiToolCalls, processToolCalls } from '../services/toolCallHandler.js';
+import { ingestLiveTranscriptSegment } from '../services/liveTranscriptIngestion.js';
+import { vapiRoleToSpeaker } from '../lib/orchestration/vapi.js';
 
 /**
  * Phase 6 webhook receivers (spec sections 31/58).
@@ -227,8 +229,24 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
           break;
         }
         case 'transcript': {
-          // Raw transcript payload capture only in this phase - structured
-          // transcript tables arrive in Phase 9 (see the task brief).
+          // Phase 10: real-time transcript ingestion. Vapi delivers a
+          // 'transcript' message per utterance as it's generated, marked
+          // `transcriptType: 'partial'` while still being refined and
+          // `'final'` exactly once when that utterance is complete - only
+          // 'final' is ever persisted, so a stream of interim deltas for
+          // the SAME utterance never produces more than one segment (see
+          // services/liveTranscriptIngestion.ts's header comment).
+          if (message.transcriptType === 'final' && typeof message.transcript === 'string') {
+            const speaker = vapiRoleToSpeaker(message.role);
+            if (speaker) {
+              await ingestLiveTranscriptSegment(supabase, call, {
+                speaker,
+                text: message.transcript,
+                startMs: Math.max(0, Math.round((message.secondsFromStart ?? 0) * 1000)),
+                endMs: null,
+              });
+            }
+          }
           break;
         }
         case 'tool-calls': {
@@ -297,6 +315,22 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
 
       if (eventType === 'tool-calls') {
         await processToolCalls(supabase, call, extractPipecatToolCalls(body));
+      }
+
+      // Phase 10: real-time transcript ingestion for pipecat. Unlike
+      // Vapi's partial/final distinction, pipecat-service's own pipeline
+      // (apps/pipecat-service/app/transcript.py) only ever posts this
+      // event once an utterance is genuinely complete (a final STT
+      // transcription frame for the caller, or a completed TTS-bound text
+      // frame for the assistant) - see that module for exactly why no
+      // separate "final" flag is needed here.
+      if (eventType === 'transcript' && typeof body.text === 'string' && (body.speaker === 'ai' || body.speaker === 'caller')) {
+        await ingestLiveTranscriptSegment(supabase, call, {
+          speaker: body.speaker,
+          text: body.text,
+          startMs: typeof body.start_ms === 'number' ? body.start_ms : 0,
+          endMs: typeof body.end_ms === 'number' ? body.end_ms : null,
+        });
       }
 
       const map: Record<string, CallStatus> = {

@@ -83,7 +83,7 @@ interface VapiCallObject {
  * AI side (Vapi's own roles for the assistant vary: 'assistant', 'bot',
  * 'system' framing lines are filtered out entirely). Returns null for a
  * role that carries no actual spoken content (e.g. 'system' or 'tool'). */
-function vapiRoleToSpeaker(role: string | undefined): 'ai' | 'caller' | null {
+export function vapiRoleToSpeaker(role: string | undefined): 'ai' | 'caller' | null {
   const normalized = (role ?? '').toLowerCase();
   if (normalized === 'user' || normalized === 'customer') return 'caller';
   if (normalized === 'assistant' || normalized === 'bot') return 'ai';
@@ -300,6 +300,48 @@ export class VapiProvider implements CallOrchestrationProvider {
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new OrchestrationProviderError(`Vapi transfer-call control message failed (${res.status}): ${text.slice(0, 500)}`);
+    }
+  }
+
+  /**
+   * Phase 10: posts a real 'say' control message to the live call's own
+   * monitor.controlUrl - Vapi's real, current documented mechanism for
+   * injecting speech into an in-progress call (the same control channel
+   * transferCall() above uses for 'transfer-call'). This IS the
+   * "whisper" primitive routes/liveMonitor.ts's POST /calls/:id/whisper
+   * uses for Vapi calls.
+   *
+   * HONEST LIMITATION (see routes/liveMonitor.ts's header comment for the
+   * full writeup): Vapi's public API has no separate "whisper-only-to-the-
+   * assistant, inaudible to the caller" channel, because the "agent" on a
+   * Vapi call is Vapi's own AI, not a human on a distinct leg the way a
+   * traditional contact-center whisper targets. The 'say' message is
+   * therefore audible on the live call to whoever is connected, exactly
+   * as it would be if the assistant itself said it. This module never
+   * pretends otherwise - "whisper" and "barge" on Vapi both reduce to
+   * this same real control-plane call; the only difference the barge
+   * action documents is that the supervisor's own /listen audio channel
+   * is also open at the same time (see getLiveMonitorUrls()/barge
+   * handling in routes/liveMonitor.ts).
+   */
+  async say(providerCallId: string, text: string): Promise<void> {
+    const call = await this.request<VapiCallObject>('GET', `/call/${encodeURIComponent(providerCallId)}`);
+    if (!call.monitor?.controlUrl) {
+      throw new OrchestrationProviderError('This call has no active control URL - it may have already ended.');
+    }
+    let res: Response;
+    try {
+      res = await fetch(call.monitor.controlUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'say', message: text }),
+      });
+    } catch (err) {
+      throw new OrchestrationProviderError('Failed to reach the Vapi call control URL for say/whisper.', err);
+    }
+    if (!res.ok) {
+      const text2 = await res.text().catch(() => '');
+      throw new OrchestrationProviderError(`Vapi say control message failed (${res.status}): ${text2.slice(0, 500)}`);
     }
   }
 
