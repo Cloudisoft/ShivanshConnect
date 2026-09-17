@@ -10,6 +10,7 @@ const TABS = [
   { path: '/settings/roles', label: 'Roles', permission: 'roles.manage' },
   { path: '/settings/compliance', label: 'Compliance', permission: 'leads.view' },
   { path: '/settings/integrations', label: 'Integrations', permission: null },
+  { path: '/settings/webhook-events', label: 'Webhook Events', permission: 'cdr.view' },
 ];
 
 export function SettingsLayout(): JSX.Element {

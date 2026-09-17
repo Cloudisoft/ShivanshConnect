@@ -14,7 +14,7 @@ export function useOrganization() {
 export function useUpdateOrganization() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name?: string; timezone?: string }) =>
+    mutationFn: (input: { name?: string; timezone?: string; settings?: Record<string, unknown> }) =>
       api.patch<OrgWithSettings>('/organizations/me', input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organization'] });
