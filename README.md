@@ -1,10 +1,11 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phase 1 only** (organizations, auth, users, roles/permissions, audit logs, and the
-overall app shell). Later phases (campaigns, dialing, leads, live monitoring, AI agents, voices,
-telephony numbers, messaging, analytics, and more) are deliberately **not** implemented yet - see
-[Phase plan status](#phase-plan-status) below.
+build covers Phases 1-2** (organizations, auth, users, roles/permissions, audit logs, the overall
+app shell, and now leads/lead lists/phone normalization/DNC/CSV-XLSX import). Later phases
+(campaigns, dialing, live monitoring, AI agents, voices, telephony numbers, messaging, analytics,
+and more) are deliberately **not** implemented yet - see [Phase plan status](#phase-plan-status)
+below.
 
 ## Architecture overview
 
@@ -64,25 +65,69 @@ supabase/       SQL migrations + seed data (Supabase Postgres, Row Level Securit
 - Backend unit + integration tests (23 passing) and RLS verified against a real local
   PostgreSQL 16 instance (see [Verification notes](#verification-notes)).
 
-**Explicitly NOT built yet** (deferred to later phases, to be built and reviewed in subsequent
-sessions):
+Phase 1 shipped an `EmailService` interface with a console-log implementation only (invite/reset
+links are logged and also returned in API responses in dev) - real SMTP delivery is still
+deferred, see the full up-to-date deferred list below.
+
+Every permission key for modules not yet built (e.g. `campaigns.view`, `live_monitor.barge`,
+`voices.manage`) is already seeded into the `permissions` table so later phases only need to wire
+up real enforcement, not another migration.
+
+**Phase 2 (this build) - done:**
+
+- Database schema: `lead_lists`, `leads` (seeds the full Phase 51 lead state machine now, even
+  though nothing drives a lead through most of it until the dialer phases), `lead_list_members`
+  (many-to-many list membership - a lead can belong to more than one list), `lead_custom_fields`
+  (per-org custom field catalog used by import), `dnc_entries` (org-scoped or global suppression,
+  independent of any single lead record) and `import_jobs` + `import_job_rows` (async import),
+  all with RLS and indexes following the same pattern as Phase 1.
+- Phone normalization (`apps/backend/src/lib/phone.ts`, `libphonenumber-js`): any US/Canada format
+  is normalized to strict E.164; invalid or non-NANP numbers are flagged, never guessed. Covered by
+  unit tests for every format in the spec plus invalid inputs.
+- Backend API: `/lead-lists` (CRUD + `POST /:id/import`), `/leads` (paginated/filterable/sortable
+  list with real server-side pagination, single add, `/bulk` paste-numbers, `/bulk-actions` with
+  either literal ids or a filter - "select all matching" never requires the frontend to enumerate
+  10k+ ids - get/patch/delete), `/lead-custom-fields`, `/dnc` (add/list/remove; adding an entry
+  flags matching existing leads), `/import-jobs` (poll status, list preview rows, adjust column
+  mapping, commit, download error rows as CSV).
+- Async CSV/XLSX import (`apps/backend/src/services/importLeads.ts`): there is no queue/worker
+  infra yet (Redis/BullMQ is Phase 15/deployment), so a job is processed via `setImmediate` on the
+  same backend process right after upload. Every exported function in that file takes plain
+  arguments and does its own Supabase reads/writes - no Fastify request/reply object - so a future
+  BullMQ worker can call the same functions unchanged; only what invokes them (and where the file
+  bytes come from) needs to change. Uploaded rows are always persisted with their original
+  header-keyed values in `import_job_rows.raw_data`, so adjusting the column mapping re-validates
+  from already-stored data and never re-reads the original file.
+- Frontend: full Lead Lists and Leads pages (replacing the Phase 1 placeholders), a virtualized
+  (`@tanstack/react-virtual`) leads data table on top of real server-side pagination, bulk
+  selection and bulk action bar, Add Lead / Paste Numbers / Import modals (upload -> column mapping
+  -> preview with counts -> commit -> progress polling -> summary with an error-rows download), a
+  lead detail page with honest empty states for Call History / Campaign History / Recordings /
+  Transcripts (each captioned with the phase that adds it), and a Settings > Compliance page for Do
+  Not Call management.
+- Backend tests: phone normalization, DNC eligibility (org-scoped/global/cross-org), duplicate-phone
+  detection, import column-mapping inference and row validation/classification, the bulk-action
+  "select all matching filter" pagination helper, and one full integration test (create a lead
+  list -> upload a CSV with 2 valid/1 duplicate/1 invalid/1 DNC row via a real multipart request ->
+  poll the async job -> commit -> verify the final lead count, job summary and error-report CSV,
+  plus cross-tenant isolation on lists/leads/import jobs).
+
+**Explicitly NOT built yet** (deferred to later phases):
 
 - Campaigns, Dialing Settings, Callbacks, Dispositions - campaign/dialer management
-- Leads, Lead Lists (import, phone normalization, DNC)
 - Live Monitor (listen/barge/whisper on live calls)
-- CDR (call detail records)
+- CDR (call detail records), call history/recordings/transcripts on the lead detail page
 - AI Agents, Voices (Vapi / ElevenLabs / Cartesia integration)
 - DIDs, Inbound Routes, Queues (Twilio/Telnyx number management, inbound call routing)
 - Messaging
 - Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake)
-- SMTP-backed email delivery (Phase 1 ships an `EmailService` interface with a console-log
-  implementation only; invite/reset links are logged and also returned in API responses in dev)
-- Background job queues / Redis (the `apps/worker` package is a structural placeholder only)
-- Railway service provisioning (documented above, not actually created)
-
-Every permission key for these future modules (e.g. `campaigns.view`, `live_monitor.barge`,
-`voices.manage`) is already seeded into the `permissions` table so later phases only need to wire
-up real enforcement, not another migration.
+- SMTP-backed email delivery
+- Background job queues / Redis (the async import in Phase 2 uses `setImmediate` on the backend
+  process itself - see above - specifically so this later migration is mechanical)
+- Real object storage for uploaded import files (Phase 2 parses the upload in memory on receipt and
+  never writes it to disk/S3; `import_jobs.file_storage_path` records a synthetic
+  `memory:<org>/<file>` locator so the schema already matches a later phase that adds real storage)
+- Railway service provisioning
 
 ## Running locally
 
@@ -152,25 +197,36 @@ pnpm run typecheck        # TypeScript project references, no emit
 
 ## Verification notes
 
-This sandbox had no outbound access to the container registries the Supabase CLI's local Docker
-stack pulls images from (ghcr.io and Docker Hub both returned `403 Forbidden` through the
-environment's network proxy), so the full `supabase start` stack (Postgres + GoTrue + PostgREST +
-Studio, etc.) could not be started here. Two things were still verified for real:
+This sandbox has no reliable outbound access to the container registries the Supabase CLI's local
+Docker stack pulls images from - in the Phase 1 session both ghcr.io and Docker Hub returned `403
+Forbidden`; in the Phase 2 session the Docker daemon itself was reachable but Docker Hub responded
+`429 Too Many Requests` on every pull. Either way, the full `supabase start` stack (Postgres +
+GoTrue + PostgREST + Studio, etc.) could not be started here in either session. The same two things
+were verified for real in both:
 
 1. **Every SQL migration was applied, in order, to a real local PostgreSQL 16 instance**
    (installed directly via `apt`, not Docker), including a minimal `auth.users` table and
-   `auth.uid()` stub so the RLS-dependent helper functions could be created. All 9 migrations
-   applied cleanly; RLS was confirmed enabled on all 9 tenant tables; the seed produced 27
-   permissions and the expected per-role permission counts (`SUPER_ADMIN`/`ADMIN`: 27,
-   `MANAGER`: 24, `AGENT`: 8, `VIEWER`: 7).
-2. **The backend integration test** (`apps/backend/src/integration.test.ts`) exercises the real
-   Fastify route handlers end-to-end over HTTP (`app.inject()`) - signup, invite, accept
-   invitation, role change, audit log read, and a cross-tenant rejection - against an in-memory
-   fake of the Supabase client (`apps/backend/src/test/fakeSupabase.ts`), since no live
-   Supabase project or local PostgREST was reachable either. This is the documented "mock at the
-   DB-client boundary" fallback, not a substitute for RLS verification (covered by point 1).
+   `auth.uid()` stub so the RLS-dependent helper functions could be created.
+   - Phase 1: all 9 migrations applied cleanly; RLS confirmed enabled on all 9 tenant tables; the
+     seed produced 27 permissions and the expected per-role permission counts
+     (`SUPER_ADMIN`/`ADMIN`: 27, `MANAGER`: 24, `AGENT`: 8, `VIEWER`: 7).
+   - Phase 2: all 16 migrations (the original 9 plus the 7 new Phase 2 ones) applied cleanly on top,
+     in order, to a fresh database; RLS confirmed enabled on all 16 tables including the 7 new ones
+     (`lead_lists`, `leads`, `lead_list_members`, `lead_custom_fields`, `dnc_entries`,
+     `import_jobs`, `import_job_rows`).
+2. **Backend integration tests** exercise the real Fastify route handlers end-to-end over HTTP
+   (`app.inject()`) against an in-memory fake of the Supabase client
+   (`apps/backend/src/test/fakeSupabase.ts`), since no live Supabase project or local PostgREST was
+   reachable either. This is the documented "mock at the DB-client boundary" fallback, not a
+   substitute for RLS verification (covered by point 1).
+   - Phase 1: `apps/backend/src/integration.test.ts` - signup, invite, accept invitation, role
+     change, audit log read, and a cross-tenant rejection.
+   - Phase 2: `apps/backend/src/leads.integration.test.ts` - create a lead list, upload a CSV via a
+     real multipart request, poll the async import job to completion, commit, and verify the final
+     lead count, import job summary and error-report CSV, plus cross-tenant isolation on
+     lists/leads/import jobs.
 
-If you have Docker access to ghcr.io/Docker Hub, `supabase start` followed by
-`supabase db reset` will run the same migrations against the full local stack, and
-`supabase db push` will apply them to a real hosted project - nothing about the migrations
-themselves depends on this sandbox's workaround.
+If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
+run the same migrations against the full local stack, and `supabase db push` will apply them to a
+real hosted project - nothing about the migrations themselves depends on this sandbox's
+workaround.
