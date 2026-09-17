@@ -1,17 +1,24 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-7** (organizations, auth, users, roles/permissions, audit logs, the overall
+build covers Phases 1-8** (organizations, auth, users, roles/permissions, audit logs, the overall
 app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; AI agents/agent versioning/
 prompt system/knowledge base (RAG)/scripts; voice providers/cloning; telephony number providers -
 Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry; call
 orchestration - Vapi (managed) plus pipecat (a real, self-hosted second engine running as its own
 Python service, `apps/pipecat-service`), the one authoritative `calls` record regardless of engine,
-and idempotent webhook ingestion; and now **campaigns and the real campaign execution engine** -
-snapshot-on-publish configuration versioning, a genuine queue-based dispatcher (not a `for each
-lead` loop) with race-safe lead claiming, real eligibility/preflight/retry/rotate logic, and org-
-level dialing defaults). Later phases (live monitoring, CDR, messaging, analytics, and more) are
-deliberately **not** implemented yet - see [Phase plan status](#phase-plan-status) below.
+and idempotent webhook ingestion; campaigns and the real campaign execution engine - snapshot-on-
+publish configuration versioning, a genuine queue-based dispatcher (not a `for each lead` loop)
+with race-safe lead claiming, real eligibility/preflight/retry/rotate logic, and org-level dialing
+defaults; and now **the explicit call state machine, the deterministic disposition engine, the
+formalized retry engine, and the callback scheduler** - a single `transitionCallState()` executor
+every call-status write goes through (validated, logged-and-rejected on an invalid transition, real
+in-process eventing), a real rules-based disposition engine (never randomized, never LLM-based)
+that is the single source of truth for both `call_dispositions` and `campaign_leads.
+final_disposition`, a hard DNC-never-retry invariant, and end-to-end tool-call webhook handling so
+the AI can schedule a callback or recognize a DNC request mid-call). Later phases (CDR/transcripts/
+recordings, live monitoring, messaging, analytics, and more) are deliberately **not** implemented
+yet - see [Phase plan status](#phase-plan-status) below.
 
 ## Architecture overview
 
@@ -441,7 +448,7 @@ never a simulated call, in both the TypeScript and Python code. See
 `requirements.txt`, its own environment variables) and what could not be verified live in this
 sandbox (no real phone calls are placed anywhere in this build).
 
-**Phase 7 (this build) - done:**
+**Phase 7 - done:**
 
 - Database schema: `campaigns` (calling window/days, concurrency/calls-per-minute limits, transfer
   number, voicemail config, lead cooldown, background noise), `campaign_versions` (the immutable
@@ -538,6 +545,96 @@ sandbox (no real phone calls are placed anywhere in this build).
   everything at once") and every one of the 1000 `campaign_leads` rows ends terminal, explicitly
   pending, or in-flight - never silently lost.
 
+**Phase 8 (this build) - done:**
+
+- Database schema: `dispositions` (system defaults seeded per spec section 20 - Call Connected,
+  Disconnected, DNC, Answering Machine, Voicemail, Not Interested, Hung Up, Transferred, Call
+  Disconnected in Transfer - plus per-org custom dispositions), `call_dispositions` (a `UNIQUE
+  (call_id)` constraint enforcing exactly one primary disposition per call at the DB level, not
+  just in application code; `disposition_source` engine/manual, `disposition_confidence`,
+  `disposition_reason`, `assigned_by` for a manual override's audit trail), and `callbacks`
+  (`scheduled_at`/`timezone`, `assigned_to` - a user id or the literal `'ai'` - `source_call_id`
+  back-reference, a dispatch-friendly `(organization_id, status, scheduled_at)` composite index). A
+  new `callbacks.manage` permission, seeded and granted to `SUPER_ADMIN`/`ADMIN`/`MANAGER`/`AGENT`.
+- **The call state machine's executor** (`apps/backend/src/lib/callStateMachine.ts`) - Phase 6's
+  pure transition table (`lib/orchestration/callStateMachine.ts`) is now enforced through exactly
+  one function, `transitionCallState()`: every webhook handler and `services/callOrigination.ts`'s
+  own status writes go through it. It validates the transition, **rejects and logs (never silently
+  applies)** an invalid one, persists the new status, and emits a real in-process `EventEmitter`
+  event (`callEventBus`) - documented as the seam Phase 54's broader real-time event architecture
+  will attach to later, not a full pub/sub rewrite. A terminal transition additionally **awaits** a
+  registered terminal-call handler synchronously, so disposition assignment and the
+  `campaign_leads` update it drives are guaranteed to have happened by the time the triggering
+  webhook request returns. `lib/orchestration/callStateMachine.ts`'s transition table is extended
+  so `dnc` is reachable from every in-call, non-terminal state (spec section 60 - a caller can ask
+  to be put on the Do Not Call list at any point during a live call, not only before dialing).
+- **The deterministic disposition engine** (`services/dispositionEngine.ts`) - a real, explicit,
+  table-driven rules engine, never randomized and never LLM-based. `decideDisposition()` is a pure
+  function over a well-typed `CallOutcomeSignals` struct (terminal status, ended reason, duration,
+  AMD/transfer signals, an explicit DNC-requested flag), evaluated in a fixed order: DNC always
+  wins; AMD-detected voicemail/answering-machine; a successful vs. failed/disconnected transfer;
+  human-answered-with-a-real-conversation vs. an early/immediate hangup with no interaction vs. a
+  mid-conversation hang-up. `assignDispositionForCall()` is the one impure wrapper - called
+  automatically from the state machine's terminal-transition handler, **never manually invoked by
+  the UI**. `PATCH /api/v1/calls/:id/disposition` is the one legitimate manual-override path for a
+  supervisor correcting the engine's own occasional mistake - it writes `disposition_source =
+  'manual'` and an audit log entry, and the engine never clobbers a manual override afterward.
+- **The retry engine, formalized** (`services/retryEngine.ts`) - Phase 7's inline retry math is now
+  a table of explicitly named rules (no-answer/busy/temporary-provider-failure retry within
+  `max_attempts`, a successful transfer never auto-retries, `max_attempts` reached blocks retry,
+  a connected/completed call follows the campaign's own manual-rotation rules rather than
+  auto-retrying) with **one hard, unconditional invariant checked first, always**: a DNC lead never
+  retries, full stop, even under adversarial input that tries to force it (a generous
+  `retryOnOverride`, a low attempt count, a non-DNC disposition code - `isDnc` alone still blocks
+  it). `services/campaignLeadDisposition.ts` was rewritten to consume this engine's decision plus
+  the disposition engine's assigned code as its **single source of truth** - `campaign_leads.
+  final_disposition` is now exactly the same code `call_dispositions` holds, never a second,
+  divergent derivation from the raw `ended_reason` string.
+- **The callback scheduler** (`services/callbackScheduler.ts`, `routes/callbacks.ts`) - one
+  creation path used by both `POST /api/v1/callbacks` (manual, from the lead detail/CDR UI) and the
+  AI's own tool-call webhook event, so a human- and an AI-scheduled callback are indistinguishable
+  downstream. Scheduling a callback **overrides normal cooldown** (spec section 53) by writing the
+  callback's `scheduled_at` directly onto the linked `campaign_leads.next_eligible_at` and
+  resetting its status to `pending` - never a parallel dial path - so Phase 7's exact claim/dispatch
+  machinery (`services/campaignDispatcher.ts`) picks the lead back up once the time arrives, with
+  the same no-double-dial guarantee already proven there. A callback created **while its call is
+  still active** (the common case - the AI recognizes the request mid-call, before the terminal
+  webhook fires) defers this override to `services/campaignLeadDisposition.ts`'s own terminal-call
+  handling, so the override always wins regardless of event ordering. `GET/PATCH
+  /api/v1/callbacks` support calendar-friendly date-range/status/campaign/lead filtering and
+  reschedule/cancel.
+- **Real tool-call/function-call webhook handling** (`services/toolCallHandler.ts`,
+  `services/dncToolHandler.ts`) - both the Vapi (`message.type === 'tool-calls'`,
+  `toolCallList`/`toolCalls`, stringified-or-object `arguments`) and pipecat-service
+  (`event_type === 'tool-calls'`, `tool_calls`) webhook payload shapes are parsed into a normalized
+  `{ name, arguments }` list; two real, deterministic intents are wired end to end - never a UI
+  mockup: `schedule_callback` creates a real `callbacks` row via the scheduler above, and
+  `request_dnc` reuses Phase 2's existing DNC infrastructure completely (inserts a real
+  `dnc_entries` row, flags the matching lead's `is_dnc = true`, transitions the call to `dnc`
+  through the real state machine, which in turn assigns the `DNC` disposition and marks the
+  `campaign_leads` row `dnc` - never eligible for retry again, even if the lead is later manually
+  re-added to a brand-new campaign). An unrecognized tool name or malformed arguments is logged to
+  `call_events` and skipped - never crashes the webhook.
+- Frontend: real Dispositions module (`pages/DispositionsPage.tsx` - system defaults shown
+  read-only, full CRUD on an org's own custom dispositions) and Callbacks module
+  (`pages/CallbacksPage.tsx` - a filterable/sortable list view with status badges, a lead-search
+  create form with an optional campaign attachment for auto-dial, reschedule/cancel), replacing
+  both sidebar placeholders. `CampaignDetailPage.tsx`'s attached-leads table gains a Disposition
+  column (reusing the existing `Badge` component - full CDR UI is Phase 9, not built here).
+- Tests: unit coverage for every `decideDisposition()` branch, every named `retryEngine` rule
+  including an adversarial DNC-never-retry test, `transitionCallState()`'s valid/invalid/no-op
+  transitions (an invalid one is proven logged, never applied), and tool-call payload parsing; a
+  dedicated integration suite (`phase8.integration.test.ts`, same fake-Supabase harness as Phase
+  7's) proving: exactly one `call_dispositions` row with `campaign_leads.final_disposition` kept in
+  sync; a manual override writing `disposition_source = 'manual'` plus an audit log entry without
+  duplicating the row; a real tool-call DNC request flipping `is_dnc`/inserting `dnc_entries`/
+  transitioning the call, with a regression test proving the same lead is never dialed again even
+  after being manually re-added to a new campaign; a real tool-call `schedule_callback` event
+  creating a callback and its cooldown override surviving regardless of whether it's applied before
+  or after the call's own terminal webhook; a manually-created callback overriding an active
+  cooldown and being picked up by the exact same dispatcher claim/dial path once due; and cross-org
+  isolation for custom dispositions and callbacks.
+
 **Explicitly NOT built yet** (deferred to later phases):
 
 - Redis/BullMQ - Phase 7's campaign dispatcher runs today as a documented in-process `setInterval`
@@ -627,6 +724,12 @@ never exceed what this backend process can actually handle. `CAMPAIGN_DISPATCH_I
 (default `3000`) controls how often the in-process dispatch loop ticks. The dispatcher is started
 only from `main()` (real process boot), never from `buildApp()` itself, so the test suite never has
 a background timer racing its fake Supabase client.
+
+### Phase 8 environment requirements
+
+No new required variables - the call state machine, disposition engine, retry engine and callback
+scheduler all run in-process against the existing Supabase connection and reuse Phase 6/7's
+orchestration/webhook plumbing. Nothing here needs its own credential or feature flag.
 
 ## Running locally
 
@@ -821,6 +924,30 @@ were verified for real in both:
      `calls.campaign_id`/`phone_numbers.assigned_campaign_id` foreign keys are confirmed in place.
      The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass clean after this phase
      (197 backend tests total).
+   - Phase 8: `apps/backend/src/phase8.integration.test.ts` (6 tests) plus
+     `apps/backend/src/services/dispositionEngine.test.ts` (11 unit tests),
+     `apps/backend/src/services/retryEngine.test.ts` (12 unit tests, including the adversarial
+     DNC-never-retry case), `apps/backend/src/services/toolCallHandler.test.ts` (5 unit tests) and
+     `apps/backend/src/lib/callStateMachine.test.ts` (6 unit tests) - see the "Phase 8" section
+     above for exactly what each integration test proves (single-source-of-truth disposition
+     assignment, manual override + audit log, the DNC-tool-call-then-never-redialed regression
+     against a brand-new campaign, callback-overrides-cooldown surviving event ordering, callback
+     dispatch through the exact same claim path, and cross-org isolation). Phase 8 added 2 new
+     migrations (34 total: the original 32 plus
+     `00000000000033_phase8_dispositions_callbacks.sql`/`00000000000034_phase8_rls_policies.sql`),
+     applied cleanly both incrementally on top of the existing Phase 1-7 verification database and
+     from a completely fresh database (all 34 migrations, in order, auth stub included) - both runs
+     land on **43 tables, every one with RLS enabled and zero without**; the permission catalog
+     grew from 29 to **30** (the new `callbacks.manage` key, confirmed granted to exactly
+     `SUPER_ADMIN`/`ADMIN`/`MANAGER`/`AGENT`); the 9 system dispositions are confirmed seeded with
+     `organization_id null` and the `call_dispositions_call_id_key`/`dispositions_system_code_key`
+     unique indexes are confirmed present. While building this phase's test coverage, two latent
+     bugs in the shared `fakeSupabase.ts` test harness surfaced and were fixed: a missing
+     `.is()`/`.gt()` filter method (already used by unrelated Phase 5 production code, just never
+     exercised by an existing test) and an `.or()` clause parser that silently truncated ISO
+     timestamp values at their millisecond-separator dot - neither affects the real Postgres/RLS
+     verification in point 1 above, only the in-memory test double. The full monorepo `pnpm run
+     build`/`test`/`lint`/`typecheck` all pass clean after this phase (240 backend tests total).
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
@@ -837,7 +964,11 @@ placed anywhere in this build; every request shape is built from each provider's
 API and asserted against a mocked `fetch`/`httpx` boundary instead. The real `pipecat-ai` pipeline
 construction code (`apps/pipecat-service/app/pipeline.py`) is written against pipecat-ai 1.10.0's
 documented module layout but never run end-to-end against a live media stream here - see that
-service's own README for exactly what it does and doesn't verify.
+service's own README for exactly what it does and doesn't verify. Same for Phase 8's tool-call
+webhook handling: `services/toolCallHandler.ts`'s parsing is built from Vapi's currently documented
+`tool-calls` message shape (`toolCallList`/`toolCalls`, `function.name`/`function.arguments`) and
+exercised against synthetic fixtures, never a live Vapi assistant actually invoking a configured
+function during a real call - no real phone call is placed anywhere in this build.
 
 If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
