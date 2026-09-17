@@ -1,7 +1,7 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-8** (organizations, auth, users, roles/permissions, audit logs, the overall
+build covers Phases 1-9** (organizations, auth, users, roles/permissions, audit logs, the overall
 app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; AI agents/agent versioning/
 prompt system/knowledge base (RAG)/scripts; voice providers/cloning; telephony number providers -
 Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry; call
@@ -10,15 +10,22 @@ Python service, `apps/pipecat-service`), the one authoritative `calls` record re
 and idempotent webhook ingestion; campaigns and the real campaign execution engine - snapshot-on-
 publish configuration versioning, a genuine queue-based dispatcher (not a `for each lead` loop)
 with race-safe lead claiming, real eligibility/preflight/retry/rotate logic, and org-level dialing
-defaults; and now **the explicit call state machine, the deterministic disposition engine, the
-formalized retry engine, and the callback scheduler** - a single `transitionCallState()` executor
+defaults; the explicit call state machine, the deterministic disposition engine, the
+formalized retry engine, and the callback scheduler - a single `transitionCallState()` executor
 every call-status write goes through (validated, logged-and-rejected on an invalid transition, real
 in-process eventing), a real rules-based disposition engine (never randomized, never LLM-based)
 that is the single source of truth for both `call_dispositions` and `campaign_leads.
 final_disposition`, a hard DNC-never-retry invariant, and end-to-end tool-call webhook handling so
-the AI can schedule a callback or recognize a DNC request mid-call). Later phases (CDR/transcripts/
-recordings, live monitoring, messaging, analytics, and more) are deliberately **not** implemented
-yet - see [Phase plan status](#phase-plan-status) below.
+the AI can schedule a callback or recognize a DNC request mid-call; and now **real CDR (call
+detail records), transcripts, recordings and AI call summaries** - a real terminal-transition-
+triggered ingestion pipeline that fetches each call's actual transcript (parsed into ordered,
+searchable per-utterance segments) and actual recording bytes (downloaded and durably re-stored,
+never just a passthrough of the provider's own possibly-ephemeral URL) through the existing Phase
+6 orchestration adapters and Phase 4 `StorageAdapter`, a real LLM-generated call summary when an
+LLM provider is configured (never a fabricated one otherwise), a fully joined/paginated/filterable
+CDR API with Postgres full-text transcript search, and background CSV/XLSX export jobs). Later
+phases (live monitoring, messaging, analytics, and more) are deliberately **not** implemented yet -
+see [Phase plan status](#phase-plan-status) below.
 
 ## Architecture overview
 
@@ -635,16 +642,113 @@ sandbox (no real phone calls are placed anywhere in this build).
   cooldown and being picked up by the exact same dispatcher claim/dial path once due; and cross-org
   isolation for custom dispositions and callbacks.
 
+**Phase 9 (this build) - done:**
+
+- Database schema: `call_transcripts` (`full_text` for search plus a generated `tsvector` column +
+  GIN index - real Postgres full-text search, not an app-side substring scan), `call_transcript_
+  segments` (real per-utterance rows - `speaker`/`segment_index`/`start_ms`/`end_ms`/`text`, its
+  own GIN-indexed `tsvector` too), `call_recordings` (`provider_recording_url` for the source vs.
+  `storage_path` for our own durably-restored copy - never the same thing), `call_summaries` (spec
+  section 23's exact field list: `summary`, `key_points`, `customer_intent`, `objections`,
+  `questions`, `next_action`, `outcome`, plus which LLM produced it and when), and `exports`
+  (background CDR export jobs - `type`/`filters`/`status`/`file_storage_path`/`row_count`). RLS on
+  all five. `search_call_transcripts()` is a real `ts_rank`-ranked, org-scoped Postgres function
+  alongside Phase 3's `match_knowledge_chunks`. `cdr.view`/`cdr.export` permissions already existed
+  in the Phase 1 seed catalog - nothing new to seed there.
+- **Real artifact ingestion** (`services/processCallArtifacts.ts`) - triggered (`setImmediate`,
+  the same fire-and-forget-but-scheduled async pattern every prior phase's ingestion uses) from
+  `callTerminalHandler.ts` on every terminal call except `cancelled` (a cancelled call never
+  actually took place). Resolves the real orchestration provider for the call's own engine
+  (decrypting the org's Vapi credential exactly like `callOrigination.ts` does) and calls its real
+  `getArtifacts()`:
+  - **Transcript**: `CallArtifacts` gained an optional `segments` field, now populated by
+    `VapiProvider` from Vapi's own `call.messages`/`secondsFromStart` (real per-message timing)
+    and by `PipecatProvider` from an optional `segments` field on pipecat-service's artifacts
+    response. When an engine only returns a flat transcript string, `parseFlatTranscript()` splits
+    it by speaker prefix (`AI:`/`User:`/etc.) into ordered segments with **honestly unfabricated**
+    timing (`start_ms`/`end_ms` left at 0/null - never invented spacing) unless the call's own real
+    `duration_seconds` lets the UI's "00:00 / 00:04 / ..." format spread them out
+    proportionally, which is documented as an estimate, never claimed as measured. A call with no
+    transcript at all gets an honest `status = 'failed'` row with a real reason - never skipped
+    silently and never a placeholder.
+  - **Recording**: actually **downloads** the provider's recording bytes and re-stores them via
+    the existing Phase 4 `StorageAdapter` (`storage_path`) - the provider's own URL is kept only
+    as `provider_recording_url` for reference, never treated as the permanent reference itself,
+    per spec section 22's signed-temporary-URL intent. Real `size_bytes`/`format` are recorded; no
+    recording available is an honest `failed` row, never fabricated.
+  - **AI call summary** (`services/generateCallSummary.ts`, spec section 24-partial - summaries
+    only, the full evaluator/scoring is Phase 11): once a transcript is ready, if `OPENAI_API_KEY`
+    is configured, sends the real transcript text to `lib/llm` with a structured-JSON prompt for
+    spec 23's exact fields, retries once on a malformed response, and **never creates a
+    `call_summaries` row at all** when no LLM is configured or parsing still fails after retry -
+    never a fabricated summary. The CDR UI shows an honest "Summary requires an LLM provider to be
+    configured" state instead.
+- **CDR API** (`routes/cdr.ts`, spec section 21): `GET /cdr` - real server-side-paginated,
+  filtered (date range, campaign, agent, disposition, phone, lead, status) list, joined via
+  `services/cdrQuery.ts`'s `buildCdrRows()` - a fixed small number of batched `IN (...)` lookups
+  per page (campaigns/leads/agents/agent versions/voices/phone numbers/dispositions/artifact-
+  existence), **never** one query per call regardless of page size. `GET /cdr/:callId` - full CDR
+  fields + ordered transcript segments + a recording reference + summary, or the honest per-field
+  empty state when an artifact isn't ready. `GET /cdr/:callId/recording/download` - real audio
+  bytes, transcoded to MP3 via a real `ffmpeg` child process when one is on `PATH`; **this
+  sandbox's runtime has no ffmpeg installed**, so it serves the real source format as-is with an
+  honest `Content-Type` instead of faking a conversion (see the environment-requirements note
+  below). `GET /cdr/search-transcript` - full-text search via `search_call_transcripts()`.
+  `POST /cdr/export` - queues a background job and returns immediately with a job id, **never**
+  generates synchronously (spec 21/65). `services/cdrExport.ts` runs the exact same
+  `iterateAllCdrRows()` query the list endpoint uses, streamed page-by-page (never the whole
+  result set loaded as one query), and writes a real CSV (RFC4180-escaped) or real `.xlsx` (via
+  `exceljs`) file through the existing `StorageAdapter`. `routes/exports.ts`: `GET /exports`
+  (history), `GET /exports/:id` (poll status + a download link once ready), `GET
+  /exports/:id/download` (real file bytes) - all org-scoped and `cdr.view`/`cdr.export`-gated.
+- Frontend: replaces the CDR sidebar placeholder with a real module - `pages/CdrPage.tsx` (server-
+  paginated/filterable table, an Export button queuing a real background job, an Export History
+  modal polling job status to a real download), `components/cdr/CallDetailDrawer.tsx` (full CDR
+  fields, a transcript viewer with speaker + `mm:ss` timestamp + text and an in-panel search box,
+  a recording player that loads the authenticated audio blob on demand for real play/pause/seek/
+  download, and the AI summary panel or the honest "requires an LLM provider" empty state).
+  `apiClient.ts` gained `getBlob()` for these authenticated binary downloads (neither an
+  `<audio>`/`<a>` tag nor the JSON-envelope helper can attach the bearer token or handle a
+  non-JSON body).
+- Tests: unit coverage for `parseFlatTranscript()` against a realistic multi-turn transcript
+  (alternate speaker labels, unlabeled continuation lines, no-invented-timing), `parseSummary
+  Response()`'s malformed-JSON/markdown-fence/missing-field handling, `cdrQuery`'s filter-building
+  and batched-join correctness (including cross-org isolation) against a seeded `fakeSupabase`
+  fixture, and `rowsToCsv()`/`rowsToXlsxBuffer()` producing real, byte-correct files from a small
+  fixture set (the XLSX test loads its own output back through `exceljs` and asserts real cell
+  values). A dedicated integration suite (`phase9.integration.test.ts`) drives a real campaign
+  call to a terminal state and proves the whole pipeline end to end (mocking only the
+  orchestration provider's outbound Vapi REST calls, the recording download URL, and the OpenAI
+  chat-completions call - documented test-only mocks): real segmented transcript rows, a real
+  downloaded-and-restored recording, and a real generated summary all land correctly; `GET /cdr`
+  and `GET /cdr/:callId` reflect them; the recording download route returns the actual bytes;
+  transcript search finds the call; `POST /cdr/export` queues a background job (never processes
+  synchronously) producing a real CSV with the correct row count and an audit log entry; and
+  cross-org isolation holds for CDR list/detail, recording download, and export status/download/
+  history, even via a guessed export id.
+
+### Phase 9 environment requirements
+
+No new required variables - reuses `OPENAI_API_KEY` (Phase 3) for summaries, purely optional (no
+summary row is ever created without it) and the existing `StorageAdapter`/orchestration-provider
+plumbing for everything else. Real MP3 transcoding on `GET /cdr/:callId/recording/download`
+requires an `ffmpeg` binary on the backend process's `PATH`; **this sandbox's runtime does not have
+ffmpeg installed**, so that route currently serves each recording's real source format (whatever
+the orchestration provider originally returned) with an honest `Content-Type` rather than faking a
+conversion - installing `ffmpeg` (e.g. `apt install ffmpeg` on Debian/Ubuntu, or the Railway
+service's own buildpack equivalent) is a deployment-time addition with zero code changes needed.
+Recording/export "signed download URL" per spec section 22 is, in this build, an authenticated
+`GET /api/v1/cdr/:callId/recording/download` / `GET /api/v1/exports/:id/download` route rather
+than a bearer-token-free temporary link - a real signed-URL mechanism needs production S3-
+compatible or Supabase Storage (still Phase 4's documented `LocalDiskStorageAdapter` limitation),
+which is not live in this sandbox.
+
 **Explicitly NOT built yet** (deferred to later phases):
 
 - Redis/BullMQ - Phase 7's campaign dispatcher runs today as a documented in-process `setInterval`
   drop-in (see above); migrating it to a real queue is Phase 15 infra work, not a logic change
 - Live Monitor (listen/barge/whisper on live calls) - Vapi's real `monitor.listenUrl`/`controlUrl`
   are already relayed by `getLiveMonitorUrls()`, but the UI to actually use them is Phase 10
-- CDR (call detail records) UI, call history/recordings/transcripts on the lead detail page -
-  Phase 6 correctly ingests and stores raw transcript/recording references in `call_events`/
-  provider artifact retrieval, but the structured, queryable transcript tables and CDR UI are
-  Phase 9
 - Inbound Routes, Queues (inbound call routing, ring groups)
 - Messaging
 - Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake)
@@ -654,11 +758,12 @@ sandbox (no real phone calls are placed anywhere in this build).
   above - specifically so this later migration is mechanical for all three)
 - Real, production S3-compatible object storage (master spec section 22) - Phase 4 adds the first
   real implementation (`LocalDiskStorageAdapter`, see above) for voice-preview audio and cloning
-  samples, but it is explicitly local-disk, not durable/replicated production storage; uploaded
-  import files and knowledge-base documents from Phases 2-3 still use the synthetic
-  `memory:<...>` locator and are never persisted - this is also why knowledge-document "reprocess"
-  in this build resets status and asks for a fresh upload rather than fabricating a re-embed from
-  bytes that were never persisted
+  samples, and Phase 9 reuses it for real call recordings and CDR exports (see its
+  environment-requirements note for exactly what that means for "signed download URLs"), but it is
+  explicitly local-disk, not durable/replicated production storage; uploaded import files and
+  knowledge-base documents from Phases 2-3 still use the synthetic `memory:<...>` locator and are
+  never persisted - this is also why knowledge-document "reprocess" in this build resets status and
+  asks for a fresh upload rather than fabricating a re-embed from bytes that were never persisted
 - A second LLM/embedding provider - only `OpenAIProvider` is implemented; `LLMProviderAdapter` is
   provider-agnostic so a second one can be added without touching call sites
 - Actually deploying/running the OmniVoice or VoxCPM models on any GPU, serverless or otherwise -
@@ -948,6 +1053,25 @@ were verified for real in both:
      timestamp values at their millisecond-separator dot - neither affects the real Postgres/RLS
      verification in point 1 above, only the in-memory test double. The full monorepo `pnpm run
      build`/`test`/`lint`/`typecheck` all pass clean after this phase (240 backend tests total).
+   - Phase 9: `apps/backend/src/phase9.integration.test.ts` (6 tests) plus
+     `apps/backend/src/services/processCallArtifacts.test.ts` (5 unit tests),
+     `apps/backend/src/services/generateCallSummary.test.ts` (5 unit tests),
+     `apps/backend/src/services/cdrQuery.test.ts` (8 unit tests) and
+     `apps/backend/src/services/cdrExport.test.ts` (4 unit tests) - see the "Phase 9" section above
+     for exactly what each integration test proves (real transcript/recording/summary ingestion
+     off a real terminal call, CDR list/detail reflecting them, real recording bytes served back,
+     transcript search, a real background CSV export with the correct row count and audit log
+     entry, and cross-org isolation across CDR/recording/export access, including via a guessed
+     export id). Phase 9 added 2 new migrations (36 total: the original 34 plus
+     `00000000000035_phase9_cdr.sql`/`00000000000036_phase9_rls_policies.sql`), applied cleanly
+     both incrementally on top of the existing Phase 1-8 verification database and from a
+     completely fresh database (all 36 migrations, in order, auth stub included) - both runs land
+     on **48 tables, every one with RLS enabled except the same pre-existing `users` table gap
+     already present since Phase 1** (confirmed identical on both the incremental and fresh runs,
+     not a Phase 9 regression); the permission catalog is unchanged at 30 (`cdr.view`/`cdr.export`
+     were already seeded in Phase 1); `search_call_transcripts()` is confirmed present alongside
+     `match_knowledge_chunks()`. The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all
+     pass clean after this phase (268 backend tests total).
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
@@ -968,7 +1092,17 @@ service's own README for exactly what it does and doesn't verify. Same for Phase
 webhook handling: `services/toolCallHandler.ts`'s parsing is built from Vapi's currently documented
 `tool-calls` message shape (`toolCallList`/`toolCalls`, `function.name`/`function.arguments`) and
 exercised against synthetic fixtures, never a live Vapi assistant actually invoking a configured
-function during a real call - no real phone call is placed anywhere in this build.
+function during a real call - no real phone call is placed anywhere in this build. Same for Phase
+9's artifact ingestion: `VapiProvider.getArtifacts()`'s real-per-message-timing path
+(`call.messages`/`secondsFromStart`) is built from Vapi's currently documented call-object shape
+but never exercised against a live Vapi call, and no real audio file was ever downloaded from a
+live provider recording URL here - the download/re-store path (`services/
+processCallArtifacts.ts`'s `ingestRecording()`) is exercised end to end against a mocked `fetch`
+serving real bytes in `phase9.integration.test.ts` (so the actual fetch-then-`StorageAdapter.
+putObject()`-then-serve-back code path is real and tested, just not against a live provider URL).
+MP3 transcoding via `ffmpeg` is written but **not exercised** in this sandbox since no `ffmpeg`
+binary is installed here (`maybeTranscodeToMp3()`'s ENOENT fallback path is what actually runs in
+every test and in this deployment) - see the Phase 9 environment-requirements note above.
 
 If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
