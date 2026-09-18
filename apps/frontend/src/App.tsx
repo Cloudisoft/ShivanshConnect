@@ -37,6 +37,7 @@ import { ComplianceSettingsPage } from './pages/settings/ComplianceSettingsPage'
 import { IntegrationsSettingsPage } from './pages/settings/IntegrationsSettingsPage';
 import { WebhookEventsSettingsPage } from './pages/settings/WebhookEventsSettingsPage';
 import { ExportHistorySettingsPage } from './pages/settings/ExportHistorySettingsPage';
+import { SystemHealthSettingsPage } from './pages/settings/SystemHealthSettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 const placeholderNavItems = NAV_ITEMS.filter((item) => !item.builtInPhase1);
@@ -87,6 +88,7 @@ export default function App(): JSX.Element {
             <Route path="integrations" element={<IntegrationsSettingsPage />} />
             <Route path="webhook-events" element={<WebhookEventsSettingsPage />} />
             <Route path="exports" element={<ExportHistorySettingsPage />} />
+            <Route path="system-health" element={<SystemHealthSettingsPage />} />
           </Route>
 
           {placeholderNavItems.map((item) => (

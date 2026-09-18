@@ -48,3 +48,28 @@ export function useReplayWebhookEvent() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['webhook-events'] }),
   });
 }
+
+export interface SystemHealthComponent {
+  component: string;
+  status: 'connected' | 'warning' | 'error' | 'not_configured';
+  detail: string;
+  lastCheckedAt: string;
+}
+
+export interface SystemHealth {
+  overall: 'connected' | 'warning' | 'error';
+  checked_at: string;
+  components: SystemHealthComponent[];
+}
+
+/** Phase 15: GET /admin/health (spec section 90). No auto-refresh by
+ * default - a health page is something an admin looks at on demand and
+ * can refresh explicitly, never something that should keep re-hitting
+ * every configured provider's stored status on a timer. */
+export function useSystemHealth() {
+  return useQuery({
+    queryKey: ['admin-health'],
+    queryFn: () => api.get<SystemHealth>('/admin/health'),
+    refetchOnWindowFocus: false,
+  });
+}

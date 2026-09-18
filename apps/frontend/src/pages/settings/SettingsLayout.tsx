@@ -12,6 +12,7 @@ const TABS = [
   { path: '/settings/integrations', label: 'Integrations', permission: null },
   { path: '/settings/webhook-events', label: 'Webhook Events', permission: 'cdr.view' },
   { path: '/settings/exports', label: 'Export History', permission: 'leads.view' },
+  { path: '/settings/system-health', label: 'System Health', permission: 'settings.manage' },
 ];
 
 export function SettingsLayout(): JSX.Element {
