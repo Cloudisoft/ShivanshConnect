@@ -10,5 +10,6 @@ coverage/
 .turbo/
 supabase/.branches/
 supabase/.temp/
+apps/backend/.data/
 .vscode/
 *.tsbuildinfo
