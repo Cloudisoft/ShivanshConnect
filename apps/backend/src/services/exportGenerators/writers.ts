@@ -25,7 +25,7 @@ function csvEscape(value: unknown): string {
 
 /** Pure, directly-unit-testable: turns any row/column shape into a real
  * RFC4180 CSV string (header row + one data row per input row). */
-export function writeCsv<T extends Record<string, unknown>>(rows: T[], columns: ExportColumn<T>[]): string {
+export function writeCsv<T extends object>(rows: T[], columns: ExportColumn<T>[]): string {
   const header = columns.map((c) => csvEscape(c.header)).join(',');
   const lines = rows.map((row) => columns.map((c) => csvEscape(row[c.key])).join(','));
   return [header, ...lines].join('\r\n') + (rows.length > 0 ? '\r\n' : '');
@@ -33,7 +33,7 @@ export function writeCsv<T extends Record<string, unknown>>(rows: T[], columns: 
 
 /** Pure, directly-unit-testable: turns any row/column shape into a real
  * .xlsx workbook buffer via exceljs. */
-export async function writeXlsx<T extends Record<string, unknown>>(
+export async function writeXlsx<T extends object>(
   sheetName: string,
   rows: T[],
   columns: ExportColumn<T>[],

@@ -29,3 +29,11 @@ export const listMessagesQuerySchema = z.object({
   page_size: z.coerce.number().int().min(1).max(100).default(50),
   status: z.string().optional(),
 });
+
+// POST /api/v1/sms-campaigns/:id/messages/export,
+// POST /api/v1/email-campaigns/:id/messages/export
+export const exportMessagesSchema = z.object({
+  type: z.enum(['sms_messages_csv', 'sms_messages_xlsx', 'email_messages_csv', 'email_messages_xlsx']),
+  filters: z.object({ status: z.string().optional() }).default({}),
+});
+export type ExportMessagesInput = z.infer<typeof exportMessagesSchema>;

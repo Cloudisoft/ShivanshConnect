@@ -21,3 +21,9 @@ export const listLeadListsQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(200).optional(),
 });
 export type ListLeadListsQuery = z.infer<typeof listLeadListsQuerySchema>;
+
+// POST /api/v1/lead-lists/:id/export
+export const exportLeadListSchema = z.object({
+  type: z.enum(['leads_csv', 'leads_xlsx']),
+});
+export type ExportLeadListInput = z.infer<typeof exportLeadListSchema>;

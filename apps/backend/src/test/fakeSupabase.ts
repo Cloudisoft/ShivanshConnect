@@ -558,7 +558,7 @@ export function createFakeSupabase() {
       case 'call_summaries':
         return { key_points: [], customer_intent: null, objections: null, questions: null, next_action: null, outcome: null, generated_at: new Date().toISOString() };
       case 'exports':
-        return { filters: {}, status: 'pending', file_storage_path: null, row_count: null, failure_reason: null, completed_at: null };
+        return { filters: {}, entity_reference: {}, status: 'pending', file_storage_path: null, row_count: null, failure_reason: null, completed_at: null };
       case 'call_evaluations':
         return {
           scores: {},

@@ -6,6 +6,7 @@ import { ForbiddenError, NotFoundError, ValidationError } from '../lib/errors.js
 import {
   bulkAddLeadsSchema,
   createLeadSchema,
+  exportLeadsSchema,
   leadBulkActionSchema,
   listLeadsQuerySchema,
   updateLeadSchema,
@@ -15,6 +16,7 @@ import { normalizePhoneNumber } from '../lib/phone.js';
 import { findDncMatches, findExistingLeadPhones, isOnDncList } from '../lib/leadHelpers.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
+import { queueLeadsExport } from '../services/exportGenerators/leadsExport.js';
 
 const LEAD_COLUMNS =
   'id, organization_id, lead_list_id, first_name, last_name, company, phone_original, phone_normalized, country_code, email, address, city, state, zip, country, status, attempts, last_called_at, last_disposition, next_callback_at, is_dnc, dnc_reason, custom_fields, created_at, updated_at';
@@ -276,6 +278,32 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
       dnc: results.filter((r) => r.status === 'dnc').length,
       results,
     });
+  });
+
+  // ---------------------------------------------------------------
+  // POST /api/v1/leads/export - queues a background CSV/XLSX export of
+  // leads matching the exact same filter shape GET /leads supports
+  // (Phase 14, spec section 64/65 generalized beyond CDR). Reuses
+  // leads.view (no separate leads.export key exists in the Phase 1
+  // permission catalog).
+  // ---------------------------------------------------------------
+  app.post('/export', { preHandler: requirePermission('leads.view') }, async (req) => {
+    const body = exportLeadsSchema.parse(req.body);
+    const orgId = req.user!.organizationId;
+
+    const exportRecord = await queueLeadsExport(orgId, req.user!.id, body.type, body.filters);
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.LEADS_EXPORT_CREATED,
+      entityType: 'export',
+      entityId: exportRecord.id,
+      newValue: { type: body.type, filters: body.filters },
+      ipAddress: req.ip,
+    });
+
+    return ok(exportRecord, { message: 'Export queued. Check its status via GET /api/v1/exports/:id.' });
   });
 
   // ---------------------------------------------------------------

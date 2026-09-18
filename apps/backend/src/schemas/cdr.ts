@@ -28,4 +28,17 @@ export const createExportSchema = z.object({
 export type CreateExportInput = z.infer<typeof createExportSchema>;
 
 // GET /exports
-export const listExportsQuerySchema = paginationSchema;
+export const listExportsQuerySchema = paginationSchema.extend({
+  type: z
+    .enum([
+      'cdr_csv',
+      'cdr_xlsx',
+      'leads_csv',
+      'leads_xlsx',
+      'sms_messages_csv',
+      'sms_messages_xlsx',
+      'email_messages_csv',
+      'email_messages_xlsx',
+    ])
+    .optional(),
+});

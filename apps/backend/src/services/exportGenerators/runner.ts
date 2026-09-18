@@ -17,7 +17,7 @@ async function markExport(supabase: Supabase, id: string, values: Record<string,
   await supabase.from('exports').update(values).eq('id', id);
 }
 
-export interface ExportRowSet<T extends Record<string, unknown>> {
+export interface ExportRowSet<T extends object> {
   rows: T[];
   columns: ExportColumn<T>[];
   sheetName: string;
@@ -27,12 +27,15 @@ export interface ExportRowSet<T extends Record<string, unknown>> {
  * returns immediately - no file generation happens inside this call.
  * `entityReference` is the optional `{ leadListId }`/`{ smsCampaignId }`/
  * etc pointer this export was scoped to (pass `null` for filter-only
- * exports like CDR's). */
+ * exports like CDR's). `filters` is deliberately typed loosely (any
+ * plain object) since each export type has its own, differently-shaped
+ * filter interface - it is only ever serialized into the `exports.
+ * filters` jsonb column here, never interpreted by this shared runner. */
 export async function queueExportJob(
   orgId: string,
   userId: string,
   type: ExportType,
-  filters: Record<string, unknown>,
+  filters: object,
   entityReference: Record<string, unknown> | null,
 ): Promise<ExportRecord> {
   const supabase = getSupabaseAdmin();
@@ -51,7 +54,7 @@ export async function queueExportJob(
  * storage, and marking the job ready/failed). Never throws to its caller
  * - any failure is captured as an honest `failed` row with a real reason,
  * exactly like Phase 9's `runExport()`. */
-export async function runExportJob<T extends Record<string, unknown>>(
+export async function runExportJob<T extends object>(
   exportId: string,
   isXlsx: boolean,
   buildRows: (exportRow: Record<string, any>) => Promise<ExportRowSet<T>>,
@@ -89,7 +92,7 @@ export async function runExportJob<T extends Record<string, unknown>>(
 /** Queues a job and schedules its processing via `setImmediate`, never
  * synchronously inside the caller's HTTP request - the shared shape every
  * `queue*Export()` function in this phase follows. */
-export function scheduleExportJob<T extends Record<string, unknown>>(
+export function scheduleExportJob<T extends object>(
   exportRecord: ExportRecord,
   isXlsx: boolean,
   buildRows: (exportRow: Record<string, any>) => Promise<ExportRowSet<T>>,

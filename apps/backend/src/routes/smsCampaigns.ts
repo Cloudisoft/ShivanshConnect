@@ -4,10 +4,11 @@ import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok, paginationMeta } from '../lib/response.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { uuidSchema } from '../schemas/common.js';
-import { createSmsCampaignSchema, listMessagesQuerySchema, listSmsCampaignsQuerySchema, updateSmsCampaignSchema } from '../schemas/smsCampaigns.js';
+import { createSmsCampaignSchema, exportMessagesSchema, listMessagesQuerySchema, listSmsCampaignsQuerySchema, updateSmsCampaignSchema } from '../schemas/smsCampaigns.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
 import { materializeSmsMessages } from '../services/smsDispatcher.js';
+import { queueSmsMessagesExport } from '../services/exportGenerators/smsMessagesExport.js';
 import type { MessagingCounts } from '@shivanshconnect/shared';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
@@ -207,5 +208,22 @@ export async function smsCampaignRoutes(app: FastifyInstance): Promise<void> {
     const { data, error, count } = await builder;
     if (error) throw error;
     return ok(data ?? [], { pagination: paginationMeta(query.page, query.page_size, count ?? 0) });
+  });
+
+  // POST /:id/messages/export - queues a background CSV/XLSX export of
+  // this campaign's message-level records (Phase 14, spec section 40).
+  app.post('/:id/messages/export', async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const body = exportMessagesSchema.parse(req.body);
+    if (!body.type.startsWith('sms_messages_')) throw new ValidationError('type must be sms_messages_csv or sms_messages_xlsx.');
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    await getOwnedSmsCampaign(supabase, id, orgId);
+
+    const exportRecord = await queueSmsMessagesExport(orgId, req.user!.id, body.type, id, body.filters);
+
+    await writeAuditLog({ organizationId: orgId, userId: req.user!.id, action: AUDIT_ACTIONS.SMS_MESSAGES_EXPORT_CREATED, entityType: 'export', entityId: exportRecord.id, newValue: { type: body.type, sms_campaign_id: id }, ipAddress: req.ip });
+    return ok(exportRecord, { message: 'Export queued. Check its status via GET /api/v1/exports/:id.' });
   });
 }

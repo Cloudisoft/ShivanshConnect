@@ -5,10 +5,11 @@ import { ok, paginationMeta } from '../lib/response.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { uuidSchema } from '../schemas/common.js';
 import { createEmailCampaignSchema, listEmailCampaignsQuerySchema, updateEmailCampaignSchema } from '../schemas/emailCampaigns.js';
-import { listMessagesQuerySchema } from '../schemas/smsCampaigns.js';
+import { exportMessagesSchema, listMessagesQuerySchema } from '../schemas/smsCampaigns.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS, type MessagingCounts } from '@shivanshconnect/shared';
 import { materializeEmailMessages } from '../services/emailDispatcher.js';
+import { queueEmailMessagesExport } from '../services/exportGenerators/emailMessagesExport.js';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
@@ -199,5 +200,22 @@ export async function emailCampaignRoutes(app: FastifyInstance): Promise<void> {
     const { data, error, count } = await builder;
     if (error) throw error;
     return ok(data ?? [], { pagination: paginationMeta(query.page, query.page_size, count ?? 0) });
+  });
+
+  // POST /:id/messages/export - queues a background CSV/XLSX export of
+  // this campaign's message-level records (Phase 14, spec section 41).
+  app.post('/:id/messages/export', async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const body = exportMessagesSchema.parse(req.body);
+    if (!body.type.startsWith('email_messages_')) throw new ValidationError('type must be email_messages_csv or email_messages_xlsx.');
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    await getOwnedEmailCampaign(supabase, id, orgId);
+
+    const exportRecord = await queueEmailMessagesExport(orgId, req.user!.id, body.type, id, body.filters);
+
+    await writeAuditLog({ organizationId: orgId, userId: req.user!.id, action: AUDIT_ACTIONS.EMAIL_MESSAGES_EXPORT_CREATED, entityType: 'export', entityId: exportRecord.id, newValue: { type: body.type, email_campaign_id: id }, ipAddress: req.ip });
+    return ok(exportRecord, { message: 'Export queued. Check its status via GET /api/v1/exports/:id.' });
   });
 }

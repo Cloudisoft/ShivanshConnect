@@ -5,6 +5,7 @@ import { ok, paginationMeta } from '../lib/response.js';
 import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import {
   createLeadListSchema,
+  exportLeadListSchema,
   listLeadListsQuerySchema,
   updateLeadListSchema,
 } from '../schemas/leadLists.js';
@@ -12,6 +13,7 @@ import { uuidSchema } from '../schemas/common.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
 import { parseAndValidateImportJob } from '../services/importLeads.js';
+import { queueLeadsExport } from '../services/exportGenerators/leadsExport.js';
 
 export async function leadListRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', authenticate);
@@ -274,5 +276,36 @@ export async function leadListRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return reply.status(202).send(ok(job, { message: 'Import started.' }));
+  });
+
+  // ---------------------------------------------------------------
+  // POST /api/v1/lead-lists/:id/export - queues a background CSV/XLSX
+  // export of every lead in this list (Phase 14). Scoped via
+  // entity_reference.leadListId so the Export History view can link
+  // straight back to this list.
+  // ---------------------------------------------------------------
+  app.post('/:id/export', { preHandler: requirePermission('leads.view') }, async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const body = exportLeadListSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const { data: list } = await supabase.from('lead_lists').select('id, organization_id').eq('id', id).maybeSingle();
+    if (!list || list.organization_id !== orgId) throw new NotFoundError('Lead list not found.');
+
+    const exportRecord = await queueLeadsExport(orgId, req.user!.id, body.type, { lead_list_id: id }, { leadListId: id });
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.LEADS_EXPORT_CREATED,
+      entityType: 'export',
+      entityId: exportRecord.id,
+      newValue: { type: body.type, lead_list_id: id },
+      ipAddress: req.ip,
+    });
+
+    return ok(exportRecord, { message: 'Export queued. Check its status via GET /api/v1/exports/:id.' });
   });
 }

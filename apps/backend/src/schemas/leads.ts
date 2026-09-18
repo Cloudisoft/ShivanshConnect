@@ -90,3 +90,10 @@ export const leadBulkActionSchema = z
     message: 'lead_list_id is required for move_to_list / assign_list actions.',
   });
 export type LeadBulkActionRequest = z.infer<typeof leadBulkActionSchema>;
+
+// POST /api/v1/leads/export
+export const exportLeadsSchema = z.object({
+  type: z.enum(['leads_csv', 'leads_xlsx']),
+  filters: leadFilterSchema.default({}),
+});
+export type ExportLeadsInput = z.infer<typeof exportLeadsSchema>;
