@@ -64,6 +64,20 @@ describe('Phase 15: failure recovery (process restart, crash isolation, timeout 
     const { registerTerminalCallHandler } = await import('../lib/callStateMachine.js');
     const { handleTerminalCall } = await import('../services/callTerminalHandler.js');
     registerTerminalCallHandler(handleTerminalCall);
+    // The 'process-restart recovery' test below starts the REAL
+    // dispatcher interval (services/campaignDispatcher.ts's own
+    // setInterval, not a stand-in), which - exactly like production -
+    // ticks every campaign in this database with status='running', not
+    // only this file's own. This shared load-test database accumulates
+    // 'running' campaigns left behind by other loadtest files' own runs
+    // (they intentionally never mark their campaigns 'completed' - that
+    // bookkeeping is out of scope for what each of those tests proves).
+    // Pausing every pre-existing running campaign here is test hygiene,
+    // never a production code change: it keeps this file's own restart
+    // test deterministic regardless of what ran before it in this shared
+    // database, the same way a real deployment's dispatcher would
+    // correctly (and harmlessly) also tick those other real campaigns.
+    await adapter.pool.query(`UPDATE public.campaigns SET status = 'paused' WHERE status = 'running'`);
   }, 60_000);
 
   afterAll(async () => {
@@ -91,12 +105,33 @@ describe('Phase 15: failure recovery (process restart, crash isolation, timeout 
     // real deployment runs (see campaignDispatcher.ts's
     // startCampaignDispatcher()), never a different code path built for
     // this test.
-    startCampaignDispatcher();
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    stopCampaignDispatcher();
+    // Polls (rather than a fixed sleep) until this campaign's own
+    // claimed-lead count stops changing - robust to however long the
+    // real dispatcher's own sequential per-lead origination work actually
+    // takes on this machine, instead of gambling on a fixed wait.
+    async function waitForDialingCountToStabilize(): Promise<number> {
+      let previous = -1;
+      let stableTicks = 0;
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const { data } = await supabase.from('campaign_leads').select('id').eq('campaign_id', campaignId).eq('status', 'dialing');
+        const count = (data ?? []).length;
+        if (count === previous) {
+          stableTicks += 1;
+          if (stableTicks >= 3) return count; // unchanged for 300ms - settled
+        } else {
+          stableTicks = 0;
+        }
+        previous = count;
+      }
+      return previous;
+    }
 
-    const { data: afterFirstStart } = await supabase.from('campaign_leads').select('id, lead_id').eq('campaign_id', campaignId).eq('status', 'dialing');
-    expect(afterFirstStart).toHaveLength(8);
+    startCampaignDispatcher();
+    const afterFirstStartCount = await waitForDialingCountToStabilize();
+    stopCampaignDispatcher();
+    expect(afterFirstStartCount).toBe(8);
 
     // "Process 2" (post-restart): starting the interval again is the
     // ENTIRE recovery mechanism - nothing else needs to run. Capacity is
@@ -105,7 +140,7 @@ describe('Phase 15: failure recovery (process restart, crash isolation, timeout 
     // memory) - a correctly-resumed dispatcher must see that real DB
     // state and dispatch 0 more, not forget about them and over-dispatch.
     startCampaignDispatcher();
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await waitForDialingCountToStabilize();
     stopCampaignDispatcher();
 
     const { data: dialingLeads } = await supabase.from('campaign_leads').select('id, lead_id').eq('campaign_id', campaignId).eq('status', 'dialing');
