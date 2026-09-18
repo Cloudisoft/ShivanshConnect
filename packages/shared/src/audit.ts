@@ -102,6 +102,11 @@ export const AUDIT_ACTIONS = {
 
   CDR_EXPORT_CREATED: 'cdr.export_created',
 
+  // Phase 14: the export engine generalized beyond CDR.
+  LEADS_EXPORT_CREATED: 'leads.export_created',
+  SMS_MESSAGES_EXPORT_CREATED: 'sms_messages.export_created',
+  EMAIL_MESSAGES_EXPORT_CREATED: 'email_messages.export_created',
+
   // Phase 10: Live Monitor supervisor actions (listen/whisper/barge/
   // transfer/end) - every one of these is audit logged with who did what
   // to which call and when (master spec sections 18/19).

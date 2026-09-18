@@ -7,7 +7,21 @@
 export type TranscriptStatus = 'pending' | 'ready' | 'failed';
 export type RecordingStatus = 'pending' | 'downloading' | 'ready' | 'failed';
 export type TranscriptSpeaker = 'ai' | 'caller';
-export type ExportType = 'cdr_csv' | 'cdr_xlsx';
+/**
+ * Phase 14: generalized beyond CDR to Leads, Lead Lists (which export as
+ * `leads_*`, scoped via `entity_reference.leadListId`), and SMS/Email
+ * campaign messages - the SAME `exports` job table/engine Phase 9 built,
+ * never a second one.
+ */
+export type ExportType =
+  | 'cdr_csv'
+  | 'cdr_xlsx'
+  | 'leads_csv'
+  | 'leads_xlsx'
+  | 'sms_messages_csv'
+  | 'sms_messages_xlsx'
+  | 'email_messages_csv'
+  | 'email_messages_xlsx';
 export type ExportStatus = 'pending' | 'processing' | 'ready' | 'failed';
 
 export interface CallTranscript {
@@ -113,6 +127,11 @@ export interface ExportRecord {
   organization_id: string;
   type: ExportType;
   filters: Record<string, unknown>;
+  // Phase 14: an optional pointer to the one entity this export was
+  // scoped to (e.g. { leadListId } or { smsCampaignId }), separate from
+  // `filters`. Always present (defaults to {}) once Phase 14's migration
+  // has run.
+  entity_reference: Record<string, unknown>;
   status: ExportStatus;
   file_storage_path: string | null;
   row_count: number | null;

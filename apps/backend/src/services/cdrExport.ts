@@ -2,8 +2,9 @@
  * Phase 9: background CDR export jobs (master spec sections 21/65).
  *
  * `queueCdrExport()` inserts a `pending` `exports` row and returns
- * immediately - the actual file generation runs in `setImmediate`
- * (the same fire-and-forget-but-scheduled async pattern every prior
+ * immediately - the actual file generation runs via the shared
+ * Phase 14 `services/exportGenerators/runner.ts` engine (the same
+ * fire-and-forget-but-scheduled `setImmediate` pattern every prior
  * phase's ingestion services use), never synchronously inside the HTTP
  * request that queued it (spec 21/65's explicit "exports must be
  * background jobs" requirement).
@@ -11,18 +12,26 @@
  * Both CSV and XLSX are generated from the EXACT SAME filtered query the
  * CDR list endpoint uses (services/cdrQuery.ts's `iterateAllCdrRows()`),
  * streamed page-by-page rather than ever materializing the full result
- * set as one in-memory array - the same 10k+-row performance discipline
- * as every prior phase's bulk work.
+ * set as one in-memory array until it's handed to the shared writer - the
+ * same 10k+-row performance discipline as every prior phase's bulk work.
+ *
+ * Phase 14 note: the actual CSV/XLSX file-writing and the
+ * queue-job/run-job/mark-ready-or-failed/store-via-StorageAdapter
+ * machinery below were extracted into `services/exportGenerators/
+ * writers.ts` and `services/exportGenerators/runner.ts` so Leads, SMS
+ * message and email message exports reuse the exact same engine instead
+ * of forking it. `rowsToCsv()`/`rowsToXlsxBuffer()`/`CDR_EXPORT_COLUMNS`
+ * keep their original signatures and behavior unchanged - this refactor
+ * is a regression-risk area, and `cdrExport.test.ts` (unchanged) is what
+ * proves it.
  */
-import ExcelJS from 'exceljs';
 import { getSupabaseAdmin } from '../lib/supabase.js';
-import { getStorageAdapter } from '../lib/storage/index.js';
 import { iterateAllCdrRows, type CdrFilters } from './cdrQuery.js';
+import { queueExportJob, runExportJob, scheduleExportJob } from './exportGenerators/runner.js';
+import { writeCsv, writeXlsx, type ExportColumn } from './exportGenerators/writers.js';
 import type { CdrRow, ExportRecord, ExportType } from '@shivanshconnect/shared';
 
-type Supabase = ReturnType<typeof getSupabaseAdmin>;
-
-export const CDR_EXPORT_COLUMNS: Array<{ key: keyof CdrRow; header: string }> = [
+export const CDR_EXPORT_COLUMNS: Array<ExportColumn<CdrRow>> = [
   { key: 'call_id', header: 'Call ID' },
   { key: 'provider_call_id', header: 'Provider Call ID' },
   { key: 'campaign_name', header: 'Campaign' },
@@ -48,91 +57,41 @@ export const CDR_EXPORT_COLUMNS: Array<{ key: keyof CdrRow; header: string }> = 
   { key: 'created_at', header: 'Created At' },
 ];
 
-function csvEscape(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  const str = String(value);
-  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
-  return str;
-}
-
 /** Pure, directly-unit-testable: turns a fixed set of CdrRow fixtures into
  * a real RFC4180 CSV string (header row + one data row per call). */
 export function rowsToCsv(rows: CdrRow[]): string {
-  const header = CDR_EXPORT_COLUMNS.map((c) => csvEscape(c.header)).join(',');
-  const lines = rows.map((row) => CDR_EXPORT_COLUMNS.map((c) => csvEscape(row[c.key])).join(','));
-  return [header, ...lines].join('\r\n') + (rows.length > 0 ? '\r\n' : '');
+  return writeCsv(rows, CDR_EXPORT_COLUMNS);
 }
 
 /** Pure, directly-unit-testable: turns a fixed set of CdrRow fixtures into
  * a real .xlsx workbook buffer via exceljs. */
 export async function rowsToXlsxBuffer(rows: CdrRow[]): Promise<Buffer> {
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('CDR');
-  sheet.columns = CDR_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.key as string, width: 20 }));
-  for (const row of rows) sheet.addRow(row);
-  const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer);
+  return writeXlsx('CDR', rows, CDR_EXPORT_COLUMNS);
 }
 
-async function markExport(supabase: Supabase, id: string, values: Record<string, unknown>): Promise<void> {
-  await supabase.from('exports').update(values).eq('id', id);
+async function buildCdrExportRows(exportRow: Record<string, any>): Promise<{ rows: CdrRow[]; columns: typeof CDR_EXPORT_COLUMNS; sheetName: string }> {
+  const rows: CdrRow[] = [];
+  await iterateAllCdrRows(getSupabaseAdmin(), exportRow.organization_id, exportRow.filters as CdrFilters, async (page) => {
+    rows.push(...page);
+  });
+  return { rows, columns: CDR_EXPORT_COLUMNS, sheetName: 'CDR' };
 }
 
-/** Runs one export job end to end: streams every matching CDR row through
- * the shared query builder, accumulates them for the chosen format (CSV/
- * XLSX generation both need the full ordered row set to write a single
- * file - see this module's header comment for the streaming-per-PAGE
- * discipline that keeps the underlying query bounded even though the
- * final file itself is built once), stores the real file via the
- * existing StorageAdapter, and marks the job ready/failed. Never throws
- * to its caller (queueCdrExport() schedules this via setImmediate) - any
- * failure is captured as an honest `failed` row with a real reason. */
-async function runExport(exportId: string): Promise<void> {
+/** Runs one CDR export job end to end - kept for direct unit-testability/
+ * backward compatibility with anything importing it directly; delegates
+ * to the shared runner. */
+export async function runExport(exportId: string): Promise<void> {
   const supabase = getSupabaseAdmin();
-  const { data: exportRow } = await supabase.from('exports').select('*').eq('id', exportId).maybeSingle();
-  if (!exportRow) return;
-
-  await markExport(supabase, exportId, { status: 'processing' });
-
-  try {
-    const rows: CdrRow[] = [];
-    const rowCount = await iterateAllCdrRows(supabase, exportRow.organization_id, exportRow.filters as CdrFilters, async (page) => {
-      rows.push(...page);
-    });
-
-    const isXlsx = exportRow.type === 'cdr_xlsx';
-    const buffer = isXlsx ? await rowsToXlsxBuffer(rows) : Buffer.from(rowsToCsv(rows), 'utf-8');
-    const extension = isXlsx ? 'xlsx' : 'csv';
-    const contentType = isXlsx ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv';
-
-    const storage = getStorageAdapter();
-    const stored = await storage.putObject(`exports/${exportRow.organization_id}/${exportId}.${extension}`, buffer, contentType);
-
-    await markExport(supabase, exportId, { status: 'ready', file_storage_path: stored.path, row_count: rowCount, completed_at: new Date().toISOString() });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Export failed for an unknown reason.';
-    await markExport(supabase, exportId, { status: 'failed', failure_reason: message, completed_at: new Date().toISOString() });
-  }
+  const { data: exportRow } = await supabase.from('exports').select('type').eq('id', exportId).maybeSingle();
+  const isXlsx = exportRow?.type === 'cdr_xlsx';
+  return runExportJob(exportId, isXlsx, buildCdrExportRows);
 }
 
 /** Queues a new CDR export job and returns immediately - the file itself
- * is generated by `runExport()` on a later tick (setImmediate), never
- * synchronously inside the request that called this. */
+ * is generated on a later tick (setImmediate), never synchronously inside
+ * the request that called this. */
 export async function queueCdrExport(orgId: string, userId: string, type: ExportType, filters: CdrFilters): Promise<ExportRecord> {
-  const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
-    .from('exports')
-    .insert({ organization_id: orgId, type, filters, status: 'pending', created_by: userId })
-    .select('*')
-    .single();
-  if (error) throw error;
-
-  setImmediate(() => {
-    runExport(data.id).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.error('runExport failed unexpectedly for export', data.id, err);
-    });
-  });
-
-  return data as ExportRecord;
+  const record = await queueExportJob(orgId, userId, type, filters, null);
+  scheduleExportJob(record, type === 'cdr_xlsx', buildCdrExportRows);
+  return record;
 }
