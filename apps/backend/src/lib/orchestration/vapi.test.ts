@@ -59,6 +59,48 @@ describe('VapiProvider', () => {
     expect(body.voice).toEqual({ provider: 'elevenlabs', voiceId: 'voice-123' });
     expect(body.maxDurationSeconds).toBe(600);
     expect(body.forwardingPhoneNumber).toBe('+14845550000');
+    // Conversational-quality config (Bug 2): real, currently-documented
+    // Vapi fields for natural turn-taking and a sane silence timeout,
+    // always set.
+    expect(body.startSpeakingPlan).toEqual({ waitSeconds: 0.4, smartEndpointingPlan: { provider: 'vapi' } });
+    expect(body.silenceTimeoutSeconds).toBe(30);
+    // No voicemailDetection/backgroundDenoisingEnabled without config.
+    expect(body.voicemailDetection).toBeUndefined();
+    expect(body.backgroundDenoisingEnabled).toBeUndefined();
+  });
+
+  it('createAssistant() forwards voicemail detection and background denoising when configured (Bug 2)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'asst_123' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new VapiProvider('sk-test');
+    await provider.createAssistant({
+      ...BASE_CONFIG,
+      voicemailDetection: { enabled: true, leaveVoicemail: true, message: 'Please call us back at 555-0100.' },
+      backgroundNoise: 'medium',
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.voicemailDetection).toEqual({ provider: 'vapi' });
+    expect(body.voicemailMessage).toBe('Please call us back at 555-0100.');
+    expect(body.backgroundDenoisingEnabled).toBe(true);
+  });
+
+  it('createAssistant() omits voicemailMessage when leaveVoicemail is false, but still enables detection', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'asst_123' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new VapiProvider('sk-test');
+    await provider.createAssistant({
+      ...BASE_CONFIG,
+      voicemailDetection: { enabled: true, leaveVoicemail: false, message: 'Never sent.' },
+      backgroundNoise: 'off',
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.voicemailDetection).toEqual({ provider: 'vapi' });
+    expect(body.voicemailMessage).toBeUndefined();
+    expect(body.backgroundDenoisingEnabled).toBe(false);
   });
 
   it('createCall() requires an assistant id and an imported phone number id', async () => {
@@ -101,6 +143,32 @@ describe('VapiProvider', () => {
     expect(body.phoneNumberId).toBe('vapi-pn-1');
     expect(body.customer).toEqual({ number: '+14845552222' });
     expect(body.metadata).toEqual({ internalCallId: 'internal-call-1', organizationId: 'org-1' });
+    expect(body.assistantOverrides).toBeUndefined();
+  });
+
+  it('createCall() sends real assistantOverrides.firstMessage/model.messages when a per-lead override is resolved (Bug 1)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_abc', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new VapiProvider('sk-test');
+    await provider.createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: null,
+      firstMessageOverride: 'Hi, am I speaking with Priya?',
+      systemPromptOverride: 'You are a helpful sales agent. This lead works at Acme Inc.',
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.assistantOverrides).toEqual({
+      firstMessage: 'Hi, am I speaking with Priya?',
+      model: { messages: [{ role: 'system', content: 'You are a helpful sales agent. This lead works at Acme Inc.' }] },
+    });
   });
 
   it('transferCall() refuses a non-E.164 destination without calling the network', async () => {

@@ -71,6 +71,41 @@ def test_create_call_places_a_real_twilio_call_when_fully_configured(reset_setti
     assert get_res.json()["carrier_call_sid"] == "CA_test_123"
 
 
+def test_create_call_stores_first_message_and_system_prompt_overrides(reset_settings, monkeypatch):
+    """Bug 1 engine-parity regression: the per-lead personalization Node
+    resolves (callOrigination.ts's resolveCallPersonalization()) must
+    survive the trip into this service's call registry so build_pipeline()
+    can actually use it, instead of being silently dropped."""
+    reset_settings.OPENAI_API_KEY = "sk-test"
+    reset_settings.DEEPGRAM_API_KEY = "dg-test"
+    reset_settings.ELEVENLABS_API_KEY = "el-test"
+    reset_settings.PUBLIC_MEDIA_STREAM_URL = "wss://pipecat.example.com"
+
+    async def fake_originate_twilio_call(*, account_sid, auth_token, from_e164, to_e164, stream_ws_url):
+        return OriginatedCall(carrier="twilio", carrier_call_sid="CA_test_123")
+
+    async def fake_post_event(**kwargs):
+        return None
+
+    monkeypatch.setattr(main_module, "originate_twilio_call", fake_originate_twilio_call)
+    monkeypatch.setattr(main_module, "post_event", fake_post_event)
+
+    body = dict(
+        VALID_TWILIO_BODY,
+        first_message_override="Hi, my name is Sarah from Fall Outreach. How are you doing today?",
+        system_prompt_override="You are a helpful sales agent. Ask for the caller's name.",
+    )
+    res = client.post("/calls", json=body)
+    assert res.status_code == 200
+    pipecat_call_id = res.json()["pipecat_call_id"]
+
+    from app.store import call_store
+
+    record = call_store.get(pipecat_call_id)
+    assert record.first_message_override == "Hi, my name is Sarah from Fall Outreach. How are you doing today?"
+    assert record.system_prompt_override == "You are a helpful sales agent. Ask for the caller's name."
+
+
 def test_get_unknown_call_is_404():
     res = client.get("/calls/pc_does_not_exist")
     assert res.status_code == 404

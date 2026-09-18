@@ -85,6 +85,30 @@ describe('PipecatProvider', () => {
     });
   });
 
+  it('createCall() forwards first_message_override/system_prompt_override for engine parity with Vapi (Bug 1)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ pipecat_call_id: 'pc_1', status: 'dialing' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new PipecatProvider('http://localhost:8100', 'internal-token');
+
+    await provider.createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'pipecat-agent-version:version-1',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: null,
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: null,
+      telephonyCredentials: { provider: 'twilio', accountSid: 'AC123', authToken: 'secret' },
+      firstMessageOverride: 'Hi, am I speaking with Priya?',
+      systemPromptOverride: 'You are a helpful sales agent. This lead works at Acme Inc.',
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.first_message_override).toBe('Hi, am I speaking with Priya?');
+    expect(body.system_prompt_override).toBe('You are a helpful sales agent. This lead works at Acme Inc.');
+  });
+
   it('createCall() requires telephonyCredentials for the pipecat engine (never a simulated call)', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
