@@ -1937,3 +1937,47 @@ If you have reliable Docker registry access, `supabase start` followed by `supab
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
 real hosted project - nothing about the migrations themselves depends on this sandbox's
 workaround.
+
+## Post-launch hardening
+
+A verification pass on the live, deployed system (real Vapi/Twilio/OpenAI/Cartesia credentials)
+found and fixed two concrete, production-impacting bugs, plus one Phase 7 wiring gap:
+
+1. **Per-lead variable substitution never actually worked on real calls.** `buildAssistantConfig()`
+   passed `version.system_prompt`/`greeting_template` RAW into the Vapi assistant object, which is
+   created ONCE per agent version and REUSED across every lead a campaign dials - `{{first_name}}`
+   etc. could never resolve per-call by baking it into a shared, cached assistant. Fixed by
+   `services/callOrigination.ts`'s `resolveCallPersonalization()`, which renders the real
+   greeting/system prompt per call (via the already-existing `lib/promptVariables.ts`'s
+   `renderTemplate()`, which was written in an earlier phase but never actually wired in here) and
+   sends it down as Vapi's real, documented per-call `assistantOverrides.firstMessage`/
+   `assistantOverrides.model.messages` on `POST /call` - overriding that one call without mutating
+   the shared assistant record. The same fix was mirrored into `PipecatProvider`/
+   `apps/pipecat-service` for engine parity (`first_message_override`/`system_prompt_override` on
+   the `/calls` payload, threaded through to `build_pipeline()`).
+2. **Named-vs-unnamed greeting branching.** A lead with a real `first_name` gets the campaign's own
+   greeting template rendered against their data (e.g. "Hi, am I speaking with Priya?"). A lead with
+   no name, or a manual call with no lead at all, gets a server-built generic fallback ("Hi, my name
+   is {voice} from {campaign/agent}. How are you doing today?") plus an appended system-prompt
+   instruction telling the AI to ask for and then use the caller's name once given.
+3. **Campaign voicemail-detection/background-noise settings never reached Vapi.** Phase 7's
+   `campaigns.voicemail_detection_enabled`/`voicemail_message`/`leave_voicemail`/`background_noise`
+   columns were stored and snapshotted onto `campaign_versions.calling_rules`, but
+   `AssistantConfig`/`buildAssistantConfig()` never received or forwarded them. Now wired through to
+   Vapi's real, currently-documented fields (verified against Vapi's own docs/source, not guessed):
+   `voicemailDetection: { provider: 'vapi' }` + `voicemailMessage`, and `backgroundDenoisingEnabled`
+   (a boolean only - Vapi has no low/medium/high level knob, so the campaign's 4-value setting maps
+   to on/off, documented honestly in `lib/orchestration/vapi.ts` rather than fabricating a level
+   parameter). Also added `startSpeakingPlan.smartEndpointingPlan`/`silenceTimeoutSeconds` for
+   natural turn-taking, both real Vapi fields.
+4. Every other area named in the hardening request (transfer, live monitor, transcripts, lead
+   listing/attachment, upload/remove error paths, campaign-selected voice actually reaching the
+   call) was read directly against the live code and confirmed already correct - see the regression
+   test added in `lib/orchestration/vapi.test.ts`/`services/callOrigination.test.ts` proving a
+   campaign voice override results in `createAssistant()`/`createCall()` using that override, not
+   the agent's default voice.
+
+New/updated tests: `services/callOrigination.test.ts` (new - named/unnamed/no-lead greeting
+resolution, voicemail/background-noise forwarding, voice-override regression), extended
+`lib/orchestration/vapi.test.ts` and `lib/orchestration/pipecat.test.ts`, plus
+`apps/pipecat-service/tests/test_calls.py` for the Python-side override plumbing.
