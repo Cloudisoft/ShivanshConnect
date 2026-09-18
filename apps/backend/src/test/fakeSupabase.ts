@@ -186,6 +186,10 @@ export function createFakeSupabase() {
       'live_monitor.listen',
       'live_monitor.barge',
       'live_monitor.whisper',
+      // Phase 12: real seed migration grants this to SUPER_ADMIN/ADMIN/
+      // MANAGER/VIEWER (everyone except AGENT) - see
+      // 00000000000009_seed_roles_permissions.sql.
+      'analytics.view',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -214,7 +218,7 @@ export function createFakeSupabase() {
       if (perm) tables.role_permissions.push({ role_id: agent.id, permission_id: perm.id });
     }
     const viewer = tables.roles.find((r) => r.name === 'VIEWER')!;
-    for (const key of ['dashboard.view', 'campaigns.view', 'leads.view', 'live_monitor.view', 'cdr.view']) {
+    for (const key of ['dashboard.view', 'campaigns.view', 'leads.view', 'live_monitor.view', 'cdr.view', 'analytics.view']) {
       const perm = tables.permissions.find((p) => p.key === key);
       if (perm) tables.role_permissions.push({ role_id: viewer.id, permission_id: perm.id });
     }
