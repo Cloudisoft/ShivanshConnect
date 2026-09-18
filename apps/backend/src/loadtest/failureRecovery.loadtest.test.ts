@@ -256,7 +256,7 @@ describe('Phase 15: failure recovery (process restart, crash isolation, timeout 
 
     const supabase = adapter.supabase;
     const { transitionCallState } = await import('../lib/callStateMachine.js');
-    let processCampaignFn = (await import('../services/campaignDispatcher.js')).processCampaign;
+    const processCampaignFn = (await import('../services/campaignDispatcher.js')).processCampaign;
 
     // Attempt 1: dispatch, then resolve as a retryable no-answer (call A
     // becomes 'failed', campaign_leads -> retry_pending, next_eligible_at
@@ -305,7 +305,6 @@ describe('Phase 15: failure recovery (process restart, crash isolation, timeout 
     const clAfterStaleWebhook = (await supabase.from('campaign_leads').select('*').eq('campaign_id', campaignId).maybeSingle()).data!;
     expect(clAfterStaleWebhook.last_call_id).toBe(callBId);
     expect(clAfterStaleWebhook.attempt_count).toBe(2);
-    void processCampaignFn;
   });
 });
 
