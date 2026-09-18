@@ -120,6 +120,25 @@ export const AUDIT_ACTIONS = {
   // is every human decision on an improvement.
   AGENT_IMPROVEMENT_STATUS_CHANGED: 'agent_improvement.status_changed',
   AGENT_IMPROVEMENT_APPLIED: 'agent_improvement.applied',
+
+  // Phase 13: SMTP settings, SMS campaigns, email campaigns (master spec
+  // sections 38-41).
+  SMTP_SETTINGS_SAVED: 'smtp_settings.saved',
+  SMTP_TEST_SENT: 'smtp_settings.test_sent',
+  SMS_CAMPAIGN_CREATED: 'sms_campaign.created',
+  SMS_CAMPAIGN_UPDATED: 'sms_campaign.updated',
+  SMS_CAMPAIGN_DELETED: 'sms_campaign.deleted',
+  SMS_CAMPAIGN_STARTED: 'sms_campaign.started',
+  SMS_CAMPAIGN_PAUSED: 'sms_campaign.paused',
+  SMS_CAMPAIGN_RESUMED: 'sms_campaign.resumed',
+  SMS_CAMPAIGN_CANCELLED: 'sms_campaign.cancelled',
+  EMAIL_CAMPAIGN_CREATED: 'email_campaign.created',
+  EMAIL_CAMPAIGN_UPDATED: 'email_campaign.updated',
+  EMAIL_CAMPAIGN_DELETED: 'email_campaign.deleted',
+  EMAIL_CAMPAIGN_STARTED: 'email_campaign.started',
+  EMAIL_CAMPAIGN_PAUSED: 'email_campaign.paused',
+  EMAIL_CAMPAIGN_RESUMED: 'email_campaign.resumed',
+  EMAIL_CAMPAIGN_CANCELLED: 'email_campaign.cancelled',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

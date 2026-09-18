@@ -364,6 +364,112 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       return reply.status(200).send({ received: true, processing_error: true });
     }
   });
+
+  // POST /api/v1/webhooks/twilio-sms - Twilio's real Message Status
+  // Callback delivery (delivered/failed/undelivered) for a message this
+  // backend originated via services/smsDispatcher.ts. Unauthenticated
+  // (Twilio is the caller); trust comes from the same idempotency +
+  // payload-resolved ownership model as /vapi and /pipecat above -
+  // resolved from the message's own provider-assigned SID
+  // (sms_messages.provider_message_id), never from a client-supplied
+  // organization_id.
+  app.post('/twilio-sms', async (req, reply) => {
+    const supabase = getSupabaseAdmin();
+    const body = req.body as Record<string, any>;
+    const providerMessageId: string | undefined = body?.MessageSid ?? body?.SmsSid;
+    const messageStatus: string | undefined = body?.MessageStatus ?? body?.SmsStatus;
+    // Twilio's status callback carries no single canonical delivery id -
+    // the same composite-key dedup strategy the Vapi receiver uses.
+    const eventId = `${providerMessageId ?? 'unknown'}:${messageStatus ?? 'unknown'}`;
+
+    let organizationId: string | null = null;
+    let message: Record<string, any> | null = null;
+    if (providerMessageId) {
+      const { data } = await supabase.from('sms_messages').select('*').eq('provider_message_id', providerMessageId).maybeSingle();
+      if (data) {
+        message = data;
+        organizationId = data.organization_id;
+      }
+    }
+
+    const { webhookEventId, alreadyProcessed } = await recordWebhookEvent(supabase, {
+      provider: 'twilio-sms',
+      eventId,
+      eventType: messageStatus ?? 'unknown',
+      payload: body,
+      organizationId,
+    });
+    if (alreadyProcessed) return reply.status(200).send({ received: true, deduplicated: true });
+
+    try {
+      if (!message) {
+        await markWebhookProcessed(supabase, webhookEventId, null);
+        return reply.status(200).send({ received: true, matched: false });
+      }
+      const statusMap: Record<string, string> = { delivered: 'delivered', failed: 'failed', undelivered: 'failed', sent: 'sent' };
+      const nextStatus = statusMap[(messageStatus ?? '').toLowerCase()];
+      if (nextStatus) {
+        const extra: Record<string, unknown> = {};
+        if (nextStatus === 'delivered') extra.delivered_at = new Date().toISOString();
+        await supabase.from('sms_messages').update({ status: nextStatus, ...extra }).eq('id', message.id);
+      }
+      await markWebhookProcessed(supabase, webhookEventId, message.organization_id);
+      return reply.status(200).send({ received: true });
+    } catch (err) {
+      await markWebhookFailed(supabase, webhookEventId, err instanceof Error ? err.message : 'Unknown webhook processing error.');
+      return reply.status(200).send({ received: true, processing_error: true });
+    }
+  });
+
+  // POST /api/v1/webhooks/telnyx-sms - Telnyx's real message.* delivery
+  // webhook (message.sent / message.finalized with a per-recipient
+  // status). Same trust/idempotency model as twilio-sms above.
+  app.post('/telnyx-sms', async (req, reply) => {
+    const supabase = getSupabaseAdmin();
+    const body = req.body as Record<string, any>;
+    const payload = body?.data?.payload ?? body?.payload ?? body;
+    const providerMessageId: string | undefined = payload?.id;
+    const recipientStatus: string | undefined = payload?.to?.[0]?.status;
+    const eventId: string = body?.data?.id ?? `${providerMessageId ?? 'unknown'}:${recipientStatus ?? 'unknown'}`;
+
+    let organizationId: string | null = null;
+    let message: Record<string, any> | null = null;
+    if (providerMessageId) {
+      const { data } = await supabase.from('sms_messages').select('*').eq('provider_message_id', providerMessageId).maybeSingle();
+      if (data) {
+        message = data;
+        organizationId = data.organization_id;
+      }
+    }
+
+    const { webhookEventId, alreadyProcessed } = await recordWebhookEvent(supabase, {
+      provider: 'telnyx-sms',
+      eventId,
+      eventType: recipientStatus ?? 'unknown',
+      payload: body,
+      organizationId,
+    });
+    if (alreadyProcessed) return reply.status(200).send({ received: true, deduplicated: true });
+
+    try {
+      if (!message) {
+        await markWebhookProcessed(supabase, webhookEventId, null);
+        return reply.status(200).send({ received: true, matched: false });
+      }
+      const statusMap: Record<string, string> = { delivered: 'delivered', delivery_failed: 'failed', sent: 'sent' };
+      const nextStatus = statusMap[(recipientStatus ?? '').toLowerCase()];
+      if (nextStatus) {
+        const extra: Record<string, unknown> = {};
+        if (nextStatus === 'delivered') extra.delivered_at = new Date().toISOString();
+        await supabase.from('sms_messages').update({ status: nextStatus, ...extra }).eq('id', message.id);
+      }
+      await markWebhookProcessed(supabase, webhookEventId, message.organization_id);
+      return reply.status(200).send({ received: true });
+    } catch (err) {
+      await markWebhookFailed(supabase, webhookEventId, err instanceof Error ? err.message : 'Unknown webhook processing error.');
+      return reply.status(200).send({ received: true, processing_error: true });
+    }
+  });
 }
 
 /** Admin routes: GET /webhook-events, POST /webhook-events/:id/replay.

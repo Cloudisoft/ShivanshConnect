@@ -57,6 +57,13 @@ import { registerTerminalCallHandler } from './lib/callStateMachine.js';
 import { handleTerminalCall } from './services/callTerminalHandler.js';
 import { liveMonitorWsRoutes } from './ws/liveMonitorRoutes.js';
 import { liveMonitorActionRoutes } from './routes/liveMonitor.js';
+import { smtpSettingsRoutes } from './routes/smtp.js';
+import { smsCampaignRoutes } from './routes/smsCampaigns.js';
+import { emailCampaignRoutes } from './routes/emailCampaigns.js';
+import { SmsProviderError, SmsProviderNotConfiguredError } from './lib/sms/types.js';
+import { SmtpNotConfiguredError, SmtpSendError } from './services/smtpProvider.js';
+import { startSmsDispatcher } from './services/smsDispatcher.js';
+import { startEmailDispatcher } from './services/emailDispatcher.js';
 
 export function buildApp() {
   const env = getEnv();
@@ -155,6 +162,10 @@ export function buildApp() {
       // prefixes, both backed by services/analyticsQuery.ts.
       api.register(dashboardRoutes, { prefix: '/dashboard' });
       api.register(analyticsRoutes, { prefix: '/analytics' });
+      // Phase 13: SMTP settings, SMS campaigns, email campaigns.
+      api.register(smtpSettingsRoutes, { prefix: '/settings/smtp' });
+      api.register(smsCampaignRoutes, { prefix: '/sms-campaigns' });
+      api.register(emailCampaignRoutes, { prefix: '/email-campaigns' });
     },
     { prefix: '/api/v1' },
   );
@@ -242,6 +253,28 @@ export function buildApp() {
       return;
     }
 
+    // Same honesty rule, for SMS providers (Twilio/Telnyx, reusing Phase
+    // 5's credentials): not connected is a client-actionable 422, a real
+    // provider-side failure is a 502 - never a fabricated send.
+    if (error instanceof SmsProviderNotConfiguredError) {
+      reply.status(422).send(fail('SMS_PROVIDER_NOT_CONFIGURED', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof SmsProviderError) {
+      reply.status(502).send(fail('SMS_PROVIDER_ERROR', error.message, { requestId: req.id }));
+      return;
+    }
+    // Same honesty rule, for SMTP: not configured is a client-actionable
+    // 422, a genuine send failure is a 502 - never a fabricated "sent".
+    if (error instanceof SmtpNotConfiguredError) {
+      reply.status(422).send(fail('SMTP_NOT_CONFIGURED', error.message, { requestId: req.id }));
+      return;
+    }
+    if (error instanceof SmtpSendError) {
+      reply.status(502).send(fail('SMTP_SEND_ERROR', error.message, { requestId: req.id }));
+      return;
+    }
+
     if (error instanceof ZodError) {
       reply.status(422).send(
         fail('VALIDATION_ERROR', 'The request contains invalid data.', {
@@ -296,6 +329,10 @@ async function main() {
     // campaign dispatcher above - the test suite never gets a background
     // aggregation timer running against its fake Supabase client.
     startAnalyticsAggregator();
+    // Phase 13: same "not started by buildApp() itself" reasoning as the
+    // campaign dispatcher/analytics aggregator above.
+    startSmsDispatcher();
+    startEmailDispatcher();
   } catch (err) {
     app.log.error(err);
     process.exit(1);
