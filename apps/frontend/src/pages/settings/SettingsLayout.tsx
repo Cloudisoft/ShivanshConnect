@@ -11,6 +11,7 @@ const TABS = [
   { path: '/settings/compliance', label: 'Compliance', permission: 'leads.view' },
   { path: '/settings/integrations', label: 'Integrations', permission: null },
   { path: '/settings/webhook-events', label: 'Webhook Events', permission: 'cdr.view' },
+  { path: '/settings/exports', label: 'Export History', permission: 'leads.view' },
 ];
 
 export function SettingsLayout(): JSX.Element {

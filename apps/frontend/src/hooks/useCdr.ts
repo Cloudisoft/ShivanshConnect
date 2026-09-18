@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { CdrDetail, CdrRow, ExportRecord, ExportType, ExportWithDownload } from '@shivanshconnect/shared';
+import type { CdrDetail, CdrRow, ExportRecord, ExportType } from '@shivanshconnect/shared';
 import { api } from '../lib/apiClient';
 
 export interface CdrFilters {
@@ -54,31 +54,9 @@ export function useCreateCdrExport() {
   });
 }
 
-export function useExports(page = 1, pageSize = 20) {
-  return useQuery({
-    queryKey: ['exports', page, pageSize],
-    queryFn: () => api.getPage<ExportWithDownload[]>(`/exports?page=${page}&page_size=${pageSize}`),
-    refetchInterval: (query) => {
-      const rows = query.state.data?.data ?? [];
-      return rows.some((r) => r.status === 'pending' || r.status === 'processing') ? 3000 : false;
-    },
-  });
-}
-
-/** Downloads the finished export file as a real browser save, via the
- * authenticated blob client (an <a href> alone can't attach the bearer
- * token). */
-export async function downloadExportFile(exportId: string, filename: string): Promise<void> {
-  const blob = await api.getBlob(`/exports/${exportId}/download`);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
+// Phase 14: general export-history polling and file download moved to
+// hooks/useExports.ts (useExportHistory/downloadExportFile), since every
+// export type - not just CDR's - shares that exact same shape.
 
 export async function fetchRecordingObjectUrl(callId: string): Promise<string> {
   const blob = await api.getBlob(`/cdr/${callId}/recording/download`);

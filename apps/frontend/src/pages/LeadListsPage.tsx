@@ -8,7 +8,9 @@ import {
   useLeadLists,
   useUpdateLeadList,
 } from '../hooks/useLeadLists';
+import { useQueueLeadListExport } from '../hooks/useExports';
 import { Alert, Button, Card, Input, Label } from '../components/ui';
+import { ExportTrigger } from '../components/exports/ExportTrigger';
 import { ApiClientError } from '../lib/apiClient';
 import type { LeadListWithCounts } from '@shivanshconnect/shared';
 
@@ -87,6 +89,11 @@ export function LeadListsPage(): JSX.Element {
                 </Link>
               )}
             </div>
+            {hasPermission('leads.view') && (
+              <div className="mt-3">
+                <LeadListExportButton leadListId={list.id} />
+              </div>
+            )}
           </Card>
         ))}
       </div>
@@ -107,6 +114,18 @@ export function LeadListsPage(): JSX.Element {
         </div>
       )}
     </div>
+  );
+}
+
+function LeadListExportButton({ leadListId }: { leadListId: string }): JSX.Element {
+  const queueExport = useQueueLeadListExport(leadListId);
+  return (
+    <ExportTrigger
+      csvType="leads_csv"
+      xlsxType="leads_xlsx"
+      pending={queueExport.isPending}
+      onExport={(type) => queueExport.mutateAsync({ type })}
+    />
   );
 }
 

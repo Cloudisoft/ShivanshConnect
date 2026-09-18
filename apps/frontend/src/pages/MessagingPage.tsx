@@ -18,6 +18,8 @@ import {
 } from '../hooks/useMessaging';
 import { Alert, Badge, Button, Card, Input, Label } from '../components/ui';
 import { VariablePalette } from '../components/VariablePalette';
+import { ExportTrigger } from '../components/exports/ExportTrigger';
+import { useQueueEmailMessagesExport, useQueueSmsMessagesExport } from '../hooks/useExports';
 import { ApiClientError } from '../lib/apiClient';
 
 const STATUS_TONE: Record<MessagingCampaignStatus, 'neutral' | 'success' | 'warning' | 'danger'> = {
@@ -254,11 +256,23 @@ function CreateSmsCampaignForm({ onClose }: { onClose: () => void }): JSX.Elemen
 }
 
 function SmsMessagesPanel({ campaignId }: { campaignId: string }): JSX.Element {
+  const { hasPermission } = useAuth();
   const messagesQuery = useSmsMessages(campaignId);
   const messages = messagesQuery.data?.data ?? [];
+  const queueExport = useQueueSmsMessagesExport(campaignId);
   return (
     <Card className="mt-6">
-      <h3 className="text-sm font-semibold text-ink-900">Message delivery status</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-ink-900">Message delivery status</h3>
+        {hasPermission('messaging.manage') && (
+          <ExportTrigger
+            csvType="sms_messages_csv"
+            xlsxType="sms_messages_xlsx"
+            pending={queueExport.isPending}
+            onExport={(type) => queueExport.mutateAsync({ type })}
+          />
+        )}
+      </div>
       <div className="mt-3 overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>
@@ -495,12 +509,26 @@ function CreateEmailCampaignForm({ onClose }: { onClose: () => void }): JSX.Elem
 }
 
 function EmailMessagesPanel({ campaignId }: { campaignId: string }): JSX.Element {
+  const { hasPermission } = useAuth();
   const messagesQuery = useEmailMessages(campaignId);
   const messages = messagesQuery.data?.data ?? [];
+  const queueExport = useQueueEmailMessagesExport(campaignId);
   return (
     <Card className="mt-6">
-      <h3 className="text-sm font-semibold text-ink-900">Message status</h3>
-      <p className="mt-1 text-xs text-ink-400">Delivered/bounced/replied are not shown here - raw SMTP gives no such signal without a transactional email provider.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-ink-900">Message status</h3>
+          <p className="mt-1 text-xs text-ink-400">Delivered/bounced/replied are not shown here - raw SMTP gives no such signal without a transactional email provider.</p>
+        </div>
+        {hasPermission('messaging.manage') && (
+          <ExportTrigger
+            csvType="email_messages_csv"
+            xlsxType="email_messages_xlsx"
+            pending={queueExport.isPending}
+            onExport={(type) => queueExport.mutateAsync({ type })}
+          />
+        )}
+      </div>
       <div className="mt-3 overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>

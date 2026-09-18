@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { FileText, Download, History } from 'lucide-react';
+import { FileText, History } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
-import { useCdrList, useCreateCdrExport, useExports, downloadExportFile, type CdrFilters } from '../hooks/useCdr';
+import { useCdrList, useCreateCdrExport, type CdrFilters } from '../hooks/useCdr';
+import { useExportHistory } from '../hooks/useExports';
 import { useCampaigns } from '../hooks/useCampaigns';
 import { useAgents } from '../hooks/useAgents';
 import { Badge, Button, Card, Input, Label } from '../components/ui';
 import { CallDetailDrawer } from '../components/cdr/CallDetailDrawer';
-import { ApiClientError } from '../lib/apiClient';
-import type { CallStatus, ExportType } from '@shivanshconnect/shared';
+import { ExportTrigger } from '../components/exports/ExportTrigger';
+import { ExportHistoryList } from '../components/exports/ExportHistoryList';
+import type { CallStatus } from '@shivanshconnect/shared';
 
 const STATUS_TONE: Record<string, 'neutral' | 'success' | 'warning' | 'danger'> = {
   completed: 'success',
@@ -202,67 +204,26 @@ export function CdrPage(): JSX.Element {
 
 function ExportButton({ filters }: { filters: CdrFilters }): JSX.Element {
   const createExport = useCreateCdrExport();
-  const [type, setType] = useState<ExportType>('cdr_csv');
-  const [error, setError] = useState<string | null>(null);
-
-  async function trigger() {
-    setError(null);
-    try {
-      await createExport.mutateAsync({ type, filters });
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Could not queue this export.');
-    }
-  }
-
   return (
-    <div className="flex items-center gap-2">
-      <select
-        className="rounded-md border border-ink-300 bg-white px-2 py-2 text-sm text-ink-900"
-        value={type}
-        onChange={(e) => setType(e.target.value as ExportType)}
-      >
-        <option value="cdr_csv">CSV</option>
-        <option value="cdr_xlsx">Excel (.xlsx)</option>
-      </select>
-      <Button onClick={trigger} disabled={createExport.isPending}>
-        <Download className="h-4 w-4" /> {createExport.isPending ? 'Queuing...' : 'Export'}
-      </Button>
-      {error && <span className="text-xs text-red-700">{error}</span>}
-      {createExport.isSuccess && !error && <span className="text-xs text-green-700">Export queued - check history.</span>}
-    </div>
+    <ExportTrigger
+      csvType="cdr_csv"
+      xlsxType="cdr_xlsx"
+      pending={createExport.isPending}
+      onExport={(type) => createExport.mutateAsync({ type, filters })}
+    />
   );
 }
 
 function ExportHistoryModal({ onClose }: { onClose: () => void }): JSX.Element {
-  const exportsQuery = useExports(1, 20);
+  const exportsQuery = useExportHistory(1, 20);
   const exportsList = exportsQuery.data?.data ?? [];
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30" onClick={onClose}>
       <Card className="max-h-[80vh] w-full max-w-lg overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-sm font-semibold text-ink-900">Export history</h2>
-        <div className="mt-4 space-y-3">
-          {exportsList.length === 0 && <p className="text-sm text-ink-500">No exports yet.</p>}
-          {exportsList.map((exp) => (
-            <div key={exp.id} className="flex items-center justify-between rounded-md border border-ink-200 p-3 text-sm">
-              <div>
-                <p className="font-medium text-ink-900">{exp.type === 'cdr_xlsx' ? 'Excel export' : 'CSV export'}</p>
-                <p className="text-xs text-ink-500">{new Date(exp.created_at).toLocaleString()} - {exp.row_count != null ? `${exp.row_count} rows` : ''}</p>
-                {exp.status === 'failed' && <p className="text-xs text-red-700">{exp.failure_reason}</p>}
-              </div>
-              <div className="flex items-center gap-2">
-                <Badge tone={exp.status === 'ready' ? 'success' : exp.status === 'failed' ? 'danger' : 'warning'}>{exp.status}</Badge>
-                {exp.status === 'ready' && (
-                  <Button
-                    variant="secondary"
-                    onClick={() => downloadExportFile(exp.id, `cdr-export-${exp.id}.${exp.type === 'cdr_xlsx' ? 'xlsx' : 'csv'}`)}
-                  >
-                    <Download className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-            </div>
-          ))}
+        <div className="mt-4">
+          <ExportHistoryList exports={exportsList} />
         </div>
         <div className="mt-4 flex justify-end">
           <Button variant="secondary" onClick={onClose}>Close</Button>

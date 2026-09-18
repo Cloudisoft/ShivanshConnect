@@ -6,10 +6,12 @@ import { Plus, Trash2, Upload, UserPlus } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useLeads, useDeleteLead, useLeadBulkAction, type LeadsQuery } from '../hooks/useLeads';
 import { useLeadList, useLeadLists } from '../hooks/useLeadLists';
+import { useQueueLeadsExport } from '../hooks/useExports';
 import { Alert, Badge, Button, Card, Input } from '../components/ui';
 import { AddLeadModal } from '../components/leads/AddLeadModal';
 import { PasteNumbersModal } from '../components/leads/PasteNumbersModal';
 import { ImportModal } from '../components/leads/ImportModal';
+import { ExportTrigger } from '../components/exports/ExportTrigger';
 import { LEAD_STATUSES, type LeadListRow, type LeadStatus } from '@shivanshconnect/shared';
 import { ApiClientError } from '../lib/apiClient';
 
@@ -60,6 +62,7 @@ export function LeadsPage(): JSX.Element {
   const listsQuery = useLeadLists(1, 200);
   const deleteLead = useDeleteLead();
   const bulkAction = useLeadBulkAction();
+  const queueExport = useQueueLeadsExport();
   const [actionError, setActionError] = useState<string | null>(null);
 
   const leads = leadsQuery.data?.data ?? [];
@@ -152,6 +155,24 @@ export function LeadsPage(): JSX.Element {
             <Button onClick={() => setShowAdd(true)}>
               <Plus className="h-4 w-4" /> Add lead
             </Button>
+          )}
+          {hasPermission('leads.view') && (
+            <ExportTrigger
+              csvType="leads_csv"
+              xlsxType="leads_xlsx"
+              pending={queueExport.isPending}
+              onExport={(type) =>
+                queueExport.mutateAsync({
+                  type,
+                  filters: {
+                    lead_list_id: leadListId ?? undefined,
+                    status: status || undefined,
+                    is_dnc: dncOnly || undefined,
+                    search: search || undefined,
+                  },
+                })
+              }
+            />
           )}
         </div>
       </div>

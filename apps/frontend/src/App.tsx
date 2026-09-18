@@ -36,6 +36,7 @@ import { RolesSettingsPage } from './pages/settings/RolesSettingsPage';
 import { ComplianceSettingsPage } from './pages/settings/ComplianceSettingsPage';
 import { IntegrationsSettingsPage } from './pages/settings/IntegrationsSettingsPage';
 import { WebhookEventsSettingsPage } from './pages/settings/WebhookEventsSettingsPage';
+import { ExportHistorySettingsPage } from './pages/settings/ExportHistorySettingsPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 const placeholderNavItems = NAV_ITEMS.filter((item) => !item.builtInPhase1);
@@ -85,6 +86,7 @@ export default function App(): JSX.Element {
             <Route path="compliance" element={<ComplianceSettingsPage />} />
             <Route path="integrations" element={<IntegrationsSettingsPage />} />
             <Route path="webhook-events" element={<WebhookEventsSettingsPage />} />
+            <Route path="exports" element={<ExportHistorySettingsPage />} />
           </Route>
 
           {placeholderNavItems.map((item) => (
