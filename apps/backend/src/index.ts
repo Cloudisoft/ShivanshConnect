@@ -6,7 +6,7 @@ import multipart from '@fastify/multipart';
 import websocket from '@fastify/websocket';
 import { ZodError } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { getEnv } from './env.js';
+import { getEnv, getAllowedOrigins } from './env.js';
 import { fail } from './lib/response.js';
 import { AppError } from './lib/errors.js';
 import { LlmNotConfiguredError, LlmProviderError } from './lib/llm/index.js';
@@ -88,8 +88,22 @@ export function buildApp() {
     genReqId: () => randomUUID(),
   });
 
+  // Support more than one real frontend origin (e.g. a Railway-generated
+  // domain and a custom domain both pointed at the same deployed frontend)
+  // rather than a single hardcoded origin - a mismatched Origin header
+  // otherwise makes the browser silently block the response (no CORS
+  // error surfaced to the app, just a generic failed-fetch), which is
+  // exactly what broke sign-up when accessed via a custom domain that
+  // wasn't the one FRONTEND_URL pointed at.
+  const allowedOrigins = getAllowedOrigins(env);
   app.register(cors, {
-    origin: env.FRONTEND_URL,
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin.replace(/\/+$/, ''))) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`Origin not allowed: ${origin}`), false);
+    },
     credentials: true,
   });
 
