@@ -41,7 +41,12 @@ Telnyx reusing Phase 5's exact stored credentials rather than a second credentia
 email campaigns dispatched by the same queue-based/throttled architecture as Phase 7's call
 dispatcher, real DNC/opt-out suppression checks per channel, and an explicit, honestly-stated limit
 that raw SMTP cannot report delivery/bounce/reply without a transactional email provider - see
-[Phase 13](#phase-13-this-build---done) below). Later phases (inbound routing, queues, further
+[Phase 13](#phase-13-this-build---done) below); and now **generalized exports** (Phase 14 - Phase
+9's background CSV/XLSX export engine extended, not rebuilt, to Leads, Lead Lists, and SMS/Email
+campaign messages, a real shared `writeCsv`/`writeXlsx` file-writing layer and job runner every
+export type now goes through, a unified Export History view spanning every module in one place, and
+this build's real, re-verified `ffmpeg` MP3 transcoding on call recording downloads - see
+[Phase 14](#phase-14-this-build---done) below). Later phases (inbound routing, queues, further
 performance/load testing, and more) are deliberately **not** implemented yet - see
 [Phase plan status](#phase-plan-status) below.
 
@@ -709,10 +714,10 @@ sandbox (no real phone calls are placed anywhere in this build).
   existence), **never** one query per call regardless of page size. `GET /cdr/:callId` - full CDR
   fields + ordered transcript segments + a recording reference + summary, or the honest per-field
   empty state when an artifact isn't ready. `GET /cdr/:callId/recording/download` - real audio
-  bytes, transcoded to MP3 via a real `ffmpeg` child process when one is on `PATH`; **this
-  sandbox's runtime has no ffmpeg installed**, so it serves the real source format as-is with an
-  honest `Content-Type` instead of faking a conversion (see the environment-requirements note
-  below). `GET /cdr/search-transcript` - full-text search via `search_call_transcripts()`.
+  bytes, transcoded to MP3 via a real `ffmpeg` child process when one is on `PATH`, with an honest
+  passthrough-of-the-real-source-format fallback when it isn't (see Phase 14's note below for this
+  build's current, re-verified ffmpeg availability). `GET /cdr/search-transcript` - full-text
+  search via `search_call_transcripts()`.
   `POST /cdr/export` - queues a background job and returns immediately with a job id, **never**
   generates synchronously (spec 21/65). `services/cdrExport.ts` runs the exact same
   `iterateAllCdrRows()` query the list endpoint uses, streamed page-by-page (never the whole
@@ -751,11 +756,12 @@ sandbox (no real phone calls are placed anywhere in this build).
 No new required variables - reuses `OPENAI_API_KEY` (Phase 3) for summaries, purely optional (no
 summary row is ever created without it) and the existing `StorageAdapter`/orchestration-provider
 plumbing for everything else. Real MP3 transcoding on `GET /cdr/:callId/recording/download`
-requires an `ffmpeg` binary on the backend process's `PATH`; **this sandbox's runtime does not have
-ffmpeg installed**, so that route currently serves each recording's real source format (whatever
-the orchestration provider originally returned) with an honest `Content-Type` rather than faking a
-conversion - installing `ffmpeg` (e.g. `apt install ffmpeg` on Debian/Ubuntu, or the Railway
-service's own buildpack equivalent) is a deployment-time addition with zero code changes needed.
+requires an `ffmpeg` binary on the backend process's `PATH`; this build's sandbox did not have one
+installed at the time (installing `ffmpeg`, e.g. `apt install ffmpeg` on Debian/Ubuntu, or the
+Railway service's own buildpack equivalent, was documented as a zero-code-change deployment-time
+addition). **Phase 14 re-checked this in a fresh sandbox session and ffmpeg 6.1.1 is now installed
+and on `PATH`** - see Phase 14's section below for the up-to-date state and the test that proves
+real transcoding now actually engages.
 Recording/export "signed download URL" per spec section 22 is, in this build, an authenticated
 `GET /api/v1/cdr/:callId/recording/download` / `GET /api/v1/exports/:id/download` route rather
 than a bearer-token-free temporary link - a real signed-URL mechanism needs production S3-
@@ -1140,6 +1146,91 @@ database, never environment variables); SMS sending needs none beyond the Twilio
 an org already connects under Phone Providers (Phase 5). Two optional overrides, same
 optional-override pattern as every prior phase's dispatcher: `SMS_DISPATCH_INTERVAL_MS` and
 `EMAIL_DISPATCH_INTERVAL_MS` (both in milliseconds).
+
+**Phase 14 (this build) - done:**
+
+- **Generalizes Phase 9's export engine - does not rebuild it.** `services/exportGenerators/
+  writers.ts` extracts Phase 9's CDR-specific-but-structurally-generic `{key, header}`-column CSV/
+  XLSX writer into shared `writeCsv()`/`writeXlsx()` functions; `services/exportGenerators/
+  runner.ts` extracts the queue-a-job/run-it-via-`setImmediate`/write-the-file/upload-through-the-
+  existing-`StorageAdapter`/mark-ready-or-failed machinery into a shared `queueExportJob()`/
+  `runExportJob()`/`scheduleExportJob()` trio. `cdrExport.ts` now calls into both, and its
+  `rowsToCsv()`/`rowsToXlsxBuffer()`/`CDR_EXPORT_COLUMNS` exports keep their exact original
+  signatures and behavior - `cdrExport.test.ts` is unchanged and still passes, proving no
+  regression on the CDR export path this phase extends.
+- **Database**: `exports.type`'s check constraint widened to add `leads_csv`/`leads_xlsx`,
+  `sms_messages_csv`/`sms_messages_xlsx`, `email_messages_csv`/`email_messages_xlsx` alongside
+  Phase 9's `cdr_csv`/`cdr_xlsx`; a new `entity_reference` jsonb column lets an export point back at
+  the one list/campaign it was scoped to (e.g. `{ "leadListId": "..." }`), kept as a genuinely
+  separate concept from the existing free-form `filters` column rather than overloading it
+  (migration `00000000000048`). The Phase 9 `exports` RLS `select`/`insert` policies, which
+  originally gated on `cdr.export` only, are widened to accept `cdr.export` OR `leads.view` OR
+  `messaging.manage` - matching the application-layer permission checks below exactly, real defense
+  in depth rather than RLS silently being stricter than the app logic it's meant to back up.
+- **`services/exportGenerators/leadsExport.ts`** - a real leads export respecting the exact same
+  filter shape `GET /leads` supports (`lead_list_id`/`status`/`is_dnc`/`search`), streamed in
+  bounded pages (never one unbounded query), with master spec section 15's standard columns plus
+  one flattened column per this org's Phase 2 `lead_custom_fields` catalog entry (so a lead's
+  `custom_fields` jsonb blob exports as real named columns, not a dumped blob).
+  **`services/exportGenerators/smsMessagesExport.ts`** / **`emailMessagesExport.ts`** - per-
+  campaign message-level exports (recipient, rendered content, status, timestamps, error - spec
+  sections 40/41), honest that `delivered`/`bounced`/`replied` only ever appear if Phase 13's
+  dispatcher actually wrote them (it doesn't, for email, without a transactional provider - see
+  Phase 13 above).
+- New routes, every one queuing via the shared runner and returning immediately (never
+  synchronous): `POST /api/v1/leads/export` and `POST /api/v1/lead-lists/:id/export` (both
+  `leads.view` - no separate `leads.export` key exists in the Phase 1 permission catalog, so this
+  reuses the existing one rather than adding a redundant permission), `POST /api/v1/sms-campaigns/
+  :id/messages/export` and `POST /api/v1/email-campaigns/:id/messages/export` (both
+  `messaging.manage`). Every route validates the target list/campaign's `organization_id` before
+  queuing and audit-logs the new `AUDIT_ACTIONS.LEADS_EXPORT_CREATED` / `SMS_MESSAGES_EXPORT_
+  CREATED` / `EMAIL_MESSAGES_EXPORT_CREATED` actions.
+- **`routes/exports.ts` generalized** (it was never CDR-specific internally - it only ever queried
+  `exports` scoped to `organization_id` - so this was mostly additive): `GET /exports` gains a
+  `type` query filter; the download route derives content-type/extension/filename from the type
+  string itself (`_csv`/`_xlsx` suffix) uniformly rather than a CDR-only branch, so a future export
+  type needs no change here; the permission gate widened to "any of `cdr.export`/`leads.view`/
+  `messaging.manage`" since the unified history view spans every entity (queuing a *new* export is
+  still separately gated per-entity in each creating route above).
+- **Frontend**: `hooks/useExports.ts`'s `useExportHistory()`/`downloadExportFile()` generalize
+  Phase 9's CdrPage-only export-history polling/download hook to every export type via the new
+  `type` filter; `components/exports/ExportTrigger.tsx` (the format-picker-plus-trigger-button) and
+  `ExportHistoryList.tsx` (the status-badge/download-button row renderer) are the one shared UI
+  every export surface uses - including `CdrPage.tsx` itself, refactored to use them rather than
+  keeping a second copy. Export buttons now appear on the Leads page toolbar (respecting the
+  current list/status/DNC/search filters), each Lead List card, and the SMS/Email campaign message
+  panels in `MessagingPage.tsx`. A new **Settings > Export History** page/tab
+  (`pages/settings/ExportHistorySettingsPage.tsx`) lists every export across every module for the
+  org in one place, filterable by type, paginated - the spec's "show export history" requirement
+  made complete rather than CDR-only.
+- **Recording MP3 download polish (spec section 22)**: Phase 9 wrote `cdr.ts`'s
+  `maybeTranscodeToMp3()` correctly, gated on ffmpeg's real availability, but that build's sandbox
+  had no `ffmpeg` binary so only its honest fallback path ever ran. **This phase re-checked ffmpeg
+  availability fresh and found `ffmpeg 6.1.1` now installed and on `PATH`** - the real-transcode
+  branch now genuinely engages. `routes/cdr.mp3Transcode.test.ts` proves it: a real, decodable WAV
+  fixture (not a fake byte string) is fed through the actual `ffmpeg` child process the route
+  spawns, and the output is independently verified as real MP3 audio by `ffprobe` (a completely
+  separate tool from the encoder) - plus regression coverage for the already-mp3 passthrough and
+  the ffmpeg-unavailable fallback path (kept for an environment where ffmpeg genuinely isn't
+  present).
+- Tests: `exportGenerators/writers.test.ts` (the shared CSV/XLSX writer, tested once on a generic
+  fixture shape - header/row/RFC4180-escaping/empty-set/null-cell behavior, plus a real `.xlsx`
+  round-trip read-back), `phase14.integration.test.ts` (a lead list with a custom-field lead and a
+  DNC lead → leads export → CSV reflects both honestly with a real custom-field column → lead list
+  export scoped correctly with `entity_reference` recorded → an SMS campaign export via a real
+  dispatcher tick → an email campaign export via a real dispatcher tick → `GET /exports?type=`
+  filters correctly across every export type for the org → cross-org isolation holds for every
+  export type's history/status/download, even via a guessed export id), and
+  `cdr.mp3Transcode.test.ts` (above).
+
+### Phase 14 environment requirements
+
+No new required variables. Real MP3 transcoding on `GET /cdr/:callId/recording/download` still
+requires an `ffmpeg` binary on the backend process's `PATH` exactly as Phase 9 documented; this
+build's sandbox now has one (`ffmpeg 6.1.1`, confirmed via `ffmpeg -version` and exercised by
+`cdr.mp3Transcode.test.ts`), so real transcoding is active in this deployment. If a future
+deployment target lacks `ffmpeg` on `PATH`, the honest source-format-passthrough fallback
+(unchanged since Phase 9) takes over automatically with zero code changes needed.
 
 **Explicitly NOT built yet** (deferred to later phases):
 
@@ -1545,6 +1636,28 @@ were verified for real in both:
      unchanged (`messaging.manage` was already seeded in Phase 1, this phase is the first to
      actually enforce it). The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass
      clean after this phase (358 backend tests total, up from 330).
+   - Phase 14: `apps/backend/src/services/exportGenerators/writers.test.ts` (5 tests, the shared
+     CSV/XLSX writer), `apps/backend/src/routes/cdr.mp3Transcode.test.ts` (4 tests, real ffmpeg
+     transcode + ffprobe-verified output + regression coverage for the mp3-passthrough and
+     ffmpeg-unavailable fallback paths) and `apps/backend/src/phase14.integration.test.ts`
+     (6 tests) - see the "Phase 14" section above for exactly what each proves, including the
+     leads export correctly reflecting a DNC lead and a real custom-field column, and the unified
+     `GET /exports?type=` history query's cross-org isolation. Phase 14 added 1 new migration
+     (48 total: `00000000000048_phase14_exports.sql` - widens `exports.type`'s check constraint,
+     adds `entity_reference`, and widens the `exports` RLS `select`/`insert` policies), applied
+     cleanly both incrementally on top of the existing Phase 1-13 verification database and from a
+     completely fresh database (all 48 migrations, in order, auth stub included) - both runs land
+     on the same **59 tables** as Phase 13 (purely additive - no new tables, only an altered
+     `exports`), RLS confirmed enabled on all 59, and the `exports` table carries the new column,
+     widened type check constraint and updated policies exactly as written. The permission catalog
+     is unchanged (no new permission key was needed - `leads.view`/`messaging.manage` already
+     existed and now also gate export creation for their own entities). This session also
+     re-checked `ffmpeg` availability fresh (`apt-get install -y ffmpeg` succeeded this time,
+     unlike Phase 9's session) and confirmed `ffmpeg 6.1.1` is genuinely on `PATH` and produces
+     real, `ffprobe`-verified MP3 output. The full monorepo `pnpm run build`/`test`/`lint`/
+     `typecheck` all pass clean after this phase (373 backend tests total - 372 passing plus 1
+     environment-conditional skip for the ffmpeg-unavailable fallback test, since this sandbox does
+     have ffmpeg - up from 358).
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
@@ -1583,10 +1696,13 @@ live provider recording URL here - the download/re-store path (`services/
 processCallArtifacts.ts`'s `ingestRecording()`) is exercised end to end against a mocked `fetch`
 serving real bytes in `phase9.integration.test.ts` (so the actual fetch-then-`StorageAdapter.
 putObject()`-then-serve-back code path is real and tested, just not against a live provider URL).
-MP3 transcoding via `ffmpeg` is written but **not exercised** in this sandbox since no `ffmpeg`
-binary is installed here (`maybeTranscodeToMp3()`'s ENOENT fallback path is what actually runs in
-every test and in this deployment) - see the Phase 9 environment-requirements note above. Same
-category of gap for Phase 11: the evaluator and improvement-suggestion prompts are real and sent to
+MP3 transcoding via `ffmpeg` was written in Phase 9 but not exercised there since no `ffmpeg` binary
+was installed in that build's sandbox. **Phase 14 re-checked this fresh and ffmpeg 6.1.1 is now
+installed and on `PATH`** - `cdr.mp3Transcode.test.ts` proves the real transcode branch actually
+engages (a real generated WAV fixture, re-encoded by the real `ffmpeg` child process, independently
+verified as valid MP3 by `ffprobe`), alongside regression coverage for the already-mp3 passthrough
+and the ffmpeg-unavailable fallback (skipped in this run since ffmpeg is present, but still present
+in the suite for an environment where it isn't). Same category of gap for Phase 11: the evaluator and improvement-suggestion prompts are real and sent to
 the real OpenAI chat completions endpoint shape (`lib/llm/openai.ts`, unchanged from Phase 3), but
 this sandbox has no real `OPENAI_API_KEY`/network access, so `phase11.integration.test.ts` mocks the
 same `fetch` boundary Phase 9/10's tests already established, returning realistic rubric/suggestion

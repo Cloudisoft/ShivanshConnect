@@ -5,6 +5,7 @@
  * on top of this, without re-testing the file-writing mechanics again.
  */
 import { describe, expect, it } from 'vitest';
+import ExcelJS from 'exceljs';
 import { writeCsv, writeXlsx } from './writers.js';
 
 interface Fixture {
@@ -53,9 +54,8 @@ describe('exportGenerators/writers - shared CSV/XLSX file writing', () => {
     const buffer = await writeXlsx('Sheet1', rows, COLUMNS);
     expect(buffer.length).toBeGreaterThan(0);
 
-    const ExcelJS = (await import('exceljs')).default;
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer);
+    await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
     const sheet = workbook.getWorksheet('Sheet1')!;
     expect(sheet.rowCount).toBe(3); // header + 2 data rows
     expect(sheet.getRow(1).getCell(1).value).toBe('ID');
