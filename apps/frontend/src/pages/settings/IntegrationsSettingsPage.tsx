@@ -4,13 +4,143 @@ import { CALL_ENGINE_LABELS, CALL_ENGINES, DEFAULT_CALL_ENGINE_SETTINGS_KEY, typ
 import { useAuth } from '../../hooks/useAuth';
 import { useSaveVapiCredentials, useTestVapiConnection, useVapiCredentials } from '../../hooks/useOrchestration';
 import { useOrganization, useUpdateOrganization } from '../../hooks/useOrganization';
+import { useSaveSmtpSettings, useSmtpSettings, useTestSmtpSettings } from '../../hooks/useMessaging';
 import { Alert, Badge, Button, Card, Input, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
 
 const STILL_LOCKED_SECTIONS = [
-  { name: 'SMTP (outbound email)', note: 'Arrives with the Notifications build phase.' },
-  { name: 'Redis / job queues', note: 'Arrives with the Campaigns & Dialing build phase.' },
+  { name: 'Redis / job queues', note: 'Arrives with the deployment/infra build phase.' },
 ];
+
+function SmtpCard(): JSX.Element {
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission('settings.manage');
+  const settingsQuery = useSmtpSettings();
+  const save = useSaveSmtpSettings();
+  const test = useTestSmtpSettings();
+  const settings = settingsQuery.data;
+
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState(587);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [encryption, setEncryption] = useState<'tls' | 'ssl' | 'none'>('tls');
+  const [fromName, setFromName] = useState('');
+  const [fromEmail, setFromEmail] = useState('');
+  const [testRecipient, setTestRecipient] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  function loadFromSettings() {
+    if (!settings) return;
+    setHost(settings.host);
+    setPort(settings.port);
+    setUsername(settings.username);
+    setEncryption(settings.encryption);
+    setFromName(settings.from_name);
+    setFromEmail(settings.from_email);
+  }
+
+  async function handleSave() {
+    setError(null);
+    setSaved(false);
+    try {
+      await save.mutateAsync({
+        host: host || settings?.host,
+        port: port || settings?.port,
+        username: username || settings?.username,
+        password: password || undefined,
+        encryption,
+        from_name: fromName,
+        from_email: fromEmail || settings?.from_email,
+      });
+      setPassword('');
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Could not save SMTP settings.');
+    }
+  }
+
+  async function handleTest() {
+    setTestResult(null);
+    try {
+      const result = await test.mutateAsync(testRecipient);
+      setTestResult({ success: result.success, message: result.success ? 'Test email sent successfully.' : result.error ?? 'Test email failed.' });
+    } catch (err) {
+      setTestResult({ success: false, message: err instanceof ApiClientError ? err.message : 'Test email failed.' });
+    }
+  }
+
+  return (
+    <Card>
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-ink-900">SMTP (outbound email)</h3>
+        {settings && <Badge tone={settings.status === 'connected' ? 'success' : settings.status === 'error' ? 'danger' : 'neutral'}>{settings.status.replace('_', ' ')}</Badge>}
+      </div>
+      <p className="mt-1 text-xs text-ink-500">Used by Messaging &gt; Email Campaigns. The password is encrypted at rest and never shown again once saved.</p>
+      {settings?.last_error && <p className="mt-1 text-xs text-red-600">{settings.last_error}</p>}
+
+      {canManage && (
+        <div className="mt-4 space-y-3">
+          {error && <Alert>{error}</Alert>}
+          {saved && !error && <Alert variant="success">SMTP settings saved.</Alert>}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="smtp-host">Host</Label>
+              <Input id="smtp-host" placeholder={settings?.host} value={host} onChange={(e) => setHost(e.target.value)} onFocus={loadFromSettings} />
+            </div>
+            <div>
+              <Label htmlFor="smtp-port">Port</Label>
+              <Input id="smtp-port" type="number" placeholder={String(settings?.port ?? 587)} value={port || ''} onChange={(e) => setPort(Number(e.target.value))} onFocus={loadFromSettings} />
+            </div>
+            <div>
+              <Label htmlFor="smtp-username">Username</Label>
+              <Input id="smtp-username" placeholder={settings?.username} value={username} onChange={(e) => setUsername(e.target.value)} onFocus={loadFromSettings} />
+            </div>
+            <div>
+              <Label htmlFor="smtp-password">Password</Label>
+              <Input id="smtp-password" type="password" placeholder={settings ? '••••••••' : ''} value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="smtp-encryption">Encryption</Label>
+              <select
+                id="smtp-encryption"
+                className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+                value={encryption}
+                onChange={(e) => setEncryption(e.target.value as 'tls' | 'ssl' | 'none')}
+                onFocus={loadFromSettings}
+              >
+                <option value="tls">STARTTLS</option>
+                <option value="ssl">SSL/implicit TLS</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+            <div>
+              <Label htmlFor="smtp-from-name">From name</Label>
+              <Input id="smtp-from-name" placeholder={settings?.from_name} value={fromName} onChange={(e) => setFromName(e.target.value)} onFocus={loadFromSettings} />
+            </div>
+            <div>
+              <Label htmlFor="smtp-from-email">From email</Label>
+              <Input id="smtp-from-email" placeholder={settings?.from_email} value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} onFocus={loadFromSettings} />
+            </div>
+          </div>
+          <Button variant="secondary" disabled={save.isPending} onClick={handleSave}>
+            {save.isPending ? 'Saving...' : 'Save SMTP settings'}
+          </Button>
+
+          <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 pt-3">
+            <Input placeholder="test-recipient@example.com" className="max-w-xs" value={testRecipient} onChange={(e) => setTestRecipient(e.target.value)} />
+            <Button variant="secondary" disabled={test.isPending || !settings || !testRecipient} onClick={handleTest}>
+              {test.isPending ? 'Sending...' : 'Send test email'}
+            </Button>
+            {testResult && <span className={testResult.success ? 'text-xs text-green-700' : 'text-xs text-red-600'}>{testResult.message}</span>}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function VapiCard(): JSX.Element {
   const { hasPermission } = useAuth();
@@ -165,6 +295,7 @@ export function IntegrationsSettingsPage(): JSX.Element {
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <VapiCard />
         <CallEngineCard />
+        <SmtpCard />
       </div>
       <div className="mt-6 divide-y divide-ink-100 rounded-lg border border-ink-200 bg-white">
         {STILL_LOCKED_SECTIONS.map((section) => (

@@ -49,6 +49,6 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'inbound-routes', label: 'Inbound Routes', path: '/inbound-routes', icon: Route, builtInPhase1: false },
   { id: 'queues', label: 'Queues', path: '/queues', icon: ListOrdered, builtInPhase1: false },
   { id: 'users', label: 'Users', path: '/users', icon: Users, builtInPhase1: true },
-  { id: 'messaging', label: 'Messaging', path: '/messaging', icon: MessageSquare, builtInPhase1: false },
+  { id: 'messaging', label: 'Messaging', path: '/messaging', icon: MessageSquare, builtInPhase1: true },
   { id: 'settings', label: 'Settings', path: '/settings', icon: Settings, builtInPhase1: true },
 ];
