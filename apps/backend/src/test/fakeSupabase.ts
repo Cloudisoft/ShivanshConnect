@@ -68,6 +68,10 @@ interface Tables {
   call_summaries: Row[];
   exports: Row[];
   call_evaluations: Row[];
+  analytics_daily_org: Row[];
+  analytics_daily_campaign: Row[];
+  analytics_daily_agent: Row[];
+  analytics_hourly_org: Row[];
 }
 
 export interface FakeAuthUser {
@@ -127,6 +131,10 @@ export function createFakeSupabase() {
     call_summaries: [],
     exports: [],
     call_evaluations: [],
+    analytics_daily_org: [],
+    analytics_daily_campaign: [],
+    analytics_daily_agent: [],
+    analytics_hourly_org: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -283,6 +291,8 @@ export function createFakeSupabase() {
         return actual > value;
       case 'lte':
         return actual <= value;
+      case 'lt':
+        return actual < value;
       default:
         return true;
     }
@@ -633,6 +643,11 @@ export function createFakeSupabase() {
       return this;
     }
 
+    lt(field: string, value: any): this {
+      this.filters.push([field, 'lt', value]);
+      return this;
+    }
+
     or(expr: string): this {
       // Supports the shapes this codebase uses, e.g.
       // "is_system_role.eq.true,organization_id.eq.<uuid>" or
@@ -903,6 +918,173 @@ export function createFakeSupabase() {
     };
   }
 
+  /**
+   * Phase 12: JS re-implementations of the real SQL rollup functions in
+   * supabase/migrations/00000000000044_phase12_analytics_rollup_fns.sql -
+   * same "GROUP BY math computed in Postgres for real, mirrored in JS
+   * here for app.inject() test coverage" split as every RPC above. The
+   * real SQL was hand-verified against real Postgres for correctness and
+   * idempotency (see the migration's own header + README's verification
+   * notes); this mirrors its exact field definitions ("connected" =
+   * answered_at is not null, etc.) against the in-memory tables.
+   */
+  function dispositionCodeForCall(orgId: string, callId: string): string | null {
+    const cd = tables.call_dispositions.find((c) => c.call_id === callId && c.organization_id === orgId);
+    if (!cd) return null;
+    const def = tables.dispositions.find((d) => d.id === cd.disposition_id);
+    return def?.code ?? null;
+  }
+
+  function upsertRollupRow(table: 'analytics_daily_org' | 'analytics_daily_campaign' | 'analytics_daily_agent' | 'analytics_hourly_org', keyFields: Record<string, any>, values: Record<string, any>): void {
+    const existing = tables[table].find((r) => Object.entries(keyFields).every(([k, v]) => r[k] === v));
+    if (existing) {
+      Object.assign(existing, values, { updated_at: new Date().toISOString() });
+    } else {
+      tables[table].push({ ...keyFields, ...values, updated_at: new Date().toISOString() });
+    }
+  }
+
+  function average(values: number[]): number | null {
+    if (values.length === 0) return null;
+    return Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100) / 100;
+  }
+
+  function recomputeAnalyticsDailyOrg(args: { p_org_id: string; p_date: string }): { data: null; error: null } {
+    const { p_org_id: orgId, p_date: date } = args;
+    const calls = tables.calls.filter((c) => c.organization_id === orgId && String(c.created_at).slice(0, 10) === date);
+    const codeFor = (c: Row) => dispositionCodeForCall(orgId, c.id);
+    const durations = calls.map((c) => c.duration_seconds).filter((v): v is number => v != null);
+    const talk = calls.map((c) => c.talk_duration_seconds).filter((v): v is number => v != null);
+    const callbacksScheduled = tables.callbacks.filter((cb) => cb.organization_id === orgId && String(cb.created_at).slice(0, 10) === date).length;
+    upsertRollupRow(
+      'analytics_daily_org',
+      { organization_id: orgId, date },
+      {
+        total_calls: calls.length,
+        calls_connected: calls.filter((c) => c.answered_at != null).length,
+        calls_completed: calls.filter((c) => c.status === 'completed').length,
+        calls_failed: calls.filter((c) => c.status === 'failed').length,
+        voicemails: calls.filter((c) => codeFor(c) === 'VOICEMAIL').length,
+        answering_machines: calls.filter((c) => codeFor(c) === 'ANSWERING_MACHINE').length,
+        dnc_count: calls.filter((c) => codeFor(c) === 'DNC').length,
+        not_interested_count: calls.filter((c) => codeFor(c) === 'NOT_INTERESTED').length,
+        transfers: calls.filter((c) => codeFor(c) === 'TRANSFERRED').length,
+        callbacks_scheduled: callbacksScheduled,
+        avg_call_duration_seconds: average(durations),
+        avg_talk_time_seconds: average(talk),
+      },
+    );
+    return { data: null, error: null };
+  }
+
+  function recomputeAnalyticsDailyCampaign(args: { p_org_id: string; p_date: string }): { data: null; error: null } {
+    const { p_org_id: orgId, p_date: date } = args;
+    const calls = tables.calls.filter((c) => c.organization_id === orgId && String(c.created_at).slice(0, 10) === date && c.campaign_id);
+    const byCampaign = new Map<string, Row[]>();
+    for (const c of calls) {
+      const list = byCampaign.get(c.campaign_id) ?? [];
+      list.push(c);
+      byCampaign.set(c.campaign_id, list);
+    }
+    for (const [campaignId, campaignCalls] of byCampaign) {
+      const codeFor = (c: Row) => dispositionCodeForCall(orgId, c.id);
+      const durations = campaignCalls.map((c) => c.duration_seconds).filter((v): v is number => v != null);
+      const leadsCalled = new Set(campaignCalls.map((c) => c.lead_id)).size;
+      const leadsRemaining = tables.campaign_leads.filter((cl) => cl.campaign_id === campaignId && !['completed', 'failed', 'dnc', 'skipped'].includes(cl.status)).length;
+      const callbacks = tables.callbacks.filter((cb) => cb.organization_id === orgId && cb.campaign_id === campaignId && String(cb.created_at).slice(0, 10) === date).length;
+      upsertRollupRow(
+        'analytics_daily_campaign',
+        { organization_id: orgId, campaign_id: campaignId, date },
+        {
+          total_calls: campaignCalls.length,
+          connected: campaignCalls.filter((c) => c.answered_at != null).length,
+          voicemail: campaignCalls.filter((c) => codeFor(c) === 'VOICEMAIL').length,
+          dnc: campaignCalls.filter((c) => codeFor(c) === 'DNC').length,
+          transfers: campaignCalls.filter((c) => codeFor(c) === 'TRANSFERRED').length,
+          callbacks,
+          failed: campaignCalls.filter((c) => c.status === 'failed').length,
+          avg_duration_seconds: average(durations),
+          leads_called: leadsCalled,
+          leads_remaining: leadsRemaining,
+        },
+      );
+    }
+    return { data: null, error: null };
+  }
+
+  function recomputeAnalyticsDailyAgent(args: { p_org_id: string; p_date: string }): { data: null; error: null } {
+    const { p_org_id: orgId, p_date: date } = args;
+    const calls = tables.calls.filter((c) => c.organization_id === orgId && String(c.created_at).slice(0, 10) === date && c.ai_agent_id);
+    const byAgent = new Map<string, Row[]>();
+    for (const c of calls) {
+      const list = byAgent.get(c.ai_agent_id) ?? [];
+      list.push(c);
+      byAgent.set(c.ai_agent_id, list);
+    }
+    for (const [agentId, agentCalls] of byAgent) {
+      const codeFor = (c: Row) => dispositionCodeForCall(orgId, c.id);
+      const durations = agentCalls.map((c) => c.duration_seconds).filter((v): v is number => v != null);
+      const callIdsToday = new Set(agentCalls.map((c) => c.id));
+      const evalScores = tables.call_evaluations.filter((ce) => ce.organization_id === orgId && callIdsToday.has(ce.call_id)).map((ce) => Number(ce.overall_score));
+      upsertRollupRow(
+        'analytics_daily_agent',
+        { organization_id: orgId, ai_agent_id: agentId, date },
+        {
+          total_calls: agentCalls.length,
+          connected: agentCalls.filter((c) => c.answered_at != null).length,
+          avg_duration_seconds: average(durations),
+          transfers: agentCalls.filter((c) => codeFor(c) === 'TRANSFERRED').length,
+          dnc: agentCalls.filter((c) => codeFor(c) === 'DNC').length,
+          voicemail: agentCalls.filter((c) => codeFor(c) === 'VOICEMAIL').length,
+          avg_evaluation_score: average(evalScores),
+        },
+      );
+    }
+    return { data: null, error: null };
+  }
+
+  function recomputeAnalyticsHourlyOrg(args: { p_org_id: string; p_hour: string }): { data: null; error: null } {
+    const { p_org_id: orgId, p_hour: hour } = args;
+    const bucket = new Date(hour);
+    bucket.setUTCMinutes(0, 0, 0);
+    const bucketIso = bucket.toISOString();
+    const calls = tables.calls.filter((c) => {
+      if (c.organization_id !== orgId) return false;
+      const d = new Date(c.created_at);
+      d.setUTCMinutes(0, 0, 0);
+      return d.toISOString() === bucketIso;
+    });
+    upsertRollupRow(
+      'analytics_hourly_org',
+      { organization_id: orgId, hour_bucket: bucketIso },
+      { total_calls: calls.length, calls_connected: calls.filter((c) => c.answered_at != null).length },
+    );
+    return { data: null, error: null };
+  }
+
+  function dashboardDispositionBreakdown(args: { match_organization_id: string; match_from: string; match_to: string }): { data: Row[]; error: null } {
+    const { match_organization_id: orgId, match_from: from, match_to: to } = args;
+    const fromMs = new Date(from).getTime();
+    const toMs = new Date(to).getTime();
+    const counts = new Map<string, { name: string; count: number }>();
+    for (const cd of tables.call_dispositions) {
+      if (cd.organization_id !== orgId) continue;
+      const call = tables.calls.find((c) => c.id === cd.call_id);
+      if (!call || call.organization_id !== orgId) continue;
+      const createdMs = new Date(call.created_at).getTime();
+      if (createdMs < fromMs || createdMs >= toMs) continue;
+      const def = tables.dispositions.find((d) => d.id === cd.disposition_id);
+      if (!def) continue;
+      const entry = counts.get(def.code) ?? { name: def.name, count: 0 };
+      entry.count += 1;
+      counts.set(def.code, entry);
+    }
+    const data = [...counts.entries()]
+      .map(([code, { name, count }]) => ({ code, name, call_count: count }))
+      .sort((a, b) => b.call_count - a.call_count);
+    return { data, error: null };
+  }
+
   const supabase = {
     from(table: keyof Tables) {
       return new QueryBuilder(table);
@@ -916,6 +1098,21 @@ export function createFakeSupabase() {
       }
       if (fnName === 'agent_evaluation_summary') {
         return agentEvaluationSummary(args as any);
+      }
+      if (fnName === 'recompute_analytics_daily_org') {
+        return recomputeAnalyticsDailyOrg(args as any);
+      }
+      if (fnName === 'recompute_analytics_daily_campaign') {
+        return recomputeAnalyticsDailyCampaign(args as any);
+      }
+      if (fnName === 'recompute_analytics_daily_agent') {
+        return recomputeAnalyticsDailyAgent(args as any);
+      }
+      if (fnName === 'recompute_analytics_hourly_org') {
+        return recomputeAnalyticsHourlyOrg(args as any);
+      }
+      if (fnName === 'dashboard_disposition_breakdown') {
+        return dashboardDispositionBreakdown(args as any);
       }
       return { data: null, error: { message: `Unknown RPC function in fake client: ${fnName}` } };
     },

@@ -46,6 +46,9 @@ import { OrchestrationProviderError, OrchestrationProviderNotConfiguredError } f
 import { campaignRoutes } from './routes/campaigns.js';
 import { dialingSettingsRoutes, campaignSettingsRoutes } from './routes/dialingSettings.js';
 import { startCampaignDispatcher } from './services/campaignDispatcher.js';
+import { startAnalyticsAggregator } from './services/analyticsAggregator.js';
+import { dashboardRoutes } from './routes/dashboard.js';
+import { analyticsRoutes } from './routes/analytics.js';
 import { dispositionRoutes } from './routes/dispositions.js';
 import { callbackRoutes } from './routes/callbacks.js';
 import { cdrRoutes } from './routes/cdr.js';
@@ -147,6 +150,11 @@ export function buildApp() {
       // `websocket: true` option only applies to itself.
       api.register(liveMonitorWsRoutes, { prefix: '/live-monitor' });
       api.register(liveMonitorActionRoutes, { prefix: '/calls' });
+      // Phase 12: dashboard KPI/chart endpoints and campaign/agent
+      // analytics - two separate plugin registrations under distinct
+      // prefixes, both backed by services/analyticsQuery.ts.
+      api.register(dashboardRoutes, { prefix: '/dashboard' });
+      api.register(analyticsRoutes, { prefix: '/analytics' });
     },
     { prefix: '/api/v1' },
   );
@@ -284,6 +292,10 @@ async function main() {
     // buildApp() directly via app.inject(), never main()) never has a
     // background timer running against its fake Supabase client.
     startCampaignDispatcher();
+    // Phase 12: same "not started by buildApp() itself" reasoning as the
+    // campaign dispatcher above - the test suite never gets a background
+    // aggregation timer running against its fake Supabase client.
+    startAnalyticsAggregator();
   } catch (err) {
     app.log.error(err);
     process.exit(1);
