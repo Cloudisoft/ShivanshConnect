@@ -7,6 +7,7 @@ import {
   useCampaignLifecycleAction,
   useCampaigns,
   useCreateCampaign,
+  useDeleteCampaign,
   useDuplicateCampaign,
   type CampaignWithCounts,
 } from '../hooks/useCampaigns';
@@ -74,11 +75,21 @@ function CampaignCard({ campaign }: { campaign: CampaignWithCounts }): JSX.Eleme
   const stop = useCampaignLifecycleAction('stop');
   const archive = useCampaignLifecycleAction('archive');
   const duplicate = useDuplicateCampaign();
+  const deleteCampaign = useDeleteCampaign();
 
   const counts = campaign.counts;
   const called = counts.total - counts.pending - counts.retry_pending;
   const progressPct = counts.total > 0 ? Math.round((called / counts.total) * 100) : 0;
-  const busy = start.isPending || pause.isPending || resume.isPending || stop.isPending || archive.isPending;
+  const busy = start.isPending || pause.isPending || resume.isPending || stop.isPending || archive.isPending || deleteCampaign.isPending;
+
+  function handleDelete() {
+    if (!window.confirm(`Delete "${campaign.name}"? This permanently removes the campaign and cannot be undone.`)) return;
+    deleteCampaign.mutate(campaign.id, {
+      onError: (err) => {
+        window.alert(err instanceof ApiClientError ? err.message : 'Could not delete this campaign.');
+      },
+    });
+  }
 
   return (
     <Card className="flex flex-col gap-3">
@@ -132,8 +143,18 @@ function CampaignCard({ campaign }: { campaign: CampaignWithCounts }): JSX.Eleme
             Duplicate
           </Button>
           {['draft', 'stopped', 'completed', 'failed'].includes(campaign.status) && hasPermission('campaigns.delete') && (
-            <Button variant="ghost" disabled={busy} onClick={() => archive.mutate(campaign.id)}>
-              Archive
+            <>
+              <Button variant="ghost" disabled={busy} onClick={() => archive.mutate(campaign.id)}>
+                Archive
+              </Button>
+              <Button variant="danger" disabled={busy} onClick={handleDelete}>
+                Delete
+              </Button>
+            </>
+          )}
+          {campaign.status === 'archived' && hasPermission('campaigns.delete') && (
+            <Button variant="danger" disabled={busy} onClick={handleDelete}>
+              Delete
             </Button>
           )}
         </div>
