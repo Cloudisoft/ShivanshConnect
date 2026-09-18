@@ -1,7 +1,8 @@
 # ShivanshConnect
 
-A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-13** (organizations, auth, users, roles/permissions, audit logs, the overall
+A multi-tenant AI voice contact-center platform. This repository was built in phases; **this build
+covers all 15 phases of the master spec, end to end** - the platform described below is the
+complete, final state of the build, not a partial one. Phases 1-14 (organizations, auth, users, roles/permissions, audit logs, the overall
 app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; AI agents/agent versioning/
 prompt system/knowledge base (RAG)/scripts; voice providers/cloning; telephony number providers -
 Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry; call
@@ -46,9 +47,16 @@ that raw SMTP cannot report delivery/bounce/reply without a transactional email 
 campaign messages, a real shared `writeCsv`/`writeXlsx` file-writing layer and job runner every
 export type now goes through, a unified Export History view spanning every module in one place, and
 this build's real, re-verified `ffmpeg` MP3 transcoding on call recording downloads - see
-[Phase 14](#phase-14-this-build---done) below). Later phases (inbound routing, queues, further
-performance/load testing, and more) are deliberately **not** implemented yet - see
-[Phase plan status](#phase-plan-status) below.
+[Phase 14](#phase-14-this-build---done) below); and finally **Performance, load testing, worker
+scaling, and failure recovery** (Phase 15 - a real, checked-in 10,000-lead load test proving the
+Phase 7 dispatch pipeline against a real Postgres database across three concurrency tiers, real
+process-restart/crash-isolation/provider-timeout/transaction-atomicity/out-of-order-webhook failure-
+recovery tests, a new call-state reconciliation safety net, a real system health endpoint/page, and
+this final documentation pass - see the "Phase 15 (this build)" entry further down in
+[Phase plan status](#phase-plan-status) below). A small number of things remain explicitly, permanently deferred by design (Redis/BullMQ,
+inbound call routing/ring groups, production S3-compatible storage, per-org-timezone analytics) -
+see [Phase plan status](#phase-plan-status) below and the "Explicitly NOT built yet" list at the end
+of the Phase 15 section for the complete, final list and exactly why each one is out of scope.
 
 ## Architecture overview
 
@@ -91,6 +99,87 @@ supabase/            SQL migrations + seed data (Supabase Postgres, Row Level Se
   - `shivanshconnect-pipecat-service` (Phase 6) - a **fourth** Railway service, Python/uvicorn
     running `apps/pipecat-service`, its own domain and environment variables. See that service's
     README for its exact start command and variable list.
+
+### The two call orchestration engines, and when each is used
+
+Every call/campaign resolves to exactly one of two real engines (`calls.engine`), chosen per
+organization via `organization_settings` (default Vapi) and overridable per campaign version - see
+`services/callOrigination.ts`'s `resolveDefaultEngine()`:
+
+- **Vapi** (managed) - the default. A hosted third-party API (`lib/orchestration/vapi.ts`): this
+  backend creates/updates a Vapi "assistant" per published agent version, imports the org's phone
+  number into Vapi once, and places calls through Vapi's own telephony + STT/LLM/TTS pipeline.
+  Listen/whisper/barge (Phase 10 Live Monitor) use Vapi's real, honestly-limited `monitor.listenUrl`/
+  `monitor.controlUrl` mechanism - whisper/barge are approximated within what that mechanism
+  actually allows, documented exactly where in `ws/liveMonitorRoutes.ts`.
+- **pipecat** (self-hosted) - `apps/pipecat-service`, a **separate** Python/FastAPI process running
+  the real `pipecat-ai` real-time voice pipeline, with its own Twilio/Telnyx telephony bridge, its
+  own STT (Deepgram)/LLM/TTS provider calls, and its own webhook deliveries back to this Node
+  backend (`POST /api/v1/webhooks/pipecat`). Chosen when an org's `organization_settings` names it,
+  or when a campaign version's snapshot does. Listen/whisper/barge here are real audio-frame
+  tapping/injection/mixing inside pipecat-service's own pipeline - a genuinely different (and more
+  capable) mechanism than Vapi's, not a re-implementation of the same trick.
+
+Regardless of engine, every call is still exactly ONE row in this backend's own `calls` table (spec
+section 101's explicit "never a separate identity space" rule) - `calls.engine` plus either
+`vapi_call_id` or `pipecat_call_id` is the only place the distinction lives; every downstream
+system (state machine, disposition engine, CDR, analytics, Live Monitor) is engine-agnostic.
+
+### The queue/dispatch pattern, and its BullMQ migration path
+
+Every background loop in this build - the Phase 7 campaign dispatcher, the Phase 12 analytics
+aggregator, the Phase 13 SMS/email dispatchers, the Phase 15 call-reconciliation job, plus Phase 2's
+lead import and Phase 3/4's knowledge-document/voice-cloning processing - runs today as a real
+in-process `setInterval`/`setImmediate` loop against this one backend process, never a separate
+worker or Redis-backed queue (see the "Explicitly NOT built yet" list at the end of the Phase 15
+entry in [Phase plan status](#phase-plan-status) for exactly why this remains deferred). This is a documented, deliberate
+stand-in, not an oversight: every one of these loops is structured as a genuine drop-in for a real
+BullMQ repeatable job -
+1. a pure "process ONE unit of work" function (`processCampaign(campaign)`,
+   `runAggregationTick()`, `reconcileOrganizationCalls(supabase, orgId, stuckBefore)`, ...) that
+   takes already-resolved inputs and does one bounded pass, never assuming it owns the whole
+   process;
+2. a race-safe claim mechanism where concurrent workers matter (the CAS `UPDATE ... WHERE status =
+   <expected> ... RETURNING` claim in `campaignDispatcher.ts`) that works identically whether "two
+   concurrent callers" means two overlapping `setInterval` ticks in one process (today) or two
+   separate BullMQ workers (the migration target) - Postgres's own row-level locking is what
+   actually provides the guarantee either way, not anything about how the caller is scheduled;
+3. a thin `start*()`/`stop*()` wrapper around `setInterval` that is the ONLY piece that would
+   actually change on a real migration - replaced by a BullMQ repeatable-job registration calling
+   the exact same tick function.
+The Phase 15 load test (`apps/backend/src/loadtest/`) is what proves this pattern holds up at real
+scale (10,000 leads, 500 concurrent claims) on a single process against real Postgres before any
+such migration would even be needed.
+
+### Database schema - major table groups
+
+59 tables across 48 migrations (`supabase/migrations/`), every one with Row Level Security enabled.
+Grouped by the phase that introduced them:
+
+- **Identity/tenancy** (Phase 1): `organizations`, `organization_settings`, `users`, `roles`,
+  `permissions`, `role_permissions`, `user_roles`, `audit_logs`, `user_invitations`.
+- **Leads** (Phase 2): `lead_lists`, `leads`, `lead_list_members`, `lead_custom_fields`,
+  `dnc_entries`, `import_jobs`, `import_job_rows`.
+- **AI agents/knowledge** (Phase 3): `ai_agents`, `ai_agent_versions`, `ai_agent_improvements`,
+  `scripts`, `knowledge_bases`, `knowledge_documents`, `knowledge_chunks` (pgvector).
+- **Voices** (Phase 4): `voice_providers`, `voice_provider_credentials`, `voices`.
+- **Telephony numbers** (Phase 5): `phone_number_providers`, `phone_number_provider_credentials`,
+  `phone_numbers`.
+- **Call orchestration** (Phase 6): `vapi_credentials`, `calls`, `call_events`, `webhook_events`,
+  `webhook_failures`.
+- **Campaigns/dispatch** (Phase 7): `campaigns`, `campaign_versions`, `campaign_leads`,
+  `campaign_lead_skip_log`, `campaign_settings`, `dialing_settings`.
+- **State machine/dispositions** (Phase 8): `dispositions`, `call_dispositions`, `callbacks`.
+- **CDR/artifacts** (Phase 9): `call_transcripts`, `call_transcript_segments`, `call_recordings`,
+  `call_summaries`, `exports` (generalized further in Phase 14).
+- **Evaluation** (Phase 11): `call_evaluations` (plus `ai_agent_improvements` extended).
+- **Analytics** (Phase 12): `analytics_daily_org`, `analytics_daily_campaign`,
+  `analytics_daily_agent`, `analytics_hourly_org`.
+- **Messaging** (Phase 13): `smtp_settings`, `sms_campaigns`, `sms_messages`, `email_campaigns`,
+  `email_messages`, `email_suppressions`.
+
+Phase 15 added no new tables (see its section below) - the load test and health endpoint both work
+entirely against the schema above.
 
 ## Phase plan status
 
@@ -1232,11 +1321,130 @@ build's sandbox now has one (`ffmpeg 6.1.1`, confirmed via `ffmpeg -version` and
 deployment target lacks `ffmpeg` on `PATH`, the honest source-format-passthrough fallback
 (unchanged since Phase 9) takes over automatically with zero code changes needed.
 
-**Explicitly NOT built yet** (deferred to later phases):
+**Phase 15 (this build) - done, and the final phase of this 15-phase build:**
 
-- Redis/BullMQ - Phase 7's campaign dispatcher runs today as a documented in-process `setInterval`
-  drop-in (see above); migrating it to a real queue is Phase 15 infra work, not a logic change
+- **A real, checked-in 10,000-lead load test** (`apps/backend/src/loadtest/`, run via
+  `pnpm run loadtest`, excluded from the default fast `pnpm run test` suite - see
+  `apps/backend/vitest.loadtest.config.ts`) against a **real local PostgreSQL 16 database** with
+  every one of the 48 real migrations applied - never the in-memory `fakeSupabase` fixture every
+  other phase's tests use. The ONLY thing mocked is the outbound `fetch` call to Vapi's REST API
+  (spec section 75's explicit "without actually placing phone calls" requirement); the dispatcher,
+  eligibility query, CAS lead-claiming, call state machine, disposition engine and campaign_leads
+  bookkeeping are the real, unmodified production modules. `pgSupabaseAdapter.ts` is a real-
+  Postgres-backed stand-in for the small subset of the supabase-js chainable query builder this
+  backend's production code actually calls, swapped in via the exact same `vi.mock('../lib/
+  supabase.js', ...)` seam every other integration test in this repo already uses to swap in
+  `fakeSupabase` - see its own header comment for exactly why this was necessary (no local
+  PostgREST server exists in this sandbox to speak to with the real supabase-js client) and exactly
+  what it does and doesn't cover.
+  - `dispatch10k.loadtest.test.ts`: seeds 10,000 real leads once, then runs 3 full concurrency
+    tiers (100/250/500) end to end. **Real measured result in this sandbox**: 0 duplicate-dialed
+    leads, 0 lost leads, the concurrency cap exactly respected at every sampled instant for all
+    three tiers, ~85-93 leads/sec throughput, real retry-then-success and retry-then-exhausted
+    paths both proven with a deterministic per-lead outcome scheme, disposition assignment spot-
+    checked against the real deterministic engine. See the Verification notes below for the exact
+    numbers and the final report this phase produced.
+  - `eligibilityQueryPlan.loadtest.test.ts`: a real `EXPLAIN (ANALYZE, FORMAT JSON)` proving the
+    dispatcher's candidate query stays index-backed (never a sequential scan) on `campaign_leads`
+    at 20,000-row scale across two campaigns (spec section 55).
+  - `dispatchBatching.loadtest.test.ts`: instruments the real Postgres connection pool to prove the
+    dispatcher never fetches more than its own `capacity * CANDIDATE_BATCH_MULTIPLIER` LIMIT-bound
+    in a single round trip, even against a real 10,000-row table (10,501 round trips across 500
+    ticks at concurrency=20, every one bounded to <=100 rows).
+  - `analyticsReconciliation.loadtest.test.ts`: runs the real Phase 12 rollup SQL functions against
+    a real dataset and reconciles every number against independently hand-written SQL aggregates.
+  - `failureRecovery.loadtest.test.ts`: process-restart recovery (stops/restarts the dispatcher's
+    real `setInterval`, proves DB-state-only recovery), crash isolation (an injected thrown
+    non-Error value mid-batch never aborts the rest of the batch or corrupts subsequent ticks),
+    provider-timeout retry (every lead cleanly lands `retry_pending`/`failed`, never stuck
+    `dialing` forever), DB-transaction atomicity (a forced `calls` INSERT failure never leaves an
+    orphaned claim), and a genuine gap this phase found and closed: **out-of-order webhook
+    delivery** - a stale `end-of-call-report` for a superseded attempt arriving after the lead was
+    already re-dialed. Grepping the existing `fakeSupabase`-backed suite found same-delivery
+    duplicate idempotency already covered (`orchestration.integration.test.ts`) but no test for
+    this exact out-of-order sequence; verified passing with **no production code change needed** -
+    `campaignLeadDisposition.ts`'s existing `last_call_id !== call.id` guard already handled it
+    correctly.
+- **`services/callReconciliation.ts` - the stuck-call safety net (spec section 73), built fresh
+  this phase** (no prior phase built it). Phase 6-8 relied entirely on webhook delivery to drive
+  `calls.status` forward - correct the overwhelming majority of the time, but a webhook that's lost
+  outright (never delivered at all, not just delayed) can leave a call stuck in a non-terminal
+  status forever even though the orchestration engine itself has long since ended it. The same
+  in-process `setInterval` pattern every other scheduler in this build uses: every tick, per
+  organization, finds calls non-terminal for longer than `CALL_RECONCILIATION_STUCK_TIMEOUT_MS`
+  (default 10 minutes), calls the real orchestration provider's `getCall()`, and - only when the
+  provider confirms the call actually ended - repairs local state through the real
+  `transitionCallState()` state machine, mirroring `routes/webhooks.ts`'s own status-mapping
+  decisions exactly. A call the provider still reports active, or a provider that's unreachable, is
+  left completely untouched, never guessed at. Wired into `index.ts`'s startup alongside every
+  other scheduler. 4 fast unit tests (`services/callReconciliation.test.ts`) prove: a genuinely-
+  ended call is repaired through the real state machine, a still-active call is left alone, a call
+  that hasn't been stuck long enough is never touched, and a per-call provider error is isolated
+  without corrupting that call or the rest of the pass.
+- **`GET /api/v1/admin/health` - the system health page (spec section 90)**, gated behind
+  `settings.manage`, org-scoped. Real checks, never a hard-coded "everything's fine": a real
+  database query round trip; the call-reconciliation scheduler's last-tick timestamp (with a
+  `warning` once it goes stale); a real write+read+delete round trip against the configured
+  `StorageAdapter`; a real HTTP `GET /health` against `pipecat-service` when
+  `PIPECAT_SERVICE_URL` is configured; and Vapi/Twilio/Telnyx/every voice provider/SMTP reported
+  from each provider's own real status column - the exact field that provider's own existing
+  test-connection route already sets after a real call to it, refreshed the moment an admin
+  re-verifies rather than a redundant live re-ping this endpoint makes on its own. A minimal
+  **Settings > System Health** frontend page (`pages/settings/SystemHealthSettingsPage.tsx`)
+  renders it as Connected/Warning/Error/Not Configured cards with an explicit "Re-check now"
+  button (no background polling). 4 integration tests: a fresh org's honest `not_configured`
+  baseline, a real error surfaced from a failed provider verification, cross-org isolation, and the
+  auth requirement itself.
+- **Two real, loadtest-only bugs found and fixed** while building the harness against real
+  Postgres (both confined to `apps/backend/src/loadtest/pgSupabaseAdapter.ts`, never production
+  code): an untyped array parameter can't be inferred as the right side of `= ANY($1)` by Postgres -
+  fixed by inferring `uuid[]` vs `text[]` from the array's own values rather than ever casting the
+  column side (preserving index usability, which the EXPLAIN ANALYZE test above independently
+  re-verifies); and a `TRUNCATE ... CASCADE` used during manual debugging of the load-test database
+  wiped the shared system dispositions catalog - restored, and documented in
+  `apps/backend/src/loadtest/README.md` so it isn't repeated.
+- **Final environment-variable audit**: `.env.example` was checked against every `process.env.*`
+  reference across the whole backend (a literal grep, not a memory-based guess) - found and added
+  seven previously-undocumented optional scheduler-tuning variables
+  (`CAMPAIGN_DISPATCH_INTERVAL_MS`, `WORKER_POOL_CAPACITY`, `ANALYTICS_AGGREGATION_INTERVAL_MS`,
+  `SMS_DISPATCH_INTERVAL_MS`, `EMAIL_DISPATCH_INTERVAL_MS`, `CALL_RECONCILIATION_INTERVAL_MS`,
+  `CALL_RECONCILIATION_STUCK_TIMEOUT_MS`) and three optional per-feature LLM model overrides
+  (`CALL_SUMMARY_MODEL`, `CALL_EVALUATION_MODEL`, `AGENT_IMPROVEMENT_MODEL`) that were already
+  real, working code but undocumented.
+- `docs/ACCEPTANCE_TEST.md` - the master spec's Final Acceptance Test workflow, written out as a
+  literal checklist and honestly annotated against what's fully real/verified in this sandbox vs.
+  what needs a live external credential this sandbox cannot provide.
+
+### Phase 15 environment requirements
+
+No new required variables - every Phase 15 component (the load-test harness, the reconciliation
+job, the admin health endpoint) reuses credentials/config Phases 1-14 already manage. The load test
+itself needs a real local PostgreSQL 16 instance with every migration applied and
+`LOADTEST_DATABASE_URL` pointed at it (defaults to
+`postgresql://shivansh:shivansh@localhost:5432/shivanshconnect_loadtest`) - see
+`apps/backend/src/loadtest/README.md` for the exact one-time setup. `CALL_RECONCILIATION_INTERVAL_MS`
+(default 5 minutes) and `CALL_RECONCILIATION_STUCK_TIMEOUT_MS` (default 10 minutes) tune the new
+reconciliation job; both are optional.
+
+**Explicitly NOT built yet** (deferred by explicit design, not oversight - this is the final phase
+of this build):
+
+- **Redis/BullMQ** - every background loop in this 15-phase build (lead import, knowledge-document
+  processing, voice cloning, the campaign dispatcher, the analytics aggregator, the SMS/email
+  dispatchers, the Phase 15 call-reconciliation job) runs as a documented in-process
+  `setInterval`/`setImmediate` drop-in, each one's "process one unit of work" function
+  (`processCampaign()`, `runAggregationTick()`, `runReconciliationTick()`, ...) written to be the
+  exact function a real BullMQ job processor would call instead. The Phase 15 load test
+  (`apps/backend/src/loadtest/`) is what proves this pattern holds up at 10,000-lead/500-concurrent
+  scale on a single process against real Postgres; migrating the scheduling layer itself to BullMQ/
+  Redis remains genuinely deferred - a real multi-worker deployment topology, connection pool
+  sizing, and job-retry/backoff policy design are infra decisions outside this build's scope, not a
+  logic change to any of the modules above.
 - Inbound Routes, Queues (inbound call routing, ring groups)
+- Per-organization-timezone analytics rollups - Phase 12's `analytics_daily_org`/`_campaign`/`_agent`
+  rollups bucket by UTC calendar date (see `services/analyticsAggregator.ts`), not each
+  organization's own configured timezone; a multi-region deployment's "today" boundary is
+  therefore UTC's, not the viewing org's local day boundary
 - Transactional-email delivery/bounce/reply tracking (Phase 13's `email_messages` table reserves
   `delivered`/`bounced`/`replied` states for this, but writing them for real needs a transactional
   email provider's own webhook API, e.g. SendGrid/Postmark/SES - out of scope for raw SMTP)
