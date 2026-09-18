@@ -6,4 +6,9 @@ export default defineConfig({
   server: {
     port: 5173,
   },
+  preview: {
+    // Railway's generated domain (and any custom domain) won't match Vite's
+    // default preview host allowlist, so accept any Host header here.
+    allowedHosts: true,
+  },
 });
