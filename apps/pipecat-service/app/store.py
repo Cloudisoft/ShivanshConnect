@@ -31,6 +31,10 @@ class CallRecord:
     from_e164: str
     to_e164: str
     transfer_destination_e164: Optional[str]
+    # Server-resolved per-call personalization from Node - see
+    # CreateCallRequest's doc comment in schemas.py.
+    first_message_override: Optional[str] = None
+    system_prompt_override: Optional[str] = None
     status: str = "dialing"
     carrier: Optional[str] = None  # "twilio" | "telnyx"
     carrier_call_sid: Optional[str] = None
@@ -55,6 +59,8 @@ class CallStore:
         from_e164: str,
         to_e164: str,
         transfer_destination_e164: Optional[str],
+        first_message_override: Optional[str] = None,
+        system_prompt_override: Optional[str] = None,
     ) -> CallRecord:
         record = CallRecord(
             pipecat_call_id=f"pc_{uuid4().hex[:24]}",
@@ -64,6 +70,8 @@ class CallStore:
             from_e164=from_e164,
             to_e164=to_e164,
             transfer_destination_e164=transfer_destination_e164,
+            first_message_override=first_message_override,
+            system_prompt_override=system_prompt_override,
         )
         self._calls[record.pipecat_call_id] = record
         return record

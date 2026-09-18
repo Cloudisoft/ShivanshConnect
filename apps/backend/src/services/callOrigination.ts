@@ -20,12 +20,25 @@
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ValidationError } from '../lib/errors.js';
 import { writeAuditLog } from '../lib/audit.js';
-import { AUDIT_ACTIONS, type CallEngine, DEFAULT_CALL_ENGINE_SETTINGS_KEY } from '@shivanshconnect/shared';
+import { AUDIT_ACTIONS, type CallEngine, type BackgroundNoise, DEFAULT_CALL_ENGINE_SETTINGS_KEY } from '@shivanshconnect/shared';
 import { createOrchestrationProvider, OrchestrationProviderError, OrchestrationProviderNotConfiguredError, type AssistantConfig } from '../lib/orchestration/index.js';
 import { transitionCallState } from '../lib/callStateMachine.js';
 import { VapiProvider } from '../lib/orchestration/vapi.js';
 import { decryptCredentials, type EncryptedEnvelope } from '../lib/crypto/credentials.js';
 import { toAdapterCredentials as toTelephonyAdapterCredentials } from '../routes/phoneNumberProviders.js';
+import { renderTemplate, type PromptVariableContext } from '../lib/promptVariables.js';
+
+/**
+ * Appended to the resolved system prompt only for the unnamed/no-lead
+ * fallback path (see resolveCallPersonalization()) - the named path
+ * already has the lead's real name baked into the rendered greeting, so
+ * there is nothing to "ask for". This is the concrete instruction the
+ * spec calls for: once the caller volunteers their name in response to
+ * the generic greeting, the assistant should pick it up and use it
+ * naturally for the rest of the call instead of ignoring it.
+ */
+const ASK_CALLER_NAME_INSTRUCTION =
+  "\n\nYou do not yet know this caller's name. Early in the conversation, politely ask for their name if they haven't already given it, and once they do, use their first name naturally for the rest of the call.";
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
@@ -41,6 +54,12 @@ async function buildAssistantConfig(
   agent: { id: string },
   version: Record<string, any>,
   voiceOverride: { providerKey: string; providerVoiceId: string } | null,
+  callingRulesOverride?: {
+    voicemail_detection_enabled: boolean;
+    voicemail_message: string | null;
+    leave_voicemail: boolean;
+    background_noise: BackgroundNoise | null;
+  } | null,
 ): Promise<AssistantConfig> {
   let voice: AssistantConfig['voice'] = voiceOverride;
   if (!voice && version.voice_id) {
@@ -62,7 +81,109 @@ async function buildAssistantConfig(
     voice,
     transferRules: version.transfer_rules ?? { on_no_match: 'end_call', transfer_to: null, conditions: [] },
     maxCallDurationSeconds: version.call_ending_rules?.max_call_duration_seconds ?? null,
+    // Bug fix: Phase 7's campaign calling-rules columns previously never
+    // reached the Vapi assistant payload at all - see
+    // lib/orchestration/vapi.ts's toVapiAssistantPayload() for exactly
+    // how these are mapped to Vapi's real voicemailDetection/
+    // backgroundDenoisingEnabled fields.
+    voicemailDetection: callingRulesOverride
+      ? {
+          enabled: callingRulesOverride.voicemail_detection_enabled,
+          leaveVoicemail: callingRulesOverride.leave_voicemail,
+          message: callingRulesOverride.voicemail_message,
+        }
+      : null,
+    backgroundNoise: callingRulesOverride?.background_noise ?? null,
   };
+}
+
+/**
+ * Resolves the ACTUAL, ready-to-send greeting and system prompt for one
+ * specific call - the fix for the core Bug 1 gap: `buildAssistantConfig()`
+ * only ever configures the cached, reused assistant object, so per-lead
+ * `{{variables}}` can never work by baking them into it. This function
+ * instead renders the real per-call strings that get passed down as
+ * `firstMessageOverride`/`systemPromptOverride` on `provider.createCall()`
+ * (Vapi: `assistantOverrides` on POST /call - see vapi.ts;
+ * pipecat: extra per-call payload fields - see pipecat.ts), so a
+ * personalized greeting/system prompt applies to THIS call only, never
+ * mutating the shared assistant record other leads will also be dialed
+ * through.
+ */
+async function resolveCallPersonalization(
+  supabase: Supabase,
+  orgId: string,
+  agent: { id: string },
+  version: Record<string, any>,
+  leadId: string | null,
+  campaignId: string | null,
+  voiceOverride: { providerKey: string; providerVoiceId: string } | null,
+): Promise<{ firstMessage: string; systemPrompt: string }> {
+  let lead: Record<string, any> | null = null;
+  if (leadId) {
+    const { data } = await supabase
+      .from('leads')
+      .select('first_name, last_name, company, phone_normalized, email, custom_fields')
+      .eq('id', leadId)
+      .eq('organization_id', orgId)
+      .maybeSingle();
+    lead = data ?? null;
+  }
+
+  const context: PromptVariableContext = {
+    first_name: lead?.first_name || undefined,
+    last_name: lead?.last_name || undefined,
+    company: lead?.company || undefined,
+    phone: lead?.phone_normalized || undefined,
+    email: lead?.email || undefined,
+    custom_field: (lead?.custom_fields as Record<string, string> | undefined) ?? undefined,
+  };
+
+  const hasName = Boolean(context.first_name && context.first_name.trim().length > 0);
+  const renderedSystemPrompt = renderTemplate(version.system_prompt ?? '', context);
+
+  if (hasName) {
+    // Named lead: use the campaign/agent author's own greeting template,
+    // rendered live against this lead's real data (e.g. "Hi, am I
+    // speaking with {{first_name}}?").
+    const firstMessage = renderTemplate(version.greeting_template ?? '', context);
+    return { firstMessage, systemPrompt: renderedSystemPrompt };
+  }
+
+  // Unnamed lead, or no lead at all (a manual test call): never render
+  // the named greeting template against an empty {{first_name}} (that
+  // would either leave the literal "{{first_name}}" in the caller's ear,
+  // per renderTemplate()'s own documented "never silently blank" rule,
+  // or produce an awkward "Hi, am I speaking with ?"). Build a real,
+  // generic, product-specified fallback instead: "Hi, my name is
+  // {voice} from {campaign/agent}. How are you doing today?"
+  let voiceName = 'your assistant';
+  if (voiceOverride) {
+    const { data } = await supabase
+      .from('voices')
+      .select('name')
+      .eq('organization_id', orgId)
+      .eq('provider_key', voiceOverride.providerKey)
+      .eq('provider_voice_id', voiceOverride.providerVoiceId)
+      .maybeSingle();
+    if (data?.name) voiceName = data.name;
+  } else if (version.voice_id) {
+    const { data } = await supabase.from('voices').select('name').eq('id', version.voice_id).maybeSingle();
+    if (data?.name) voiceName = data.name;
+  }
+
+  let orgOrCampaignName: string | null = null;
+  if (campaignId) {
+    const { data } = await supabase.from('campaigns').select('name').eq('id', campaignId).eq('organization_id', orgId).maybeSingle();
+    orgOrCampaignName = data?.name ?? null;
+  }
+  if (!orgOrCampaignName) {
+    const { data } = await supabase.from('ai_agents').select('name').eq('id', agent.id).eq('organization_id', orgId).maybeSingle();
+    orgOrCampaignName = data?.name ?? null;
+  }
+
+  const firstMessage = `Hi, my name is ${voiceName} from ${orgOrCampaignName ?? 'our team'}. How are you doing today?`;
+  return { firstMessage, systemPrompt: `${renderedSystemPrompt}${ASK_CALLER_NAME_INSTRUCTION}` };
 }
 
 /** Resolves the transfer destination for this call: an explicit
@@ -136,6 +257,15 @@ export interface OriginateCallParams {
   /** Campaign snapshot override - see resolveTransferDestination(). */
   transferDestinationOverride?: string | null;
   voiceOverride?: { providerKey: string; providerVoiceId: string } | null;
+  /** Campaign snapshot's calling-rules (voicemail/background-noise) -
+   * see buildAssistantConfig()'s voicemailDetection/backgroundNoise
+   * fields. Null/undefined for a manual, non-campaign call. */
+  callingRulesOverride?: {
+    voicemail_detection_enabled: boolean;
+    voicemail_message: string | null;
+    leave_voicemail: boolean;
+    background_noise: BackgroundNoise | null;
+  } | null;
 }
 
 export interface OriginateCallResult {
@@ -150,6 +280,15 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
   const { organizationId: orgId, engine, agent, version, phoneNumber, customerNumber, leadId, campaignId, createdBy } = params;
 
   const transferDestination = resolveTransferDestination(version, params.transferDestinationOverride);
+  const { firstMessage: firstMessageOverride, systemPrompt: systemPromptOverride } = await resolveCallPersonalization(
+    supabase,
+    orgId,
+    agent,
+    version,
+    leadId,
+    campaignId,
+    params.voiceOverride ?? null,
+  );
 
   const { data: call, error: insertError } = await supabase
     .from('calls')
@@ -179,17 +318,20 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
       const provider = createOrchestrationProvider('vapi', { api_key: apiKey }) as VapiProvider;
 
       let assistantId = version.vapi_assistant_id as string | null;
-      if (!assistantId || params.voiceOverride) {
-        // A campaign-level voice override means the published agent
-        // version's own Vapi assistant (built with ITS voice) is not
-        // necessarily what this campaign snapshot wants - build a fresh
-        // assistant for this call rather than silently using the wrong
-        // voice. A plain manual call (no override) reuses/creates the
-        // version's own assistant exactly like Phase 6 always did.
-        const assistantConfig = await buildAssistantConfig(supabase, orgId, agent, version, params.voiceOverride ?? null);
+      if (!assistantId || params.voiceOverride || campaignId) {
+        // A campaign-level voice override OR any campaign call at all
+        // means the published agent version's own Vapi assistant (built
+        // with ITS voice and no calling-rules config) is not necessarily
+        // what this campaign snapshot wants - build a fresh assistant for
+        // this call rather than silently using the wrong voice, or
+        // silently dropping the campaign's voicemail-detection/
+        // background-noise settings on the floor. A plain manual call (no
+        // campaign, no override) reuses/creates the version's own
+        // assistant exactly like Phase 6 always did.
+        const assistantConfig = await buildAssistantConfig(supabase, orgId, agent, version, params.voiceOverride ?? null, params.callingRulesOverride ?? null);
         const created = await provider.createAssistant(assistantConfig);
         assistantId = created.providerAssistantId;
-        if (!params.voiceOverride) {
+        if (!params.voiceOverride && !campaignId) {
           await supabase.from('ai_agent_versions').update({ vapi_assistant_id: assistantId }).eq('id', version.id);
         }
       }
@@ -205,6 +347,8 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
         fromPhoneNumberProviderId: vapiPhoneNumberId,
         toPhoneNumber: customerNumber,
         transferDestinationE164: transferDestination,
+        firstMessageOverride,
+        systemPromptOverride,
       });
 
       await supabase.from('calls').update({ vapi_call_id: created.providerCallId, started_at: new Date().toISOString() }).eq('id', call.id);
@@ -251,6 +395,8 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
         phoneNumber.provider_key === 'twilio'
           ? { provider: 'twilio', accountSid: (telephonyCreds as { account_sid: string }).account_sid, authToken: (telephonyCreds as { auth_token: string }).auth_token }
           : { provider: 'telnyx', apiKey: (telephonyCreds as { api_key: string }).api_key },
+      firstMessageOverride,
+      systemPromptOverride,
     });
 
     await supabase.from('calls').update({ pipecat_call_id: created.providerCallId, started_at: new Date().toISOString() }).eq('id', call.id);

@@ -258,6 +258,14 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
         createdBy: null,
         transferDestinationOverride: version.transfer_number_e164 ?? campaign.transfer_number_e164 ?? null,
         voiceOverride,
+        callingRulesOverride: callingRules
+          ? {
+              voicemail_detection_enabled: callingRules.voicemail_detection_enabled,
+              voicemail_message: callingRules.voicemail_message,
+              leave_voicemail: callingRules.leave_voicemail,
+              background_noise: callingRules.background_noise,
+            }
+          : null,
       });
       await supabase.from('campaign_leads').update({ last_call_id: call.id }).eq('id', claimed.id);
       dispatched += 1;

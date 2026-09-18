@@ -101,6 +101,8 @@ async def create_call(body: CreateCallRequest) -> CreateCallResponse:
         from_e164=body.from_e164,
         to_e164=body.to_e164,
         transfer_destination_e164=body.transfer_destination_e164,
+        first_message_override=body.first_message_override,
+        system_prompt_override=body.system_prompt_override,
     )
 
     stream_ws_url = f"{settings.PUBLIC_MEDIA_STREAM_URL}/media-stream/{record.pipecat_call_id}"
@@ -234,9 +236,23 @@ async def media_stream(websocket: WebSocket, pipecat_call_id: str) -> None:
             websocket=websocket,
             params=FastAPIWebsocketParams(audio_in_enabled=True, audio_out_enabled=True, serializer=serializer),
         )
+        # Real per-lead personalization (parity with VapiProvider's
+        # assistantOverrides): the greeting/system-prompt strings Node
+        # already resolved per-call (named-lead rendered template, or the
+        # generic "Hi, my name is X from Y" fallback - see
+        # callOrigination.ts's resolveCallPersonalization()) are used
+        # directly here instead of leaving them unset. Full non-override
+        # agent config (voice/personality/LLM model) is a separate,
+        # pre-existing gap in this service - see README.md - out of scope
+        # for this fix, which is specifically about per-lead variable
+        # substitution parity between the two engines.
         runner, task = await build_pipeline(
             transport=transport,
-            agent_config={"agent_version_id": record.agent_version_id},
+            agent_config={
+                "agent_version_id": record.agent_version_id,
+                "system_prompt": record.system_prompt_override or "",
+                "greeting": record.first_message_override or "",
+            },
             transfer_destination_e164=record.transfer_destination_e164,
             pipecat_call_id=pipecat_call_id,
         )

@@ -184,6 +184,51 @@ export class VapiProvider implements CallOrchestrationProvider {
     if (config.maxCallDurationSeconds) {
       payload.maxDurationSeconds = config.maxCallDurationSeconds;
     }
+
+    // Real, currently-documented Vapi turn-taking/endpointing config
+    // (docs.vapi.ai/customization/speech-configuration): waits briefly
+    // after the caller stops speaking, and uses Vapi's own smart-
+    // endpointing model to avoid cutting a caller off mid-sentence -
+    // this is what actually makes the assistant's turn-taking feel
+    // humanlike instead of firing on the first micro-pause.
+    payload.startSpeakingPlan = { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'vapi' } };
+    // Real field: ends the call if the caller goes silent for this long
+    // (Vapi default is 30s; set explicitly here so a campaign never
+    // leaves a call hung open indefinitely on a dead line).
+    payload.silenceTimeoutSeconds = 30;
+
+    // Background denoising: Vapi's real assistant config exposes only a
+    // boolean `backgroundDenoisingEnabled` (Krisp-style noise removal) -
+    // there is no documented fine-grained "low/medium/high" level, unlike
+    // this platform's own campaigns.background_noise column ('off' |
+    // 'low' | 'medium' | 'high'). Any non-'off' value enables the real
+    // boolean knob; the level distinction itself is NOT forwarded because
+    // Vapi has no such parameter - fabricating one would be silently
+    // ignored or rejected by the real API.
+    if (config.backgroundNoise) {
+      payload.backgroundDenoisingEnabled = config.backgroundNoise !== 'off';
+    }
+
+    // Voicemail/answering-machine detection - real, currently-documented
+    // Vapi feature (docs.vapi.ai/calls/voicemail-detection). Threads
+    // Phase 7's campaign calling-rules columns
+    // (voicemail_detection_enabled/voicemail_message/leave_voicemail)
+    // through to the actual provider payload for the first time - until
+    // this fix they were stored in the DB and snapshotted onto the
+    // campaign version but never once reached the Vapi assistant.
+    if (config.voicemailDetection?.enabled) {
+      payload.voicemailDetection = { provider: 'vapi' };
+      // Vapi's real behavior: when voicemailDetection fires, it
+      // automatically plays `voicemailMessage` if one is set - there is
+      // no separate documented "hang up instead of leaving a message"
+      // switch. leaveVoicemail=false is honestly mapped to "detect it
+      // (so the call still gets disposed as answering-machine) but don't
+      // configure a message to leave" rather than inventing a hangup
+      // parameter Vapi doesn't document.
+      if (config.voicemailDetection.leaveVoicemail && config.voicemailDetection.message) {
+        payload.voicemailMessage = config.voicemailDetection.message;
+      }
+    }
     // The transfer destination itself is never sent here as a free-form
     // AI-chosen value - it is exposed to the assistant only as a
     // server-controlled tool target that createCall()/transferCall()
@@ -261,6 +306,23 @@ export class VapiProvider implements CallOrchestrationProvider {
       customer: { number: params.toPhoneNumber },
       metadata: { internalCallId: params.callId, organizationId: params.organizationId },
     };
+    // Real per-lead personalization: Vapi's documented POST /call body
+    // accepts an `assistantOverrides` object that overrides fields on the
+    // assistant for THIS call only, without touching the cached/shared
+    // assistant record (params.providerAssistantId is created once per
+    // agent version and reused for every lead a campaign dials - baking
+    // `{{first_name}}` etc. into the assistant itself would apply it to
+    // every future call too). Only sent when the caller actually resolved
+    // an override - a plain call with neither leaves the assistant's own
+    // stored firstMessage/system message untouched.
+    if (params.firstMessageOverride || params.systemPromptOverride) {
+      const assistantOverrides: Record<string, unknown> = {};
+      if (params.firstMessageOverride) assistantOverrides.firstMessage = params.firstMessageOverride;
+      if (params.systemPromptOverride) {
+        assistantOverrides.model = { messages: [{ role: 'system', content: params.systemPromptOverride }] };
+      }
+      payload.assistantOverrides = assistantOverrides;
+    }
     const created = await this.request<VapiCallObject>('POST', '/call', payload);
     return { providerCallId: created.id, status: created.status };
   }

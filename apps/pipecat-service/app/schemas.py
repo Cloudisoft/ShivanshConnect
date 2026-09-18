@@ -20,6 +20,14 @@ class CreateCallRequest(BaseModel):
     to_e164: str
     transfer_destination_e164: Optional[str] = None
     telephony: TelephonyCredentials
+    # Real per-lead personalization parity with VapiProvider's
+    # assistantOverrides (see lib/orchestration/pipecat.ts's createCall() -
+    # these are the SAME server-resolved, already-renderTemplate()'d
+    # strings Node sends Vapi). Optional: absent means "no lead context /
+    # no name" was resolvable on the Node side either, so the pipeline
+    # falls back to whatever this service's own defaults produce.
+    first_message_override: Optional[str] = None
+    system_prompt_override: Optional[str] = None
 
 
 class CreateCallResponse(BaseModel):

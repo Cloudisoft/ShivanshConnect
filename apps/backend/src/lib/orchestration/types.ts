@@ -85,6 +85,21 @@ export interface AssistantConfig {
   } | null;
   transferRules: { on_no_match: string; transfer_to: string | null; conditions: string[] };
   maxCallDurationSeconds: number | null;
+  /**
+   * Phase 7's campaign-level calling-rules columns (campaigns table:
+   * voicemail_detection_enabled/voicemail_message/leave_voicemail/
+   * background_noise), threaded through so buildAssistantConfig() can
+   * actually forward them to the provider instead of silently dropping
+   * them on the floor. Null for a manual, non-campaign call (no campaign
+   * calling-rules snapshot exists) - each adapter treats that the same as
+   * "use the provider's own defaults".
+   */
+  voicemailDetection?: {
+    enabled: boolean;
+    leaveVoicemail: boolean;
+    message: string | null;
+  } | null;
+  backgroundNoise?: 'off' | 'low' | 'medium' | 'high' | null;
 }
 
 export interface AssistantResult {
@@ -127,6 +142,27 @@ export interface CreateCallParams {
   transferDestinationE164: string | null;
   /** pipecat only - see TransientTelephonyCredentials's doc. */
   telephonyCredentials?: TransientTelephonyCredentials | null;
+  /**
+   * Per-call personalization (spec: real per-lead variable substitution).
+   * The assistant object itself (Vapi's providerAssistantId / pipecat's
+   * per-agent-version pipeline template) is created/cached ONCE and
+   * reused across every lead a campaign dials, so `{{first_name}}` etc.
+   * can never be baked into it - these two fields carry the ALREADY-
+   * RENDERED (renderTemplate()'d against this specific lead, or the
+   * server-built generic fallback for an unnamed/no-lead call) greeting
+   * and system prompt for THIS one call only. Vapi: sent as
+   * `assistantOverrides.firstMessage` / `assistantOverrides.model.messages`
+   * on POST /call - Vapi's real, documented per-call override mechanism,
+   * which does not mutate the cached assistant record. Pipecat: forwarded
+   * as extra fields on the /calls POST body so its per-call pipeline
+   * construction can use them directly instead of re-deriving a greeting
+   * itself. Both null/undefined means "use the assistant's own stored
+   * greeting/prompt verbatim" (e.g. a manual test call against a version
+   * with no lead context at all falls back to the caller resolving a
+   * generic firstMessageOverride anyway - see callOrigination.ts).
+   */
+  firstMessageOverride?: string | null;
+  systemPromptOverride?: string | null;
 }
 
 export interface CreateCallResult {

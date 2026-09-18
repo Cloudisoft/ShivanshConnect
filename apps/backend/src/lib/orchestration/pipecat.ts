@@ -152,6 +152,19 @@ export class PipecatProvider implements CallOrchestrationProvider {
         auth_token: params.telephonyCredentials.authToken,
         api_key: params.telephonyCredentials.apiKey,
       },
+      // Same per-call personalization fix as VapiProvider.createCall()'s
+      // assistantOverrides (see that method's comment / callOrigination.ts's
+      // resolveCallPersonalization()): pipecat already builds its
+      // system-prompt/greeting per call directly from the local
+      // ai_agent_versions row it fetches back from this backend, so these
+      // are forwarded as an explicit override pipecat-service is
+      // documented to prefer over re-deriving an unpersonalized one -
+      // keeps both engines behaviorally consistent for named-vs-unnamed
+      // lead greetings. Omitted (undefined) when the caller resolved no
+      // override, so pipecat-service falls back to its own default
+      // per-call construction unchanged.
+      first_message_override: params.firstMessageOverride ?? undefined,
+      system_prompt_override: params.systemPromptOverride ?? undefined,
     };
     const created = await this.request<{ pipecat_call_id: string; status: string }>('POST', '/calls', payload);
     return { providerCallId: created.pipecat_call_id, status: created.status };
