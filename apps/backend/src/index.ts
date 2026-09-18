@@ -62,6 +62,7 @@ import { smtpSettingsRoutes } from './routes/smtp.js';
 import { smsCampaignRoutes } from './routes/smsCampaigns.js';
 import { emailCampaignRoutes } from './routes/emailCampaigns.js';
 import { emailSuppressionRoutes } from './routes/emailSuppressions.js';
+import { adminHealthRoutes } from './routes/admin.js';
 import { SmsProviderError, SmsProviderNotConfiguredError } from './lib/sms/types.js';
 import { SmtpNotConfiguredError, SmtpSendError } from './services/smtpProvider.js';
 import { startSmsDispatcher } from './services/smsDispatcher.js';
@@ -169,6 +170,8 @@ export function buildApp() {
       api.register(smsCampaignRoutes, { prefix: '/sms-campaigns' });
       api.register(emailCampaignRoutes, { prefix: '/email-campaigns' });
       api.register(emailSuppressionRoutes, { prefix: '/email-suppressions' });
+      // Phase 15: the system health page (spec section 90).
+      api.register(adminHealthRoutes, { prefix: '/admin' });
     },
     { prefix: '/api/v1' },
   );
