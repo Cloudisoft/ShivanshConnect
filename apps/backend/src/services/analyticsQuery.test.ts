@@ -90,7 +90,7 @@ describe('getDashboardMetrics - rate calculations', () => {
   it('computes connection/transfer/voicemail/dnc rate as percentages of total calls, matching the spec\'s implied ratio definitions', async () => {
     const { supabase, orgId } = seedForRateChecks();
     const resolved = resolvePeriod({ period: 'custom', date_from: '2026-01-01', date_to: '2026-01-01' });
-    const metrics = await getDashboardMetrics(supabase, orgId, resolved);
+    const metrics = await getDashboardMetrics(supabase as any, orgId, resolved);
 
     expect(metrics.total_calls).toBe(10);
     expect(metrics.calls_connected).toBe(6);
@@ -107,7 +107,7 @@ describe('getDashboardMetrics - rate calculations', () => {
     const orgId = randomUUID();
     tables.organizations.push({ id: orgId, name: 'Empty Co', slug: 'empty-co' });
     const resolved = resolvePeriod({ period: 'custom', date_from: '2026-02-01', date_to: '2026-02-01' });
-    const metrics = await getDashboardMetrics(supabase, orgId, resolved);
+    const metrics = await getDashboardMetrics(supabase as any, orgId, resolved);
 
     expect(metrics.total_calls).toBe(0);
     expect(metrics.connection_rate).toBe(0);
@@ -132,7 +132,7 @@ describe('getCampaignAnalytics', () => {
     );
 
     const resolved = resolvePeriod({ period: 'today' });
-    const result = await getCampaignAnalytics(supabase, orgId, { id: campaignId, name: 'Spring' }, resolved);
+    const result = await getCampaignAnalytics(supabase as any, orgId, { id: campaignId, name: 'Spring' }, resolved);
 
     expect(result.total_leads).toBe(4);
     // completed + dnc = 2 terminal out of 4 = 50%
