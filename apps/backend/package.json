@@ -11,6 +11,7 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "loadtest": "vitest run --config vitest.loadtest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --ext .ts"
   },
@@ -39,6 +40,8 @@
     "@types/node": "^22.9.0",
     "@types/nodemailer": "^8.0.2",
     "@types/pdf-parse": "^1.1.5",
+    "@types/pg": "^8.11.10",
+    "pg": "^8.13.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.5"
