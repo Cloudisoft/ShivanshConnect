@@ -175,13 +175,20 @@ export async function seedLeads(adapter: PgSupabaseAdapter, organizationId: stri
   const supabase = adapter.supabase;
   const BATCH_SIZE = 500;
   const leadIds: string[] = [];
+  // A random 3-digit area code distinguishes THIS call's whole batch from
+  // any other seedLeads() call against the same organization (leads has a
+  // real UNIQUE (organization_id, phone_normalized) constraint - see
+  // 00000000000011_leads.sql) - outcomeForAttempt() only ever reads the
+  // last 5 digits (see its own header), which this leaves untouched, so
+  // every caller's outcome-bucket math stays exactly as documented.
+  const areaCode = 200 + Math.floor(Math.random() * 799);
   for (let start = 0; start < count; start += BATCH_SIZE) {
     const end = Math.min(start + BATCH_SIZE, count);
     const rows = [];
     for (let i = start; i < end; i += 1) {
       const id = randomUUID();
       leadIds.push(id);
-      const phone = `+1202555${String(1000 + i).padStart(5, '0')}`;
+      const phone = `+1${areaCode}555${String(1000 + i).padStart(5, '0')}`;
       rows.push({
         id,
         organization_id: organizationId,
