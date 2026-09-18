@@ -22,3 +22,38 @@ alter table public.exports add constraint exports_type_check check (type in (
 -- export row back to the list/campaign it came from without parsing
 -- `filters`.
 alter table public.exports add column if not exists entity_reference jsonb not null default '{}'::jsonb;
+
+-- Phase 9's exports RLS policies gated select/insert on `cdr.export`
+-- only, since CDR was the only export type. Now that leads.view and
+-- messaging.manage can also legitimately queue/read export rows (see
+-- routes/leads.ts, routes/leadLists.ts, routes/smsCampaigns.ts,
+-- routes/emailCampaigns.ts, routes/exports.ts), the RLS policy is
+-- widened to match the application-layer permission check exactly -
+-- real defense in depth, not RLS silently being stricter than the app
+-- logic it's supposed to back up. (The backend's actual queries run
+-- through the service-role client, which bypasses RLS entirely, but
+-- these policies are what would apply to a direct/future anon-key
+-- client and are kept honest regardless.)
+drop policy if exists exports_select on public.exports;
+create policy exports_select on public.exports
+  for select
+  using (
+    organization_id = public.current_user_organization_id()
+    and (
+      public.current_user_has_permission('cdr.export')
+      or public.current_user_has_permission('leads.view')
+      or public.current_user_has_permission('messaging.manage')
+    )
+  );
+
+drop policy if exists exports_insert on public.exports;
+create policy exports_insert on public.exports
+  for insert
+  with check (
+    organization_id = public.current_user_organization_id()
+    and (
+      public.current_user_has_permission('cdr.export')
+      or public.current_user_has_permission('leads.view')
+      or public.current_user_has_permission('messaging.manage')
+    )
+  );
