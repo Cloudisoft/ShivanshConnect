@@ -47,6 +47,7 @@ import { campaignRoutes } from './routes/campaigns.js';
 import { dialingSettingsRoutes, campaignSettingsRoutes } from './routes/dialingSettings.js';
 import { startCampaignDispatcher } from './services/campaignDispatcher.js';
 import { startAnalyticsAggregator } from './services/analyticsAggregator.js';
+import { startCallReconciliation } from './services/callReconciliation.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { dispositionRoutes } from './routes/dispositions.js';
@@ -335,6 +336,10 @@ async function main() {
     // campaign dispatcher/analytics aggregator above.
     startSmsDispatcher();
     startEmailDispatcher();
+    // Phase 15: the stuck-call safety net (see services/
+    // callReconciliation.ts's header) - same "not started by buildApp()
+    // itself" reasoning as every other scheduler above.
+    startCallReconciliation();
   } catch (err) {
     app.log.error(err);
     process.exit(1);

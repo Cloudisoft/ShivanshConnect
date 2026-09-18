@@ -25,7 +25,6 @@
  * suite - see vitest.config.ts's `exclude` and vitest.loadtest.config.ts).
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { randomUUID } from 'node:crypto';
 import { createPgSupabaseAdapter, type PgSupabaseAdapter } from './pgSupabaseAdapter.js';
 import { seedOrgBasics, seedCampaign, seedLeads, attachLeadsToCampaign } from './seed.js';
 import { installMockVapiFetch } from './mockVapiFetch.js';
@@ -168,11 +167,11 @@ describe('Phase 15 load test: 10,000-lead campaign dispatch (real Postgres, 3 co
           break;
         }
 
-        const attemptCountByCallId = new Map(dialing.map((cl: any) => [cl.last_call_id as string, cl.attempt_count as number]));
+        const attemptCountByCallId = new Map<string, number>(dialing.map((cl: any) => [cl.last_call_id as string, cl.attempt_count as number]));
         const callIds = [...attemptCountByCallId.keys()];
         if (callIds.length > 0) {
           const { data: calls } = await supabase.from('calls').select('id, customer_number').in('id', callIds);
-          const customerNumberByCallId = new Map((calls ?? []).map((c: any) => [c.id, c.customer_number as string]));
+          const customerNumberByCallId = new Map<string, string>((calls ?? []).map((c: any) => [c.id as string, c.customer_number as string]));
           await Promise.all(
             callIds.map(async (callId) => {
               const customerNumber = customerNumberByCallId.get(callId)!;

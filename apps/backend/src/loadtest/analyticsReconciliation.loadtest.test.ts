@@ -75,8 +75,8 @@ describe('Phase 15 load test: analytics rollup reconciles against hand-computed 
       if ((!dialing || dialing.length === 0) && result.dispatched === 0) break;
       if (dialing && dialing.length > 0) {
         const { data: calls } = await supabase.from('calls').select('id, customer_number').in('id', dialing.map((d: any) => d.last_call_id));
-        const byId = new Map((calls ?? []).map((c: any) => [c.id, c.customer_number]));
-        await Promise.all(dialing.map((cl: any) => resolveCallToOutcome(adapter, cl.last_call_id, byId.get(cl.last_call_id), cl.attempt_count)));
+        const byId = new Map<string, string>((calls ?? []).map((c: any) => [c.id as string, c.customer_number as string]));
+        await Promise.all(dialing.map((cl: any) => resolveCallToOutcome(adapter, cl.last_call_id, byId.get(cl.last_call_id)!, cl.attempt_count)));
       }
     }
 
