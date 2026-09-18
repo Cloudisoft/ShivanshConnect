@@ -52,14 +52,17 @@ function extractFilters(query: Record<string, unknown>): CdrFilters {
 }
 
 /** Re-encodes a local audio file to MP3 via a real `ffmpeg` child process
- * when one is available on PATH. This sandbox's runtime does not have
- * ffmpeg installed (see README's Phase 9 note) - when spawning it fails
- * with ENOENT, the ORIGINAL bytes/format are served as-is rather than
- * faking a conversion, and the response's Content-Type reflects the real
- * source format. In a deployment that does have ffmpeg on PATH, this
- * transparently returns a real MP3 regardless of the stored source
- * format. */
-async function maybeTranscodeToMp3(sourcePath: string, sourceFormat: string): Promise<{ buffer: Buffer; contentType: string; extension: string }> {
+ * when one is available on PATH. Phase 9's build sandbox did not have
+ * ffmpeg installed; Phase 14 re-checked this in a fresh sandbox and found
+ * ffmpeg 6.1.1 IS now installed and on PATH (see README's Phase 14 note)
+ * - this function's real-transcode branch now genuinely engages rather
+ * than always hitting the fallback, proven by
+ * `cdr.mp3Transcode.test.ts`'s real ffmpeg child-process test. When
+ * ffmpeg is unavailable (ENOENT) or fails, the ORIGINAL bytes/format are
+ * served as-is rather than faking a conversion, and the response's
+ * Content-Type reflects the real source format - that fallback path is
+ * unchanged from Phase 9. */
+export async function maybeTranscodeToMp3(sourcePath: string, sourceFormat: string): Promise<{ buffer: Buffer; contentType: string; extension: string }> {
   if (sourceFormat === 'mp3') {
     return { buffer: await readFile(sourcePath), contentType: 'audio/mpeg', extension: 'mp3' };
   }
