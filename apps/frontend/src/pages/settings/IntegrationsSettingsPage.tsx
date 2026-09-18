@@ -210,7 +210,7 @@ function VapiCard(): JSX.Element {
             <Button variant="secondary" disabled={save.isPending} onClick={handleSave}>
               {save.isPending ? 'Saving...' : 'Save credentials'}
             </Button>
-            <Button variant="secondary" disabled={test.isPending || !creds || creds.status === 'not_connected'} onClick={handleTest}>
+            <Button variant="secondary" disabled={test.isPending || !creds?.masked_credential} onClick={handleTest}>
               {test.isPending ? 'Testing...' : 'Test connection'}
             </Button>
             {testResult && <span className={testResult.success ? 'text-xs text-green-700' : 'text-xs text-red-600'}>{testResult.message}</span>}

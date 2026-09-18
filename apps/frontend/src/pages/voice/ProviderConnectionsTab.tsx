@@ -110,7 +110,7 @@ function ProviderCard({ provider }: { provider: VoiceProviderSummary }): JSX.Ele
             </Button>
             <Button
               variant="secondary"
-              disabled={test.isPending || provider.status === 'not_connected'}
+              disabled={test.isPending || !provider.masked_credential}
               onClick={handleTest}
             >
               {test.isPending ? 'Testing...' : 'Test connection'}

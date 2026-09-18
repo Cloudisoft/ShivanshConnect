@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { ArrowLeftRight, Info } from 'lucide-react';
 import {
   BACKGROUND_NOISE_OPTIONS,
@@ -23,6 +23,7 @@ import {
   type RotateDecision,
 } from '../hooks/useCampaigns';
 import { useAgents } from '../hooks/useAgents';
+import { usePhoneNumbers } from '../hooks/usePhoneNumbers';
 import { useVoices } from '../hooks/useVoices';
 import { useKnowledgeBases } from '../hooks/useKnowledgeBases';
 import { useScripts } from '../hooks/useScripts';
@@ -196,12 +197,14 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const createVersion = useCreateCampaignVersion();
   const publishVersion = usePublishCampaignVersion();
   const agentsQuery = useAgents(1, 100);
+  const phoneNumbersQuery = usePhoneNumbers({ status: 'active' });
   const voicesQuery = useVoices();
   const scriptsQuery = useScripts();
 
   const v = campaign.current_version;
   const [prompt, setPrompt] = useState(v?.prompt ?? '');
   const [agentId, setAgentId] = useState(v?.ai_agent_id ?? '');
+  const [phoneNumberId, setPhoneNumberId] = useState(campaign.phone_number_id ?? '');
   const [voiceId, setVoiceId] = useState(v?.voice_id ?? '');
   const [scriptId, setScriptId] = useState(v?.script_id ?? '');
   const [kbIds, setKbIds] = useState<string[]>(v?.knowledge_base_ids ?? []);
@@ -229,6 +232,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
     try {
       await updateCampaign.mutateAsync({
         id: campaign.id,
+        phone_number_id: phoneNumberId || null,
         transfer_number_e164: transferNumber || null,
         voicemail_detection_enabled: voicemailEnabled,
         voicemail_message: voicemailMessage || null,
@@ -325,6 +329,27 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
           </select>
         </div>
         <div>
+          <Label>Outbound phone number</Label>
+          <select
+            className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm"
+            value={phoneNumberId}
+            onChange={(e) => setPhoneNumberId(e.target.value)}
+            disabled={!canEdit}
+          >
+            <option value="">Select a number</option>
+            {(phoneNumbersQuery.data?.data ?? []).map((n: any) => (
+              <option key={n.id} value={n.id}>
+                {n.phone_number} ({n.friendly_name || n.provider_key})
+              </option>
+            ))}
+          </select>
+          {(phoneNumbersQuery.data?.data ?? []).length === 0 && (
+            <p className="mt-1 text-xs text-ink-500">
+              No active numbers yet - go to DIDs to connect a provider and import/sync a number.
+            </p>
+          )}
+        </div>
+        <div>
           <Label>Voice</Label>
           <select className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} disabled={!canEdit}>
             <option value="">Use agent's own voice</option>
@@ -334,6 +359,15 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
               </option>
             ))}
           </select>
+          {(voicesQuery.data?.data ?? []).length === 0 && (
+            <p className="mt-1 text-xs text-ink-500">
+              No voices registered yet -{' '}
+              <Link to="/voices" className="underline">
+                connect a voice provider and sync/clone voices
+              </Link>
+              .
+            </p>
+          )}
         </div>
         <div>
           <Label>Script</Label>
@@ -345,11 +379,26 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
               </option>
             ))}
           </select>
+          <p className="mt-1 text-xs text-ink-500">
+            <Link to="/scripts" className="underline">
+              Upload or write a new script
+            </Link>
+            , then select it here.
+          </p>
         </div>
         <div>
-          <Label>Knowledge base documents</Label>
+          <Label>Knowledge base / SOP documents</Label>
           <div className="max-h-32 space-y-1 overflow-y-auto rounded-md border border-ink-200 p-2">
             {!agentId && <p className="text-xs text-ink-400">Select an agent first.</p>}
+            {agentId && (kbQuery.data ?? []).length === 0 && (
+              <p className="text-xs text-ink-400">
+                No documents yet -{' '}
+                <Link to={`/ai-agents/${agentId}`} className="underline">
+                  upload SOP/knowledge base documents on the agent's page
+                </Link>
+                .
+              </p>
+            )}
             {(kbQuery.data ?? []).map((kb: any) => (
               <label key={kb.id} className="flex items-center gap-2 text-xs text-ink-700">
                 <input
