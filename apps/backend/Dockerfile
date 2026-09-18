@@ -5,7 +5,7 @@
 # has no direct network access to Postgres, but the deployed Railway service
 # does, so it applies the schema itself on each deploy.
 
-FROM node:20-slim AS build
+FROM node:22-slim AS build
 WORKDIR /repo
 
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
@@ -22,7 +22,7 @@ COPY apps/backend apps/backend
 RUN pnpm --filter @shivanshconnect/shared run build
 RUN pnpm --filter @shivanshconnect/backend run build
 
-FROM node:20-slim AS run
+FROM node:22-slim AS run
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /repo
