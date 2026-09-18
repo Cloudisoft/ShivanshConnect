@@ -1,7 +1,7 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-12** (organizations, auth, users, roles/permissions, audit logs, the overall
+build covers Phases 1-13** (organizations, auth, users, roles/permissions, audit logs, the overall
 app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; AI agents/agent versioning/
 prompt system/knowledge base (RAG)/scripts; voice providers/cloning; telephony number providers -
 Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry; call
@@ -35,9 +35,15 @@ full spec section 24 rubric, recurring-issue mining into a human-reviewed improv
 ever produces a new draft agent-prompt version, never an auto-publish) and **Analytics** (Phase 12 -
 pre-aggregated daily/hourly rollup tables per spec section 89, a real dashboard KPI grid and chart
 set, and campaign/agent analytics per spec section 42, with the true real-time figures - active
-calls, remaining leads, campaigns running, agents active - always live, never rollups). Later phases
-(messaging/SMS/email/SMTP, inbound routing, queues, and more) are deliberately **not** implemented
-yet - see [Phase plan status](#phase-plan-status) below.
+calls, remaining leads, campaigns running, agents active - always live, never rollups); and now
+**Messaging** (Phase 13 - real SMTP email sending via `nodemailer`, real SMS sending via Twilio/
+Telnyx reusing Phase 5's exact stored credentials rather than a second credential store, SMS and
+email campaigns dispatched by the same queue-based/throttled architecture as Phase 7's call
+dispatcher, real DNC/opt-out suppression checks per channel, and an explicit, honestly-stated limit
+that raw SMTP cannot report delivery/bounce/reply without a transactional email provider - see
+[Phase 13](#phase-13-this-build---done) below). Later phases (inbound routing, queues, further
+performance/load testing, and more) are deliberately **not** implemented yet - see
+[Phase plan status](#phase-plan-status) below.
 
 ## Architecture overview
 
@@ -1045,13 +1051,104 @@ No new required variables - `ANALYTICS_AGGREGATION_INTERVAL_MS` (milliseconds) o
 the aggregator's default 5-minute tick interval, same optional-override pattern as Phase 7's
 `CAMPAIGN_DISPATCH_INTERVAL_MS`.
 
+**Phase 13 (this build) - done:**
+
+- Database schema: `smtp_settings` (one row per org, AES-256-GCM encrypted password via Phase 4's
+  exact `lib/crypto/credentials.ts` helper, `status`/`last_tested_at` reflecting the real last
+  test-send outcome, migration `00000000000045`); `sms_campaigns`/`sms_messages` and
+  `email_campaigns`/`email_messages` (migration `00000000000046`, RLS in `00000000000047`) -
+  messages are **pre-materialized** (one row per lead) the first time a campaign is started, not
+  generated lazily per dispatch tick, which is what makes `UNIQUE(campaign_id, lead_id)` an actual
+  no-double-send guarantee rather than a best-effort check; `email_suppressions`, the email-channel
+  opt-out list, deliberately kept **separate** from Phase 2's `dnc_entries` - an email opt-out never
+  suppresses that contact's phone DNC status and vice versa (master spec section 60's opt-out
+  handling is per-channel).
+- **No separate SMS credential store.** `lib/sms/*` (`SmsProviderAdapter`, `TwilioSmsProvider`,
+  `TelnyxSmsProvider`) reuses the exact same encrypted `phone_number_provider_credentials` row
+  Phase 5's telephony adapters already store per org - `resolveSmsAdapterForOrg()` is the one place
+  that decrypts it and builds the adapter. Both adapters call each provider's real, documented SMS
+  endpoint (Twilio's `Messages.json`, Telnyx's `/v2/messages`) - never a simulated send. An SMS
+  campaign's phone number must be one of the org's own `phone_numbers` rows with SMS capability,
+  checked before a campaign can be created or updated to use it.
+- **`services/smtpProvider.ts`** - a real SMTP client via `nodemailer` (newly installed), configured
+  per-org from its stored `smtp_settings` row; the password is decrypted only in-memory at send time
+  and is never logged. `routes/smtp.ts`: `POST /settings/smtp` saves/updates it (password optional
+  on update, never returned in any response, not even masked), `POST /settings/smtp/test` performs a
+  **real send** to a caller-supplied recipient and updates `status`/`last_tested_at` from
+  nodemailer's actual result, with its real error mapped to a short human-readable message
+  (`humanizeSmtpError()`) rather than a leaked stack trace. Both are `settings.manage`-gated and
+  audit logged.
+- **`services/smsDispatcher.ts` / `services/emailDispatcher.ts`** - mirror
+  `campaignDispatcher.ts`'s exact architecture: a queue-based, throttled `setInterval` tick loop
+  (`SMS_DISPATCH_INTERVAL_MS` / `EMAIL_DISPATCH_INTERVAL_MS`, both optional overrides, same pattern
+  as Phase 7's `CAMPAIGN_DISPATCH_INTERVAL_MS`), the identical rolling per-campaign per-minute
+  throttle-counter technique, and a CAS claim (`UPDATE ... WHERE status = 'queued' ...`) so a race
+  between ticks/processes never double-sends. `{{variable}}` rendering reuses Phase 3's existing
+  `lib/promptVariables.ts` helper unchanged for both SMS bodies and email subject/HTML - it was
+  already a standalone, agent-prompt-agnostic function, so nothing needed extracting; it is not
+  duplicated a third time. A real DNC check (phone, reusing Phase 2's `dnc_entries` infra) runs
+  before every SMS send, and a real `email_suppressions` check runs before every email send - both
+  re-checked immediately before sending, not just at materialization time, and kept as genuinely
+  separate concepts (see schema note above). **Honesty limit, stated plainly**: raw SMTP gives no
+  delivery/bounce/reply signal at all - that requires a transactional email provider's own webhook
+  API (SendGrid/Postmark/SES, etc.), which is out of this phase's scope. `email_messages.status` can
+  only ever reach `sent` (SMTP server accepted it) or `failed` in this build;
+  `delivered`/`bounced`/`replied` remain valid schema values for a future real integration and are
+  never written here - the UI says so explicitly rather than faking a delivery checkmark. SMS
+  delivery **is** tracked for real, because Twilio/Telnyx push it via webhook (see below).
+- `POST /api/v1/webhooks/twilio-sms` and `POST /api/v1/webhooks/telnyx-sms` extend Phase 6's webhook
+  infrastructure with the same idempotent `webhook_events` dedup pattern (composite delivery-id key,
+  a replayed identical delivery detected and never reprocessed), updating
+  `sms_messages.status`/`delivered_at` from each provider's real delivery-receipt payload.
+- Backend API: full CRUD + lifecycle (`start`/`pause`/`resume`/`cancel`, mirroring
+  `campaigns.ts`'s exact lifecycle shape) for both `/api/v1/sms-campaigns` and
+  `/api/v1/email-campaigns`, plus paginated `GET .../:id/messages`; `/api/v1/email-suppressions`
+  (add/list/remove, mirroring `routes/dnc.ts`'s shape for the phone equivalent). Every route:
+  `authenticate`, `requirePermission('messaging.manage')` (already seeded since Phase 1 - this build
+  only wires up real enforcement), org-scoped, Zod-validated, audit logged on every mutation and
+  lifecycle action.
+- Frontend: replaces the "Messaging" sidebar placeholder with a real `pages/MessagingPage.tsx` - SMS
+  Campaigns and Email Campaigns tabs (list, create with a `{{variable}}` palette - extracted into the
+  new shared `components/VariablePalette.tsx` so agent prompts/scripts and SMS/email templates all
+  use the same click-to-insert chip list instead of four separate copies -, an SMS-capable-only phone
+  number picker, lead list picker, throttle, lifecycle action buttons, and a per-message delivery
+  status table that is honest wherever a status genuinely isn't tracked). The email composer's HTML
+  body field has a live preview pane and a plain-text fallback field, deliberately not a full
+  drag-and-drop email builder. Settings > Integrations gets a real SMTP panel (host/port/username/
+  password-masked/encryption/from name/from email, a real Test Email button showing nodemailer's
+  actual result).
+- Tests: Twilio/Telnyx SMS adapter request-shaping against each provider's real documented endpoint
+  (mocked `fetch`), `smtpProvider.ts` send success/failure paths via a mocked nodemailer transport
+  (including proof the decrypted password never reaches a loggable call argument, and a real-shaped
+  `EAUTH` error mapped to a readable message), `lib/promptVariables.ts`'s renderer (tested once,
+  reused by three call sites rather than three times), the rolling per-minute throttle counter's
+  math, and `messaging.integration.test.ts` end-to-end through real route handlers via
+  `app.inject()`: SMTP save (password never in the response) → real test-send → status flips to
+  `connected`; SMS campaign create → start (materializes messages, a DNC lead is skipped entirely,
+  never even materialized) → a real dispatcher tick sends via mocked Twilio HTTP → messages marked
+  `sent` → a real Twilio delivery webhook flips one to `delivered` → replaying the identical webhook
+  is deduplicated (asserted via the `webhook_events` row count staying at 1); a race-simulated
+  concurrent materialization call never double-inserts a message (the `UNIQUE` constraint holds);
+  email campaign create → start (a suppressed address is skipped) → dispatcher sends via a mocked
+  SMTP transport → messages marked `sent`; cross-org isolation for email campaigns, SMS campaigns,
+  and SMTP settings.
+
+### Phase 13 environment requirements
+
+No new required variables. `nodemailer` needs none (SMTP settings are per-org, stored in the
+database, never environment variables); SMS sending needs none beyond the Twilio/Telnyx credentials
+an org already connects under Phone Providers (Phase 5). Two optional overrides, same
+optional-override pattern as every prior phase's dispatcher: `SMS_DISPATCH_INTERVAL_MS` and
+`EMAIL_DISPATCH_INTERVAL_MS` (both in milliseconds).
+
 **Explicitly NOT built yet** (deferred to later phases):
 
 - Redis/BullMQ - Phase 7's campaign dispatcher runs today as a documented in-process `setInterval`
   drop-in (see above); migrating it to a real queue is Phase 15 infra work, not a logic change
 - Inbound Routes, Queues (inbound call routing, ring groups)
-- Messaging
-- SMTP-backed email delivery
+- Transactional-email delivery/bounce/reply tracking (Phase 13's `email_messages` table reserves
+  `delivered`/`bounced`/`replied` states for this, but writing them for real needs a transactional
+  email provider's own webhook API, e.g. SendGrid/Postmark/SES - out of scope for raw SMTP)
 - Background job queues / Redis (the async import in Phase 2, the Phase 3 knowledge-document
   pipeline and Phase 4's voice cloning all use `setImmediate` on the backend process itself - see
   above - specifically so this later migration is mechanical for all three)
@@ -1431,6 +1528,23 @@ were verified for real in both:
      alongside `agent_evaluation_summary()`/`match_knowledge_chunks()`/`search_call_transcripts()`.
      The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass clean after this phase
      (330 backend tests total, up from 311).
+   - Phase 13: `apps/backend/src/lib/sms/twilioSms.test.ts` (5 tests), `apps/backend/src/lib/sms/
+     telnyxSms.test.ts` (5 tests), `apps/backend/src/services/smtpProvider.test.ts` (4 tests),
+     `apps/backend/src/lib/promptVariables.test.ts` (5 tests), `apps/backend/src/services/
+     smsDispatcher.test.ts` (5 tests) and `apps/backend/src/messaging.integration.test.ts`
+     (4 tests) - see the "Phase 13" section above for exactly what each proves, including the
+     race-simulated concurrent-materialization test that asserts the `UNIQUE(campaign_id, lead_id)`
+     constraint actually prevents a double-send, and the real Twilio delivery webhook -> replay ->
+     deduplication sequence. Phase 13 added 3 new migrations (47 total: the original 44 plus
+     `00000000000045_phase13_smtp_settings.sql`, `00000000000046_phase13_messaging_campaigns.sql`,
+     `00000000000047_phase13_rls_policies.sql`), applied cleanly both incrementally on top of the
+     existing Phase 1-12 verification database and from a completely fresh database (all 47
+     migrations, in order, auth stub included) - both runs land on **59 tables** (up from 53 - the 6
+     new `smtp_settings`/`sms_campaigns`/`sms_messages`/`email_campaigns`/`email_messages`/
+     `email_suppressions` tables), RLS confirmed enabled on all 59; the permission catalog is
+     unchanged (`messaging.manage` was already seeded in Phase 1, this phase is the first to
+     actually enforce it). The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass
+     clean after this phase (358 backend tests total, up from 330).
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
@@ -1484,6 +1598,16 @@ two explicitly documented simplifications rather than gaps: all date-range math 
 per-organization-timezone (`services/analyticsQuery.ts`'s header comment), and the agent-analytics
 "disposition accuracy" figure is a documented practical proxy (1 - manual-override rate) rather than
 a comparison against any independently-labeled ground truth, since none exists in this system.
+Phase 13 carries the same category of gap as Phase 5: no live network access to Twilio's or
+Telnyx's real SMS-send endpoints here, so `lib/sms/twilioSms.test.ts`/`telnyxSms.test.ts` assert on
+the exact request shape (URL, auth header, form/JSON body) against a mocked `fetch`, built from each
+provider's current documented Messages API; `messaging.integration.test.ts`'s SMS flow exercises the
+real dispatcher/route/webhook code end to end against that same mock. Likewise no real SMTP server
+here - `smtpProvider.test.ts` and the integration test inject a fake nodemailer transport (real
+`nodemailer` request-building code, real error-humanizing code, just not a real TCP connection to a
+real mail server) rather than pretend a real one was reached. This is a documented simplification,
+not a gap in scope: no test in this build claims to have sent a real SMS or a real email over the
+public internet.
 
 If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
