@@ -147,8 +147,9 @@ up real enforcement, not another migration.
 
 - Database schema: `ai_agents` + `ai_agent_versions` (every configuration change creates a new,
   immutable version - draft -> published -> archived on the next publish - never mutating history;
-  `current_version_id` points at whichever version is live), `ai_agent_improvements` (table only,
-  stays empty until Phase 11's call evaluator populates it - no fake data or stub evaluator),
+  `current_version_id` points at whichever version is live), `ai_agent_improvements` (table only at
+  the time, stays empty until Phase 11's call evaluator populates it for real - see the Phase 11
+  section below; no fake data or stub evaluator in this phase),
   `scripts` (`{{variable}}` call scripts, optionally attached to an agent), and the unified document
   pipeline `knowledge_bases` / `knowledge_documents` / `knowledge_chunks`. Adds
   `CREATE EXTENSION vector` (pgvector) and an ivfflat cosine-similarity index on
@@ -853,15 +854,103 @@ genuine package (and a real or staged call) needs an environment with pipecat-ai
 Python tests added this phase prove everything on the WS/auth/hub side of that boundary instead (see
 each test file's own header comment for the exact line).
 
+**Phase 11 (this build) - done:**
+
+- **AI call evaluator** (`services/evaluateCall.ts`): triggered from the exact same seam as Phase 9's
+  summary generation (`processCallArtifacts.ts`, immediately after a call's transcript is confirmed
+  ready) rather than a new trigger - a second, independent `setImmediate` step so a summary or
+  evaluation failure never blocks the other. Sends the real transcript, the call's own agent
+  *version's* `system_prompt`/`greeting_template` (spec section 88's reproducibility intent - judged
+  against the configuration that actually ran the call, not whatever the agent's live config has since
+  become), and real metadata (disposition, duration, ended reason) to Phase 3's `LLMProviderAdapter`
+  with a structured-JSON prompt covering the full spec section 24 rubric (all 17 sub-scores: opening,
+  introduction, listening, understanding, accuracy, knowledge_usage, objection_handling, tone,
+  empathy, professionalism, script_adherence, sop_adherence, compliance, call_control,
+  transfer_handling, closing, disposition_accuracy). Same malformed-JSON-retries-once-then-honestly-
+  fails pattern as `generateCallSummary.ts` - never a fabricated score. A call with no ready transcript
+  (failed/very short/cancelled) or no disposition yet is a structural no-op, not a fake row. Stored in
+  the new `call_evaluations` table (migration `00000000000038`).
+- **Improvement mining** (`services/aggregateAgentImprovements.ts`): runs immediately after each
+  evaluation rather than as a periodic batch job - justified in the file's own header comment (this
+  codebase has no scheduler/worker infra to add a periodic pass to; every other cross-call
+  aggregation here, disposition assignment, campaign-lead outcomes, live-monitor events, is likewise
+  triggered off a single call's own terminal event). Mines `missed_opportunities`/
+  `incorrect_statements`/`what_went_poorly` for recurring issues per agent via a deliberately simple
+  category + Jaccard word-overlap text match (no ML clustering) against that agent's existing
+  `detected`/`under_review` rows in Phase 3's `ai_agent_improvements` table (built empty in Phase 3,
+  populated for real for the first time here): a match increments `frequency` and appends real
+  evidence (call id + evaluation id + excerpt); a genuinely new issue gets one extra, clearly separate
+  LLM call to draft a `suggested_change` + `confidence` - explicitly a SUGGESTION only, per the spec's
+  "do not automatically rewrite the production AI prompt after every call" rule - and is dropped
+  entirely (never a fabricated suggestion) if that call fails or no LLM is configured. Migration
+  `00000000000039` adds `source_call_id`/`source_evaluation_id` (fast pointers to the latest
+  contributing call/evaluation - full history lives in `evidence.occurrences`) and `updated_at` to the
+  existing table; `00000000000040` adds the insert/update RLS policies it never had (was read-only);
+  `00000000000041` adds `agent_evaluation_summary()`, a real Postgres `GROUP BY`/`AVG` aggregate
+  (overall + per-category averages, org+agent+since-scoped) mirroring `match_knowledge_chunks`'s
+  structurally-safe org-scoped RPC pattern.
+- **Human-in-the-loop workflow** (`routes/agentImprovements.ts`, new `/api/v1/agent-improvements`
+  prefix): `PATCH /:id` enforces `detected -> under_review -> approved/rejected` as an explicit
+  allow-list (skipping a step, or moving backwards, is a `422`), audit logged
+  (`agent_improvement.status_changed`). `POST /:id/apply` only from `approved` - appends the
+  suggested change as its own clearly-labeled section onto the agent's *currently published* version's
+  `system_prompt` (a concrete, auditable text diff, not a silent rewrite of the existing body), and
+  creates a genuinely new **draft** version via a shared helper (`routes/agents.ts`'s
+  `createDraftVersionFromSource()`, extracted so both `restore()` and `apply()` share the one place a
+  draft is ever created from an existing version - never a duplicated code path). The improvement row
+  is marked `applied` with `affected_version_id` pointing at that new draft; the draft is **never
+  auto-published** - a human still explicitly publishes it via Phase 3's existing
+  `POST /agents/:id/versions/:versionId/publish`, and the previously published version's own row is
+  left completely untouched (proven directly in `phase11.integration.test.ts` - see Tests below).
+  `GET /calls/:id/evaluation` (new route on `routes/calls.ts`) and `GET /agents/:id/improvements`
+  (now real, filterable by `?status=`, replacing Phase 3's honest empty-state stub) round out the API;
+  `GET /agents/:id/evaluation-summary` serves the aggregate above.
+- Frontend: the Agent detail page's **Improvements tab** (`pages/agent/ImprovementsTab.tsx`) is now
+  real - status filter chips, Review/Approve/Reject/Apply actions (gated on `agents.manage`), an
+  evidence excerpt with a deep link to the source call's own CDR detail (`pages/CdrPage.tsx` now reads
+  a `?call=` query param to auto-open that call's drawer), and an explicit "draft created - go publish
+  it" confirmation after Apply, never an auto-publish. Phase 9's CDR call-detail drawer gets a new
+  **AI Evaluation panel** (overall score, a simple bar-list sub-score breakdown, qualitative findings,
+  recommended improvement, or an honest not-evaluated/skipped state). The agent Configuration tab gets
+  an **evaluation-summary widget** (average overall score + per-category averages, last 30 days, from
+  the real aggregate endpoint - never client-computed from a full row dump).
+- Tests: `services/evaluateCall.test.ts` (`parseEvaluationResponse` unit coverage - valid full rubric,
+  markdown-fenced, clamped/defaulted out-of-range scores, malformed JSON, missing required fields -
+  plus `evaluateCall()` against a fake LLM provider proving the retry-once-then-succeed path, the
+  fail-cleanly-with-no-row-written path after two malformed attempts, and the honest structural-skip
+  paths, all without ever fabricating a score), `services/aggregateAgentImprovements.test.ts`
+  (`normalizeForMatch`/`jaccardSimilarity` behavior, `extractCandidates` category-capping, and the
+  real create-then-increment dedup flow: a new issue creates one row, a recurring issue on a second
+  call increments frequency and appends evidence without duplicating and without re-calling the
+  suggestion LLM, a genuinely different issue creates a separate row, and no LLM configured means no
+  fabricated suggestion), and `phase11.integration.test.ts` (real route handlers via `app.inject()` -
+  a call with a real transcript+disposition gets evaluated with the full 17-field rubric; a call with
+  no ready transcript is honestly "skipped" even for a made-up call id; a second call surfacing the
+  same recurring issue increments the existing improvement's frequency instead of duplicating; the
+  status-transition allow-list rejects skipping straight to `approved` and rejects applying before
+  approval; **apply creates a genuinely separate DRAFT version while the original PUBLISHED version's
+  `system_prompt` is proven byte-for-byte unchanged and the agent's own `current_version_id` still
+  points at it** - the explicit snapshot-immutability regression guard the task brief calls for,
+  proving Phase 7's same guarantee holds here too; applying twice is refused; the audit log carries
+  the real old/new prompt diff; and cross-org isolation across evaluations/improvements/
+  evaluation-summary/PATCH all `404` for a second organization).
+
+### Phase 11 environment requirements
+
+No new required variables - reuses Phase 3's existing `OPENAI_API_KEY`/`LLMProviderAdapter` for both
+the evaluator and the improvement-suggestion LLM calls (`CALL_EVALUATION_MODEL`/
+`AGENT_IMPROVEMENT_MODEL` optionally override the default `gpt-4o-mini` for each, independently of
+`CALL_SUMMARY_MODEL`). Without an LLM configured, evaluation and improvement mining are both honest
+structural no-ops - the same posture Phase 9's summaries already established, extended consistently.
+
 **Explicitly NOT built yet** (deferred to later phases):
 
 - Redis/BullMQ - Phase 7's campaign dispatcher runs today as a documented in-process `setInterval`
   drop-in (see above); migrating it to a real queue is Phase 15 infra work, not a logic change
 - Inbound Routes, Queues (inbound call routing, ring groups)
 - Messaging
-- Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake)
-- AI evaluator / call-scoring / agent-improvement suggestion system (spec section 23's fuller
-  scope beyond the call summaries Phase 9 already ships) - Phase 11
+- Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake) - campaign/
+  agent analytics dashboards are Phase 12+
 - SMTP-backed email delivery
 - Background job queues / Redis (the async import in Phase 2, the Phase 3 knowledge-document
   pipeline and Phase 4's voice cloning all use `setImmediate` on the backend process itself - see
@@ -1200,6 +1289,24 @@ were verified for real in both:
      ADMIN/SUPER_ADMIN 30. The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass
      clean after this phase (289 backend tests total), and the separate `apps/pipecat-service`
      Python suite (`pytest`) passes 31/31, up from 8/8 before this phase.
+   - Phase 11: `apps/backend/src/services/evaluateCall.test.ts` (9 tests),
+     `apps/backend/src/services/aggregateAgentImprovements.test.ts` (8 tests) and
+     `apps/backend/src/phase11.integration.test.ts` (5 tests) - see the "Phase 11" section above for
+     exactly what each proves, including the explicit snapshot-immutability regression guard (apply
+     creates a new draft while the previously published version's `system_prompt` is asserted
+     byte-for-byte unchanged) and cross-org isolation across evaluations/improvements/summary/PATCH.
+     Phase 11 added 4 new migrations (41 total: the original 37 plus `00000000000038_phase11_call_
+     evaluations.sql`, `00000000000039_phase11_agent_improvements_alter.sql`,
+     `00000000000040_phase11_rls_policies.sql`, `00000000000041_phase11_evaluation_summary_fn.sql`),
+     applied cleanly both incrementally on top of the existing Phase 1-10 verification database and
+     from a completely fresh database (all 41 migrations, in order, auth stub included) - both runs
+     land on **49 tables** (up from 48 - the new `call_evaluations` table), RLS confirmed enabled on
+     all 49 (including the newly-added insert/update policies on `ai_agent_improvements`, which had
+     select-only policies before this phase); the permission catalog is unchanged at 30 (no new
+     permission keys needed - every Phase 11 route reuses the existing `agents.manage`) and
+     `agent_evaluation_summary()`/`match_knowledge_chunks()`/`search_call_transcripts()` all present.
+     The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass clean after this phase
+     (311 backend tests total, up from 289).
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
@@ -1240,7 +1347,14 @@ serving real bytes in `phase9.integration.test.ts` (so the actual fetch-then-`St
 putObject()`-then-serve-back code path is real and tested, just not against a live provider URL).
 MP3 transcoding via `ffmpeg` is written but **not exercised** in this sandbox since no `ffmpeg`
 binary is installed here (`maybeTranscodeToMp3()`'s ENOENT fallback path is what actually runs in
-every test and in this deployment) - see the Phase 9 environment-requirements note above.
+every test and in this deployment) - see the Phase 9 environment-requirements note above. Same
+category of gap for Phase 11: the evaluator and improvement-suggestion prompts are real and sent to
+the real OpenAI chat completions endpoint shape (`lib/llm/openai.ts`, unchanged from Phase 3), but
+this sandbox has no real `OPENAI_API_KEY`/network access, so `phase11.integration.test.ts` mocks the
+same `fetch` boundary Phase 9/10's tests already established, returning realistic rubric/suggestion
+JSON keyed off which system prompt each request carries - the actual quality of a real LLM's
+evaluation judgment (as opposed to the parsing/storage/mining/workflow code around it, which is fully
+real and tested) is not something any test in this build claims to verify.
 
 If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
