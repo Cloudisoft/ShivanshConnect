@@ -33,13 +33,16 @@ ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
 RUN pnpm --filter @shivanshconnect/frontend exec vite build
 
 FROM node:20-slim AS run
-WORKDIR /repo
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
-COPY --from=build /repo /repo
 WORKDIR /repo/apps/frontend
-EXPOSE 4173
-# Invoke vite's binary directly rather than through `pnpm exec` - pnpm/
-# corepack can make a blocking network call (e.g. its update-notifier
-# check) at runtime with no output and no timeout, which hung this
-# container indefinitely in production with zero log output.
-CMD ["sh", "-c", "./node_modules/.bin/vite preview --host 0.0.0.0 --port ${PORT:-4173} --strictPort"]
+# `vite preview` is not meant for production use (Vite's own docs say so),
+# and proved unreliable in this environment: three different fixes to its
+# startup (port variable, bypassing pnpm, removing shell-expansion
+# ambiguity) all failed identically - the container held real memory but
+# never accepted a connection, with zero diagnostic output. Replaced with
+# a minimal, dependency-free static file server (serve-static.mjs)
+# invoked directly via `node`, matching the backend's proven-working CMD
+# pattern exactly - no pnpm, no shell-expansion, no vite runtime involved.
+COPY --from=build /repo/apps/frontend/dist ./dist
+COPY --from=build /repo/apps/frontend/serve-static.mjs ./serve-static.mjs
+EXPOSE 8080
+CMD ["node", "serve-static.mjs"]
