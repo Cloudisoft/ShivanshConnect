@@ -42,7 +42,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'lead-lists', label: 'Lead Lists', path: '/lead-lists', icon: ListChecks, builtInPhase1: true },
   { id: 'dispositions', label: 'Dispositions', path: '/dispositions', icon: Tag, builtInPhase1: true },
   { id: 'cdr', label: 'CDR', path: '/cdr', icon: FileText, builtInPhase1: true },
-  { id: 'analytics', label: 'Analytics', path: '/analytics', icon: BarChart3, builtInPhase1: false },
+  { id: 'analytics', label: 'Analytics', path: '/analytics', icon: BarChart3, builtInPhase1: true },
   { id: 'ai-agents', label: 'AI Agents', path: '/ai-agents', icon: Bot, builtInPhase1: true },
   { id: 'voices', label: 'Voices', path: '/voices', icon: Mic, builtInPhase1: true },
   { id: 'dids', label: 'DIDs', path: '/dids', icon: Phone, builtInPhase1: true },

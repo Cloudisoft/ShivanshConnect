@@ -10,6 +10,7 @@ import { ResetPasswordPage } from './pages/auth/ResetPasswordPage';
 import { VerifyEmailPendingPage } from './pages/auth/VerifyEmailPendingPage';
 import { AcceptInvitationPage } from './pages/auth/AcceptInvitationPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { AnalyticsPage } from './pages/AnalyticsPage';
 import { CampaignsPage } from './pages/CampaignsPage';
 import { CampaignDetailPage } from './pages/CampaignDetailPage';
 import { DialingSettingsPage } from './pages/DialingSettingsPage';
@@ -54,6 +55,7 @@ export default function App(): JSX.Element {
         <Route element={<AppShell />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
           <Route path="/dialing-settings" element={<DialingSettingsPage />} />
