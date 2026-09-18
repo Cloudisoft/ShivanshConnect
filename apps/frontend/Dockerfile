@@ -38,4 +38,8 @@ RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 COPY --from=build /repo /repo
 WORKDIR /repo/apps/frontend
 EXPOSE 4173
-CMD ["sh", "-c", "pnpm exec vite preview --host 0.0.0.0 --port ${PORT:-4173} --strictPort"]
+# Invoke vite's binary directly rather than through `pnpm exec` - pnpm/
+# corepack can make a blocking network call (e.g. its update-notifier
+# check) at runtime with no output and no timeout, which hung this
+# container indefinitely in production with zero log output.
+CMD ["sh", "-c", "./node_modules/.bin/vite preview --host 0.0.0.0 --port ${PORT:-4173} --strictPort"]
