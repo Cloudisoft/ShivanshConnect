@@ -1,7 +1,7 @@
 # ShivanshConnect
 
 A multi-tenant AI voice contact-center platform. This repository is being built in phases; **this
-build covers Phases 1-10** (organizations, auth, users, roles/permissions, audit logs, the overall
+build covers Phases 1-12** (organizations, auth, users, roles/permissions, audit logs, the overall
 app shell; leads/lead lists/phone normalization/DNC/CSV-XLSX import; AI agents/agent versioning/
 prompt system/knowledge base (RAG)/scripts; voice providers/cloning; telephony number providers -
 Twilio, Telnyx, Bring Your Own Number - and the org's phone number (DID) registry; call
@@ -29,9 +29,15 @@ WebSocket stream (`WS /api/v1/live-monitor/stream`), driven directly by Phase 8'
 event bus and a new live (mid-call, not just post-call) transcript-segment ingestion path, with
 listen/whisper/barge implemented genuinely differently for Vapi (the real, honestly-limited
 `listenUrl`/`controlUrl` mechanism) versus pipecat (real audio-frame tapping/injection/mixing in
-our own pipeline) - see [Phase 10](#phase-10-this-build---done) below for the full writeup. Later
-phases (messaging, analytics, the AI evaluator/improvement system, and more) are deliberately
-**not** implemented yet - see [Phase plan status](#phase-plan-status) below.
+our own pipeline) - see [Phase 10](#phase-10-this-build---done) below for the full writeup; and now
+**the AI call evaluator/improvement loop** (Phase 11 - a real per-call LLM evaluation against the
+full spec section 24 rubric, recurring-issue mining into a human-reviewed improvement queue that only
+ever produces a new draft agent-prompt version, never an auto-publish) and **Analytics** (Phase 12 -
+pre-aggregated daily/hourly rollup tables per spec section 89, a real dashboard KPI grid and chart
+set, and campaign/agent analytics per spec section 42, with the true real-time figures - active
+calls, remaining leads, campaigns running, agents active - always live, never rollups). Later phases
+(messaging/SMS/email/SMTP, inbound routing, queues, and more) are deliberately **not** implemented
+yet - see [Phase plan status](#phase-plan-status) below.
 
 ## Architecture overview
 
@@ -943,14 +949,108 @@ the evaluator and the improvement-suggestion LLM calls (`CALL_EVALUATION_MODEL`/
 `CALL_SUMMARY_MODEL`). Without an LLM configured, evaluation and improvement mining are both honest
 structural no-ops - the same posture Phase 9's summaries already established, extended consistently.
 
+**Phase 12 (this build) - done:**
+
+- Database schema: 4 pre-aggregated rollup tables (master spec section 89 - never compute expensive
+  historical analytics from raw events at request time) - `analytics_daily_org`, `analytics_daily_
+  campaign`, `analytics_daily_agent` (all `primary key (organization_id, ..., date)`) and `analytics_
+  hourly_org` (`primary key (organization_id, hour_bucket)`), migration `00000000000042`, RLS in
+  `00000000000043` (same defense-in-depth split as every prior phase - the backend's service-role
+  reads bypass RLS and enforce `analytics.view` + org-scoping explicitly in application code; these
+  policies are the second line of defense). Migration `00000000000044` adds the real SQL aggregate
+  functions that compute and upsert them - `recompute_analytics_daily_org/_campaign/_agent(org_id,
+  date)` and `recompute_analytics_hourly_org(org_id, hour)`, each a genuine `COUNT`/`AVG`/`GROUP BY`
+  query with `ON CONFLICT DO UPDATE`, mirroring Phase 11's `agent_evaluation_summary()` pattern - plus
+  `dashboard_disposition_breakdown(org_id, from, to)`, a real-time `GROUP BY` over `call_dispositions`
+  for a bounded date range (the one chart the spec explicitly calls out as living on top of the
+  rollups rather than inside them). "Connected" is defined consistently everywhere as `answered_at is
+  not null`, distinct from "completed" (`status = 'completed'`).
+- **`services/analyticsAggregator.ts`** - an in-process `setInterval` job (5 minutes by default,
+  `ANALYTICS_AGGREGATION_INTERVAL_MS` overridable), the same documented drop-in-for-a-real-queue
+  pattern as Phase 7's campaign dispatcher (`startAnalyticsAggregator()`/`runAggregationTick()`
+  mirror `startCampaignDispatcher()`/`runDispatchTick()` exactly). Every tick, per organization:
+  **today's row is always wholesale-recomputed** (cheap - one day's calls, real SQL aggregates -
+  and can never drift out of sync with the authoritative tables, which a smarter incremental patch
+  risks); a **one-time historical backfill** runs the recompute functions once for every distinct
+  date/hour that has real `calls` rows older than today, detected by "no historical rollup row exists
+  yet" rather than a separate persisted flag - naturally idempotent (a second backfill attempt finds
+  the historical row and does nothing) and naturally one-time (the presence check stops finding a
+  reason to re-run once any historical row exists). Not started by `buildApp()` itself, same reasoning
+  as the dispatcher - the test suite never gets a background timer racing its fake Supabase client.
+- **`services/analyticsQuery.ts`** - the one query-building module behind every Phase 12 route
+  (mirrors Phase 9's `cdrQuery.ts`: one place, never duplicated). Historical strategy: every date
+  strictly before today comes from the rollup tables (summed/weighted-averaged in JS - itself cheap
+  arithmetic over already-aggregated numbers, never a second raw-table scan); **today's own
+  contribution is always computed live** (one bounded query over today's `calls` rows plus a couple
+  of small batched lookups, since the rollup's own "today" row is only as fresh as the last aggregator
+  tick - documented explicitly in the file's header as the chosen "mix a live query for the partial
+  day with the rollup for prior days" strategy the task brief allowed). Active Calls, Remaining Leads,
+  Campaigns Running and AI Agents Active are **always** live queries, in every period, never rollups,
+  per spec. All date-range math is UTC-based (a documented simplification, same category as Phase 7's
+  fixed-delay retry math - per-org-timezone day boundaries are a following-up refinement, not a stub).
+- Backend API: `GET /api/v1/dashboard` (spec section 6's exact metric list - Total/Connected/
+  Completed/Failed Calls, Voicemails, Answering Machines, DNC, Not Interested, Transfers, Callbacks,
+  Average Call Duration, Average Talk Time, Connection/Transfer/Voicemail/DNC Rate, Calls Per Hour,
+  plus the 4 always-live figures), `GET /api/v1/dashboard/charts` (calls by hour - bucketed by
+  hour-of-day and summed across the period -, calls by day, connection-rate trend, disposition
+  breakdown, campaign performance, AI agent performance, campaign completion, average-duration trend,
+  transfer statistics - every series shaped as a clean `{label, value}`/`{date, ...}` array for direct
+  charting), `GET /api/v1/analytics/campaigns/:id` (spec section 42 - total leads/calls/connected/
+  voicemail/DNC/transfers/callbacks/average duration/completion %/attempts-per-lead, completion and
+  attempts always live off `campaign_leads`, never the rollup), `GET /api/v1/analytics/agents` (spec
+  42's AI Agent KPI comparison - one array entry per agent so the frontend builds the comparison table
+  directly off it; disposition accuracy is a documented practical proxy - `1 - (manual overrides /
+  total dispositions)` in the period, since there is no independently-labeled ground-truth disposition
+  to compare against and a supervisor's correction is the strongest available signal the engine got
+  one wrong; evaluation score/count come from Phase 11's real `agent_evaluation_summary()`). Every
+  route: `authenticate`, `requirePermission('analytics.view')` (already seeded since Phase 1, granted
+  to `SUPER_ADMIN`/`ADMIN`/`MANAGER`/`VIEWER`), org-scoped, Zod-validated period filters (`today`/
+  `yesterday`/`7d`/`30d`/`custom` with a real date-range/ordering check on `custom`).
+- Frontend: replaces the Phase 1 Dashboard welcome-shell with a real page - the Today/Yesterday/7
+  Days/30 Days/Custom (date-range picker) filter tabs shared by both pages
+  (`components/analytics/PeriodFilter.tsx`), the full spec section 6 KPI tile grid
+  (`components/analytics/KpiGrid.tsx`, live tiles visually marked), and every named chart via
+  `recharts` (newly installed, used consistently everywhere - `components/analytics/charts.tsx`),
+  colored with the dataviz skill's validated default palette (sequential blue for single-series bar/
+  line charts, the fixed 8-hue categorical order for disposition/campaign/agent breakdowns - never an
+  eyeballed or per-chart-invented palette). The **Active Calls** tile reuses Phase 10's existing
+  `useLiveMonitorSocket()` WS client directly (no second WebSocket connection anywhere in the app) so
+  it visibly updates in real time rather than waiting on the metrics query's 30s polling refetch.
+  Replaces the "Analytics" sidebar placeholder with a real `pages/AnalyticsPage.tsx` - a Campaign
+  Analytics tab (campaign picker + the full spec 42 metric set + a completion progress bar) and an
+  Agent Analytics tab (a sortable, minimum-calls-filterable comparison table across every agent,
+  including the real Phase 11 evaluation-score column).
+- Tests: `services/analyticsQuery.test.ts` (`resolvePeriod`'s exact date-range math for every period
+  value including the "custom range extending past today clamps to now" edge case; every dashboard
+  rate formula - connection/transfer/voicemail/DNC rate as %/total - against hand-calculated fixture
+  numbers; a zero-calls period proving no rate ever divides by zero; campaign completion/attempts-
+  per-lead against live `campaign_leads` fixtures), `services/analyticsAggregator.test.ts` (a real
+  `runAggregationTick()` backfills every historical date exactly once, a second tick never duplicates
+  a rollup row or changes its already-correct values, and one organization's tick never writes another
+  organization's rows), and `phase12.integration.test.ts` (a realistic multi-day/one-campaign/
+  one-agent dataset seeded directly into the fake-Supabase tables, a real aggregation tick, then every
+  dashboard/analytics endpoint hit through real route handlers via `app.inject()` - 30d/today/
+  custom-single-day dashboard totals, chart disposition breakdown + campaign performance/completion,
+  the campaign-analytics endpoint's numbers, agent analytics reflecting a real Phase 11 evaluation
+  score, full cross-org isolation across every endpoint including a direct-id 404, and an
+  unauthenticated request rejected with `401`). The rollup SQL functions themselves (correctness of
+  every field's `COUNT`/`AVG`/`GROUP BY` definition, and idempotent upsert behavior on a second run)
+  were additionally hand-verified against a real local PostgreSQL 16 instance with hand-calculated
+  fixture data - see Verification notes below; this is a stronger proof of the actual SQL than the
+  fake-Supabase JS mirror alone could give.
+
+### Phase 12 environment requirements
+
+No new required variables - `ANALYTICS_AGGREGATION_INTERVAL_MS` (milliseconds) optionally overrides
+the aggregator's default 5-minute tick interval, same optional-override pattern as Phase 7's
+`CAMPAIGN_DISPATCH_INTERVAL_MS`.
+
 **Explicitly NOT built yet** (deferred to later phases):
 
 - Redis/BullMQ - Phase 7's campaign dispatcher runs today as a documented in-process `setInterval`
   drop-in (see above); migrating it to a real queue is Phase 15 infra work, not a logic change
 - Inbound Routes, Queues (inbound call routing, ring groups)
 - Messaging
-- Analytics (the Phase 1 Dashboard is intentionally a shell with no metrics, real or fake) - campaign/
-  agent analytics dashboards are Phase 12+
 - SMTP-backed email delivery
 - Background job queues / Redis (the async import in Phase 2, the Phase 3 knowledge-document
   pipeline and Phase 4's voice cloning all use `setImmediate` on the backend process itself - see
@@ -1307,6 +1407,30 @@ were verified for real in both:
      `agent_evaluation_summary()`/`match_knowledge_chunks()`/`search_call_transcripts()` all present.
      The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass clean after this phase
      (311 backend tests total, up from 289).
+   - Phase 12: `apps/backend/src/services/analyticsQuery.test.ts` (9 tests),
+     `apps/backend/src/services/analyticsAggregator.test.ts` (2 tests) and
+     `apps/backend/src/phase12.integration.test.ts` (8 tests) - see the "Phase 12" section above for
+     exactly what each proves. **The rollup SQL functions themselves were additionally verified
+     directly against a real local PostgreSQL 16 instance** (not just the fake-Supabase JS mirror the
+     integration test exercises): a fixture of 4 hand-authored `calls` rows (mixed dispositions,
+     durations, campaign leads) was inserted, `recompute_analytics_daily_org/_campaign/_agent()` and
+     `recompute_analytics_hourly_org()` were run once, and every resulting field (`total_calls`,
+     `calls_connected`, `voicemails`, `transfers`, `avg_call_duration_seconds`, `avg_talk_time_
+     seconds`, `leads_called`, `leads_remaining`, ...) matched its hand-calculated expected value
+     exactly; running every function a second time produced byte-identical rows with zero duplicates
+     (the idempotent-upsert requirement); and a date with genuinely zero calls got a real zeroed row,
+     never a gap. Phase 12 added 3 new migrations (44 total: the original 41 plus
+     `00000000000042_phase12_analytics_tables.sql`, `00000000000043_phase12_analytics_rls_
+     policies.sql`, `00000000000044_phase12_analytics_rollup_fns.sql`), applied cleanly both
+     incrementally on top of the existing Phase 1-11 verification database and from a completely
+     fresh database (all 44 migrations, in order, auth stub included) - both runs land on **53
+     tables** (up from 49 - the 4 new `analytics_*` rollup tables), RLS confirmed enabled on all 53;
+     the permission catalog is unchanged at 30 (`analytics.view` was already seeded in Phase 1, this
+     phase is the first to actually enforce it); `recompute_analytics_daily_org/_campaign/_agent`,
+     `recompute_analytics_hourly_org` and `dashboard_disposition_breakdown` all confirmed present
+     alongside `agent_evaluation_summary()`/`match_knowledge_chunks()`/`search_call_transcripts()`.
+     The full monorepo `pnpm run build`/`test`/`lint`/`typecheck` all pass clean after this phase
+     (330 backend tests total, up from 311).
 
 **Not independently verifiable in this sandbox:** the exact real-world request/response shapes of
 ElevenLabs' and Cartesia's APIs (no live network access to either vendor here; every adapter's
@@ -1354,7 +1478,12 @@ this sandbox has no real `OPENAI_API_KEY`/network access, so `phase11.integratio
 same `fetch` boundary Phase 9/10's tests already established, returning realistic rubric/suggestion
 JSON keyed off which system prompt each request carries - the actual quality of a real LLM's
 evaluation judgment (as opposed to the parsing/storage/mining/workflow code around it, which is fully
-real and tested) is not something any test in this build claims to verify.
+real and tested) is not something any test in this build claims to verify. Phase 12 has no new
+external-vendor gap (it computes everything from data already in this database), but it does carry
+two explicitly documented simplifications rather than gaps: all date-range math is UTC-based, not
+per-organization-timezone (`services/analyticsQuery.ts`'s header comment), and the agent-analytics
+"disposition accuracy" figure is a documented practical proxy (1 - manual-override rate) rather than
+a comparison against any independently-labeled ground truth, since none exists in this system.
 
 If you have reliable Docker registry access, `supabase start` followed by `supabase db reset` will
 run the same migrations against the full local stack, and `supabase db push` will apply them to a
