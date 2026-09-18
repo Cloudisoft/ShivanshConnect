@@ -72,6 +72,12 @@ interface Tables {
   analytics_daily_campaign: Row[];
   analytics_daily_agent: Row[];
   analytics_hourly_org: Row[];
+  smtp_settings: Row[];
+  sms_campaigns: Row[];
+  sms_messages: Row[];
+  email_campaigns: Row[];
+  email_messages: Row[];
+  email_suppressions: Row[];
 }
 
 export interface FakeAuthUser {
@@ -135,6 +141,12 @@ export function createFakeSupabase() {
     analytics_daily_campaign: [],
     analytics_daily_agent: [],
     analytics_hourly_org: [],
+    smtp_settings: [],
+    sms_campaigns: [],
+    sms_messages: [],
+    email_campaigns: [],
+    email_messages: [],
+    email_suppressions: [],
   };
 
   const authUsers = new Map<string, FakeAuthUser>(); // id -> user
@@ -190,6 +202,11 @@ export function createFakeSupabase() {
       // MANAGER/VIEWER (everyone except AGENT) - see
       // 00000000000009_seed_roles_permissions.sql.
       'analytics.view',
+      // Phase 13: messaging.manage - real seed migration grants this to
+      // SUPER_ADMIN/ADMIN/MANAGER (see 00000000000009_seed_roles_
+      // permissions.sql), same carve-out MANAGER already has everywhere
+      // except roles/users/settings management.
+      'messaging.manage',
     ];
     for (const key of permKeys) {
       tables.permissions.push({ id: randomUUID(), key, description: key, category: key.split('.')[0] });
@@ -375,6 +392,18 @@ export function createFakeSupabase() {
           custom_fields: {},
         };
       case 'dnc_entries':
+        return { source: 'manual' };
+      case 'smtp_settings':
+        return { encryption: 'tls', from_name: '', status: 'not_configured', last_tested_at: null, last_error: null };
+      case 'sms_campaigns':
+        return { status: 'draft', throttle_per_minute: 30, lead_list_id: null, scheduled_at: null };
+      case 'sms_messages':
+        return { status: 'queued', provider_message_id: null, error: null, sent_at: null, delivered_at: null };
+      case 'email_campaigns':
+        return { status: 'draft', throttle_per_minute: 30, plain_text_body: '', recipient_lead_list_id: null, recipient_filter: null, scheduled_at: null };
+      case 'email_messages':
+        return { status: 'queued', error: null, sent_at: null };
+      case 'email_suppressions':
         return { source: 'manual' };
       case 'import_jobs':
         return {
@@ -580,6 +609,13 @@ export function createFakeSupabase() {
     // call, same upsert-by-call_id pattern as call_transcripts/
     // call_summaries above.
     call_evaluations: [['call_id']],
+    // Phase 13: mirrors sms_messages_campaign_lead_key /
+    // email_messages_campaign_lead_key / smtp_settings_organization_id_key
+    // (00000000000045-46) - the actual dedup/no-double-send guarantee the
+    // dispatcher race-simulation tests rely on.
+    sms_messages: [['sms_campaign_id', 'lead_id']],
+    email_messages: [['email_campaign_id', 'lead_id']],
+    smtp_settings: [['organization_id']],
   };
 
   function violatesUniqueConstraint(table: keyof Tables, candidate: Row): boolean {
