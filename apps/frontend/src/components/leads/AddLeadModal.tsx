@@ -17,7 +17,6 @@ export function AddLeadModal({
     last_name: '',
     phone: '',
     email: '',
-    company: '',
   });
   const [error, setError] = useState<string | null>(null);
 
@@ -28,7 +27,6 @@ export function AddLeadModal({
       await createLead.mutateAsync({
         ...form,
         email: form.email || undefined,
-        company: form.company || undefined,
         lead_list_id: leadListId ?? null,
       });
       onClose();
@@ -74,24 +72,14 @@ export function AddLeadModal({
               required
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label htmlFor="email">Email (optional)</Label>
-              <Input
-                id="email"
-                type="email"
-                value={form.email}
-                onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-              />
-            </div>
-            <div>
-              <Label htmlFor="company">Company (optional)</Label>
-              <Input
-                id="company"
-                value={form.company}
-                onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
-              />
-            </div>
+          <div>
+            <Label htmlFor="email">Email (optional)</Label>
+            <Input
+              id="email"
+              type="email"
+              value={form.email}
+              onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+            />
           </div>
           <Button type="submit" disabled={createLead.isPending}>
             {createLead.isPending ? 'Adding...' : 'Add lead'}

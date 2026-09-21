@@ -73,7 +73,7 @@ describe('Phase 3: agent create -> draft version -> publish -> restore', () => {
       url: `/api/v1/agents/${agent.id}/versions`,
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        system_prompt: 'You are {{first_name}}\'s sales agent from {{company}}.',
+        system_prompt: 'You are {{first_name}}\'s sales agent.',
         greeting_template: 'Hi {{first_name}}, this is Sam calling.',
         llm_model: 'gpt-4o-mini',
       },

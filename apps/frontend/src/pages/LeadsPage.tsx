@@ -358,7 +358,6 @@ export function LeadsPage(): JSX.Element {
 
 const COLUMNS: { key: string; label: string }[] = [
   { key: 'name', label: 'Name' },
-  { key: 'company', label: 'Company' },
   { key: 'phone', label: 'Phone' },
   { key: 'email', label: 'Email' },
   { key: 'list', label: 'List' },
@@ -446,7 +445,6 @@ function LeadsTable({
                         {lead.first_name || lead.last_name ? `${lead.first_name} ${lead.last_name}`.trim() : '—'}
                       </Link>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.company || '—'}</td>
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-ink-600">{lead.phone_normalized}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.email || '—'}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.lead_list_name ?? '—'}</td>

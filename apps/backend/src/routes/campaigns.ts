@@ -533,7 +533,7 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     const orgId = req.user!.organizationId;
     await getOwnedCampaign(supabase, id, orgId);
 
-    let builder = supabase.from('campaign_leads').select('*, leads(id, first_name, last_name, phone_normalized, company)', { count: 'exact' }).eq('campaign_id', id);
+    let builder = supabase.from('campaign_leads').select('*, leads(id, first_name, last_name, phone_normalized)', { count: 'exact' }).eq('campaign_id', id);
     if (query.status) builder = builder.eq('status', query.status);
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;

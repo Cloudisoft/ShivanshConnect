@@ -1,5 +1,5 @@
 /**
- * Renders {{variable}} placeholders (first_name, last_name, company,
+ * Renders {{variable}} placeholders (first_name, last_name,
  * phone, email, custom_field.<key>) in a system prompt / greeting /
  * script against a sample lead-shaped payload. Any variable not present
  * in the payload is left as its literal `{{...}}` text rather than
@@ -10,7 +10,6 @@
 export interface PromptVariableContext {
   first_name?: string;
   last_name?: string;
-  company?: string;
   phone?: string;
   email?: string;
   custom_field?: Record<string, string>;

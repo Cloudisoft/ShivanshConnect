@@ -347,7 +347,7 @@ export function createFakeSupabase() {
 
     if (table === 'campaign_leads' && selectStr.includes('leads(')) {
       const lead = tables.leads.find((l) => l.id === row.lead_id);
-      out.leads = lead ? { id: lead.id, first_name: lead.first_name, last_name: lead.last_name, phone_normalized: lead.phone_normalized, company: lead.company } : null;
+      out.leads = lead ? { id: lead.id, first_name: lead.first_name, last_name: lead.last_name, phone_normalized: lead.phone_normalized } : null;
     }
 
     if (table === 'lead_list_members' && selectStr.includes('lead_lists(')) {

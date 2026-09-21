@@ -188,7 +188,7 @@ function StatTile({ label, value }: { label: string; value: number }): JSX.Eleme
   );
 }
 
-const PROMPT_VARIABLES = ['first_name', 'last_name', 'company', 'phone', 'city', 'state'];
+const PROMPT_VARIABLES = ['first_name', 'last_name', 'phone', 'city', 'state'];
 
 function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Element {
   const { hasPermission } = useAuth();

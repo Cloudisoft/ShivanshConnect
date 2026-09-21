@@ -82,7 +82,7 @@ export async function materializeEmailMessages(supabase: Supabase, campaign: Rec
   const leadIds = await resolveRecipientLeadIds(supabase, orgId, campaign);
   if (leadIds.length === 0) return 0;
 
-  const { data: leads } = await supabase.from('leads').select('id, first_name, last_name, company, phone_normalized, email, custom_fields').in('id', leadIds).eq('organization_id', orgId);
+  const { data: leads } = await supabase.from('leads').select('id, first_name, last_name, phone_normalized, email, custom_fields').in('id', leadIds).eq('organization_id', orgId);
   const { data: existing } = await supabase.from('email_messages').select('lead_id').eq('email_campaign_id', campaign.id);
   const existingIds = new Set((existing ?? []).map((r: any) => r.lead_id));
 
@@ -94,7 +94,6 @@ export async function materializeEmailMessages(supabase: Supabase, campaign: Rec
     const context = {
       first_name: lead.first_name,
       last_name: lead.last_name,
-      company: lead.company ?? undefined,
       phone: lead.phone_normalized,
       email: lead.email,
       custom_field: lead.custom_fields ?? {},

@@ -145,7 +145,7 @@ describe('Phase 7: campaign engine end-to-end', () => {
       url: `/api/v1/campaigns/${campaign.id}/versions`,
       headers: { authorization: `Bearer ${token}` },
       payload: {
-        prompt: 'Hi {{first_name}}, calling about {{company}}.',
+        prompt: 'Hi {{first_name}}, calling about your account.',
         ai_agent_id: agentId,
         calling_rules: { calling_window_start: '00:00', calling_window_end: '23:59', calling_days: [1, 2, 3, 4, 5, 6, 7] },
       },

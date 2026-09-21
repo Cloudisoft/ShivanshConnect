@@ -19,7 +19,7 @@ import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
 import { queueLeadsExport } from '../services/exportGenerators/leadsExport.js';
 
 const LEAD_COLUMNS =
-  'id, organization_id, lead_list_id, first_name, last_name, company, phone_original, phone_normalized, country_code, email, address, city, state, zip, country, status, attempts, last_called_at, last_disposition, next_callback_at, is_dnc, dnc_reason, custom_fields, created_at, updated_at';
+  'id, organization_id, lead_list_id, first_name, last_name, phone_original, phone_normalized, country_code, email, address, city, state, zip, country, status, attempts, last_called_at, last_disposition, next_callback_at, is_dnc, dnc_reason, custom_fields, created_at, updated_at';
 
 export async function leadRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', authenticate);
@@ -122,7 +122,6 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
         lead_list_id: body.lead_list_id ?? null,
         first_name: body.first_name ?? '',
         last_name: body.last_name ?? '',
-        company: body.company ?? null,
         phone_original: body.phone,
         phone_normalized: normalized.e164,
         country_code: normalized.countryCode,
@@ -380,7 +379,6 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     for (const key of [
       'first_name',
       'last_name',
-      'company',
       'email',
       'address',
       'city',

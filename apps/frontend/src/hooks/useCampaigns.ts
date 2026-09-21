@@ -117,7 +117,7 @@ export interface CampaignLeadRow {
   next_eligible_at: string | null;
   final_disposition: string | null;
   added_at: string;
-  leads: { id: string; first_name: string; last_name: string; phone_normalized: string; company: string | null } | null;
+  leads: { id: string; first_name: string; last_name: string; phone_normalized: string } | null;
 }
 
 export function useCampaignLeads(id: string | undefined, page = 1, pageSize = 25, status?: string) {

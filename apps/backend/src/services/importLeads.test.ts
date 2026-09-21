@@ -11,14 +11,13 @@ import { inferColumnMapping, validateRows } from './importLeads.js';
 describe('inferColumnMapping', () => {
   it('maps common header aliases to lead fields', () => {
     const mapping = inferColumnMapping(
-      ['First Name', 'Last Name', 'Phone Number', 'E-mail', 'Company Name'],
+      ['First Name', 'Last Name', 'Phone Number', 'E-mail'],
       [],
     );
     expect(mapping['First Name']).toBe('first_name');
     expect(mapping['Last Name']).toBe('last_name');
     expect(mapping['Phone Number']).toBe('phone');
     expect(mapping['E-mail']).toBe('email');
-    expect(mapping['Company Name']).toBe('company');
   });
 
   it('maps a header to a known org custom field', () => {

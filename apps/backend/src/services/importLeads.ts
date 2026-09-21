@@ -78,7 +78,6 @@ export async function parseFileBufferAsync(buffer: Buffer, fileName: string): Pr
 const FIELD_ALIASES: Record<string, string[]> = {
   first_name: ['first_name', 'firstname', 'first', 'fname', 'given name'],
   last_name: ['last_name', 'lastname', 'last', 'lname', 'surname', 'family name'],
-  company: ['company', 'company_name', 'organization', 'business', 'business name'],
   phone: ['phone', 'phone_number', 'phonenumber', 'mobile', 'cell', 'telephone', 'number', 'primary phone'],
   email: ['email', 'email_address', 'e-mail', 'emailaddress'],
   address: ['address', 'address1', 'street', 'street_address'],
@@ -403,7 +402,6 @@ export async function commitImportJob(jobId: string): Promise<CommitSummary> {
         lead_list_id: job.lead_list_id,
         first_name: mapped.first_name ?? '',
         last_name: mapped.last_name ?? '',
-        company: mapped.company ?? null,
         phone_original: phoneRaw ?? row.phone_normalized,
         phone_normalized: row.phone_normalized,
         country_code: normalized?.valid ? normalized.countryCode : 'US',
