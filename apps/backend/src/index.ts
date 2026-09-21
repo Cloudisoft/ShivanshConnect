@@ -323,6 +323,15 @@ export function buildApp() {
       return;
     }
 
+    // Fastify's own request-parsing errors (malformed/empty JSON body, bad
+    // content-type, payload too large, etc.) already carry a correct 4xx
+    // statusCode - forward it instead of masking every one of them as a 500.
+    const fastifyStatusCode = (error as any).statusCode;
+    if (typeof fastifyStatusCode === 'number' && fastifyStatusCode >= 400 && fastifyStatusCode < 500) {
+      reply.status(fastifyStatusCode).send(fail('BAD_REQUEST', (error as Error).message || 'The request could not be processed.', { requestId: req.id }));
+      return;
+    }
+
     req.log.error({ err: error }, 'Unhandled error');
     reply
       .status(500)
