@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { PhoneNumber, PhoneNumberCapabilities, TelephonyProviderKey } from '@shivanshconnect/shared';
+import type { AvailableNumber, PhoneNumber, PhoneNumberCapabilities, TelephonyProviderKey } from '@shivanshconnect/shared';
 import { api } from '../lib/apiClient';
 
 export interface PhoneNumberFilters {
@@ -25,6 +25,33 @@ export function useSyncPhoneNumbers() {
   return useMutation({
     mutationFn: (providerKey: TelephonyProviderKey) =>
       api.post<{ created: number; updated: number; skipped_conflicts: number; total_remote: number }>(`/phone-numbers/sync/${providerKey}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['phone-numbers'] }),
+  });
+}
+
+export interface AvailableNumberSearch {
+  provider_key: 'twilio' | 'telnyx';
+  country: string;
+  area_code?: string;
+  contains?: string;
+}
+
+export function useSearchAvailableNumbers() {
+  return useMutation({
+    mutationFn: ({ provider_key, ...query }: AvailableNumberSearch) => {
+      const params = new URLSearchParams({ country: query.country });
+      if (query.area_code) params.set('area_code', query.area_code);
+      if (query.contains) params.set('contains', query.contains);
+      return api.get<AvailableNumber[]>(`/phone-numbers/available/${provider_key}?${params.toString()}`);
+    },
+  });
+}
+
+export function usePurchaseNumber() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ provider_key, phone_number }: { provider_key: 'twilio' | 'telnyx'; phone_number: string }) =>
+      api.post<PhoneNumber>(`/phone-numbers/purchase/${provider_key}`, { phone_number }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['phone-numbers'] }),
   });
 }

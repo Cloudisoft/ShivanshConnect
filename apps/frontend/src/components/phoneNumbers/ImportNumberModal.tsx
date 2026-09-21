@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { TELEPHONY_PROVIDER_LABELS, type TelephonyProviderKey, type TelephonyProviderSummary } from '@shivanshconnect/shared';
+import type { AvailableNumber, TelephonyProviderKey, TelephonyProviderSummary } from '@shivanshconnect/shared';
+import { TELEPHONY_PROVIDER_LABELS } from '@shivanshconnect/shared';
 import { Alert, Badge, Button, Input, Label } from '../ui';
-import { useImportPhoneNumber, useSyncPhoneNumbers } from '../../hooks/usePhoneNumbers';
+import { useImportPhoneNumber, usePurchaseNumber, useSearchAvailableNumbers, useSyncPhoneNumbers } from '../../hooks/usePhoneNumbers';
 import { ApiClientError } from '../../lib/apiClient';
 
 interface ImportNumberModalProps {
@@ -12,25 +13,33 @@ interface ImportNumberModalProps {
 const CONNECTED_PROVIDERS: TelephonyProviderKey[] = ['twilio', 'telnyx'];
 
 export function ImportNumberModal({ providers, onClose }: ImportNumberModalProps): JSX.Element {
-  const connected = providers.filter((p) => CONNECTED_PROVIDERS.includes(p.key) && p.status === 'connected');
-  const [mode, setMode] = useState<'sync' | 'byon'>(connected.length > 0 ? 'sync' : 'byon');
+  const connected = providers.filter((p) => CONNECTED_PROVIDERS.includes(p.key) && p.status === 'connected') as Array<
+    TelephonyProviderSummary & { key: 'twilio' | 'telnyx' }
+  >;
+  const [mode, setMode] = useState<'sync' | 'buy' | 'byon'>(connected.length > 0 ? 'sync' : 'byon');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-ink-900">Import a phone number</h2>
+          <h2 className="text-lg font-semibold text-ink-900">Add a phone number</h2>
           <button onClick={onClose} className="text-ink-400 hover:text-ink-600" aria-label="Close">
             &times;
           </button>
         </div>
 
-        <div className="mt-4 flex gap-2 border-b border-ink-200 pb-2 text-sm">
+        <div className="mt-4 flex flex-wrap gap-2 border-b border-ink-200 pb-2 text-sm">
           <button
             onClick={() => setMode('sync')}
             className={mode === 'sync' ? 'rounded-md bg-ink-900 px-3 py-1.5 text-white' : 'rounded-md border border-ink-300 px-3 py-1.5 text-ink-700'}
           >
             Sync from a connected provider
+          </button>
+          <button
+            onClick={() => setMode('buy')}
+            className={mode === 'buy' ? 'rounded-md bg-ink-900 px-3 py-1.5 text-white' : 'rounded-md border border-ink-300 px-3 py-1.5 text-ink-700'}
+          >
+            Buy a new number
           </button>
           <button
             onClick={() => setMode('byon')}
@@ -41,11 +50,9 @@ export function ImportNumberModal({ providers, onClose }: ImportNumberModalProps
         </div>
 
         <div className="mt-4">
-          {mode === 'sync' ? (
-            <SyncFromProviderPanel connected={connected} onDone={onClose} />
-          ) : (
-            <ByonImportForm onDone={onClose} />
-          )}
+          {mode === 'sync' && <SyncFromProviderPanel connected={connected} onDone={onClose} />}
+          {mode === 'buy' && <BuyNumberPanel connected={connected} onDone={onClose} />}
+          {mode === 'byon' && <ByonImportForm onDone={onClose} />}
         </div>
       </div>
     </div>
@@ -100,6 +107,137 @@ function SyncFromProviderPanel({ connected, onDone }: { connected: TelephonyProv
           <Button variant="primary" onClick={onDone}>
             Done
           </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BuyNumberPanel({
+  connected,
+  onDone,
+}: {
+  connected: Array<TelephonyProviderSummary & { key: 'twilio' | 'telnyx' }>;
+  onDone: () => void;
+}): JSX.Element {
+  const [providerKey, setProviderKey] = useState<'twilio' | 'telnyx' | ''>(connected[0]?.key ?? '');
+  const [country, setCountry] = useState('US');
+  const [areaCode, setAreaCode] = useState('');
+  const [confirming, setConfirming] = useState<AvailableNumber | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const search = useSearchAvailableNumbers();
+  const purchase = usePurchaseNumber();
+
+  if (connected.length === 0) {
+    return (
+      <Alert variant="info">
+        No Twilio or Telnyx connection is set up yet. Go to the "Provider Connections" tab to add credentials and test
+        the connection first.
+      </Alert>
+    );
+  }
+
+  async function handleSearch(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!providerKey) return;
+    try {
+      await search.mutateAsync({ provider_key: providerKey, country, area_code: areaCode || undefined });
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Search failed.');
+    }
+  }
+
+  async function handleConfirmPurchase() {
+    if (!confirming || !providerKey) return;
+    setError(null);
+    try {
+      await purchase.mutateAsync({ provider_key: providerKey, phone_number: confirming.phone_number });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Could not purchase this number.');
+      setConfirming(null);
+    }
+  }
+
+  if (confirming) {
+    return (
+      <div className="space-y-3">
+        <Alert variant="info">
+          You are about to purchase <strong>{confirming.phone_number}</strong> from{' '}
+          {TELEPHONY_PROVIDER_LABELS[providerKey as 'twilio' | 'telnyx']}. This charges your connected account
+          {confirming.monthly_price != null ? ` approximately ${confirming.currency ?? ''} ${confirming.monthly_price.toFixed(2)}/month` : ''}
+          , immediately and is not reversible from here.
+        </Alert>
+        {error && <Alert>{error}</Alert>}
+        <div className="flex items-center gap-2">
+          <Button variant="danger" disabled={purchase.isPending} onClick={handleConfirmPurchase}>
+            {purchase.isPending ? 'Purchasing...' : 'Confirm purchase'}
+          </Button>
+          <Button variant="ghost" onClick={() => setConfirming(null)}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <form className="grid gap-3 sm:grid-cols-3" onSubmit={handleSearch}>
+        <div>
+          <Label htmlFor="buy_provider">Provider</Label>
+          <select
+            id="buy_provider"
+            className="w-full rounded-md border border-ink-300 bg-white px-2 py-1.5 text-sm"
+            value={providerKey}
+            onChange={(e) => setProviderKey(e.target.value as 'twilio' | 'telnyx')}
+          >
+            {connected.map((p) => (
+              <option key={p.key} value={p.key}>
+                {TELEPHONY_PROVIDER_LABELS[p.key]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <Label htmlFor="buy_country">Country (ISO 2-letter)</Label>
+          <Input id="buy_country" value={country} maxLength={2} onChange={(e) => setCountry(e.target.value.toUpperCase())} />
+        </div>
+        <div>
+          <Label htmlFor="buy_area_code">Area code (optional)</Label>
+          <Input id="buy_area_code" value={areaCode} onChange={(e) => setAreaCode(e.target.value)} placeholder="484" />
+        </div>
+        <div className="sm:col-span-3">
+          <Button type="submit" disabled={search.isPending}>
+            {search.isPending ? 'Searching...' : 'Search available numbers'}
+          </Button>
+        </div>
+      </form>
+
+      {error && <Alert>{error}</Alert>}
+
+      {search.isSuccess && search.data.length === 0 && (
+        <Alert variant="info">No numbers matched that search. Try a different area code or country.</Alert>
+      )}
+
+      {search.isSuccess && search.data.length > 0 && (
+        <div className="max-h-72 space-y-2 overflow-y-auto">
+          {search.data.map((n) => (
+            <div key={n.phone_number} className="flex items-center justify-between rounded-md border border-ink-200 px-3 py-2 text-sm">
+              <div>
+                <div className="font-mono text-ink-900">{n.phone_number}</div>
+                <div className="text-xs text-ink-500">
+                  {[n.locality, n.region].filter(Boolean).join(', ') || '—'}
+                  {n.monthly_price != null && ` · ${n.currency ?? ''} ${n.monthly_price.toFixed(2)}/mo`}
+                </div>
+              </div>
+              <Button variant="secondary" onClick={() => setConfirming(n)}>
+                Buy
+              </Button>
+            </div>
+          ))}
         </div>
       )}
     </div>

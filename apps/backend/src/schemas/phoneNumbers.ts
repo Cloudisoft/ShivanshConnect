@@ -51,6 +51,25 @@ export const importPhoneNumberSchema = z.discriminatedUnion('provider_key', [
 ]);
 export type ImportPhoneNumberInput = z.infer<typeof importPhoneNumberSchema>;
 
+// GET /phone-numbers/available/:providerKey
+export const searchAvailableNumbersQuerySchema = z.object({
+  country: z
+    .string()
+    .trim()
+    .length(2)
+    .transform((v) => v.toUpperCase()),
+  area_code: z.string().trim().max(10).optional(),
+  contains: z.string().trim().max(20).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+export type SearchAvailableNumbersQuery = z.infer<typeof searchAvailableNumbersQuerySchema>;
+
+// POST /phone-numbers/purchase/:providerKey
+export const purchaseNumberSchema = z.object({
+  phone_number: z.string().trim().min(1).max(32),
+});
+export type PurchaseNumberInput = z.infer<typeof purchaseNumberSchema>;
+
 export const listPhoneNumbersQuerySchema = paginationSchema.extend({
   provider_key: telephonyProviderKeySchema.optional(),
   status: z.enum(['active', 'inactive', 'releasing']).optional(),

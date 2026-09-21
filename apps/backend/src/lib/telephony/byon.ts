@@ -1,5 +1,6 @@
 import { isValidNormalizedPhone, normalizePhoneNumber } from '../phone.js';
 import {
+  type AvailableNumber,
   type ImportNumberInput,
   type TelephonyNumberInfo,
   type TelephonyNumberProviderAdapter,
@@ -84,5 +85,13 @@ export class BYONProvider implements TelephonyNumberProviderAdapter {
 
   async getNumberStatus(): Promise<TelephonyNumberStatus> {
     throw new TelephonyProviderNotSupportedError(this.name, 'getNumberStatus');
+  }
+
+  async searchAvailableNumbers(): Promise<AvailableNumber[]> {
+    throw new TelephonyProviderNotSupportedError(this.name, 'searchAvailableNumbers');
+  }
+
+  async purchaseNumber(): Promise<TelephonyNumberInfo> {
+    throw new TelephonyProviderNotSupportedError(this.name, 'purchaseNumber');
   }
 }

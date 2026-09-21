@@ -7,6 +7,8 @@ import { uuidSchema } from '../schemas/common.js';
 import {
   importPhoneNumberSchema,
   listPhoneNumbersQuerySchema,
+  purchaseNumberSchema,
+  searchAvailableNumbersQuerySchema,
   telephonyProviderKeySchema,
   updatePhoneNumberSchema,
 } from '../schemas/phoneNumbers.js';
@@ -177,6 +179,100 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
       { provider_key: providerKey, created, updated, skipped_conflicts: skippedConflicts, total_remote: remoteNumbers.length },
       { message: `Synced ${remoteNumbers.length} number(s) from ${TELEPHONY_PROVIDER_LABELS[providerKey]}.` },
     );
+  });
+
+  // GET /api/v1/phone-numbers/available/:providerKey - searches the
+  // connected provider's real purchasable inventory. Never persists
+  // anything - this is a read-only search, purchasing is a separate step.
+  app.get('/available/:providerKey', async (req) => {
+    const { providerKey: rawKey } = req.params as { providerKey: string };
+    const providerKey = telephonyProviderKeySchema.parse(rawKey);
+    if (providerKey === 'byon') {
+      throw new ValidationError('BYON has no provider inventory to search - it is a manual declaration only.');
+    }
+    const query = searchAvailableNumbersQuerySchema.parse(req.query);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const adapter = await getAdapterForOrgProvider(supabase, orgId, providerKey);
+    const results = await adapter.searchAvailableNumbers({
+      country: query.country,
+      areaCode: query.area_code,
+      contains: query.contains,
+      limit: query.limit,
+    });
+
+    return ok(
+      results.map((n) => ({
+        phone_number: n.phoneNumber,
+        friendly_name: n.friendlyName,
+        locality: n.locality,
+        region: n.region,
+        capabilities: toApiCapabilities(n.capabilities),
+        monthly_price: n.monthlyPrice,
+        currency: n.currency,
+      })),
+    );
+  });
+
+  // POST /api/v1/phone-numbers/purchase/:providerKey - a real, billable
+  // purchase against the org's own connected Twilio/Telnyx account, then
+  // registers the purchased number exactly like a single-number import.
+  app.post('/purchase/:providerKey', async (req) => {
+    const { providerKey: rawKey } = req.params as { providerKey: string };
+    const providerKey = telephonyProviderKeySchema.parse(rawKey);
+    if (providerKey === 'byon') {
+      throw new ValidationError('BYON has no provider to purchase from - use POST /phone-numbers/import to declare a number manually.');
+    }
+    const body = purchaseNumberSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const { data: existing } = await supabase
+      .from('phone_numbers')
+      .select('id')
+      .eq('organization_id', orgId)
+      .eq('phone_number', body.phone_number)
+      .maybeSingle();
+    if (existing) {
+      throw new ConflictError(`${body.phone_number} is already registered for this organization.`);
+    }
+
+    const adapter = await getAdapterForOrgProvider(supabase, orgId, providerKey);
+    const purchased = await adapter.purchaseNumber(body.phone_number);
+
+    const { data: created, error } = await supabase
+      .from('phone_numbers')
+      .insert({
+        organization_id: orgId,
+        provider_key: providerKey,
+        provider_number_id: purchased.providerNumberId,
+        phone_number: purchased.phoneNumber,
+        friendly_name: purchased.friendlyName,
+        capabilities: toApiCapabilities(purchased.capabilities),
+        created_by: req.user!.id,
+      })
+      .select(PHONE_NUMBER_COLUMNS)
+      .single();
+    if (error) throw error;
+
+    await supabase
+      .from('phone_number_provider_credentials')
+      .update({ last_synced_at: new Date().toISOString() })
+      .eq('organization_id', orgId)
+      .eq('provider_key', providerKey);
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.PHONE_NUMBER_PURCHASED,
+      entityType: 'phone_number',
+      entityId: created.id,
+      newValue: { provider_key: providerKey, phone_number: created.phone_number },
+      ipAddress: req.ip,
+    });
+
+    return ok(sanitizeRow(created), { message: `${purchased.phoneNumber} purchased from ${TELEPHONY_PROVIDER_LABELS[providerKey]}.` });
   });
 
   // POST /api/v1/phone-numbers/import - BYON manual declaration (no

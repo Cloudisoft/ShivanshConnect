@@ -38,6 +38,20 @@ export interface PhoneNumberCapabilities {
   sms: boolean;
 }
 
+/** A number from the provider's purchasable inventory (GET /phone-numbers/
+ * available/:providerKey) - never a number anyone already owns.
+ * `monthly_price`/`currency` are null when the provider's API did not
+ * return real pricing for this search. */
+export interface AvailableNumber {
+  phone_number: string;
+  friendly_name: string | null;
+  locality: string | null;
+  region: string | null;
+  capabilities: PhoneNumberCapabilities;
+  monthly_price: number | null;
+  currency: string | null;
+}
+
 export interface PhoneNumber {
   id: string;
   organization_id: string;
