@@ -94,6 +94,14 @@ export function useUpdatePhoneNumber() {
   });
 }
 
+export function useSyncNumberWithVapi() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<PhoneNumber>(`/phone-numbers/${id}/sync-vapi`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['phone-numbers'] }),
+  });
+}
+
 export function useDeletePhoneNumber() {
   const queryClient = useQueryClient();
   return useMutation({

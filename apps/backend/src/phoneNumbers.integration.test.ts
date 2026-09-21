@@ -48,6 +48,14 @@ describe('Phase 5: telephony provider connect -> sync -> list, BYON import, dedu
         } as unknown as Response;
       }
 
+      if (url === 'https://api.vapi.ai/phone-number' && method === 'POST') {
+        const body = JSON.parse((init?.body as string) ?? '{}');
+        if (body.provider === 'byo-phone-number') {
+          return { ok: true, json: async () => ({ id: `vapi-pn-${body.number}` }) } as unknown as Response;
+        }
+        throw new Error(`Unexpected Vapi phone-number import payload in test: ${JSON.stringify(body)}`);
+      }
+
       throw new Error(`Unexpected fetch call in test: ${method} ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -202,5 +210,77 @@ describe('Phase 5: telephony provider connect -> sync -> list, BYON import, dedu
     const deleteRes = await app.inject({ method: 'DELETE', url: `/api/v1/phone-numbers/${numberId}`, headers: { authorization: `Bearer ${token}` } });
     expect(deleteRes.statusCode).toBe(200);
     expect(deleteRes.json().data.deleted).toBe(true);
+  });
+
+  it('a BYON import is not synced with Vapi when Vapi is not connected for this org - no error, just no id', async () => {
+    const token = await signup('No Vapi Org', 'no-vapi@test.com');
+
+    const importRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/phone-numbers/import',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        provider_key: 'byon',
+        phone_number: '+14845558888',
+        capabilities: { voice_inbound: true, voice_outbound: true, sms: false },
+        sip_trunk_metadata: { host: 'sip.example.com', username: 'trunk-user', password: 'trunk-secret' },
+      },
+    });
+    expect(importRes.statusCode).toBe(200);
+    expect(importRes.json().data.vapi_phone_number_id).toBeNull();
+    expect(importRes.json().message).not.toMatch(/vapi/i);
+  });
+
+  it('a BYON import with a SIP trunk is automatically synced with Vapi once Vapi is connected', async () => {
+    const token = await signup('Auto Vapi Sync Org', 'auto-vapi-sync@test.com');
+
+    const vapiCredsRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/vapi/credentials',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { api_key: 'vapi-test-key' },
+    });
+    expect(vapiCredsRes.statusCode).toBe(200);
+
+    const importRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/phone-numbers/import',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        provider_key: 'byon',
+        phone_number: '+14845556666',
+        capabilities: { voice_inbound: true, voice_outbound: true, sms: false },
+        sip_trunk_metadata: { host: 'sip.example.com', username: 'trunk-user', password: 'trunk-secret' },
+      },
+    });
+    expect(importRes.statusCode).toBe(200);
+    expect(importRes.json().data.vapi_phone_number_id).toBe('vapi-pn-+14845556666');
+    expect(importRes.json().message).toMatch(/synced with vapi/i);
+  });
+
+  it('POST /:id/sync-vapi is an explicit, honest action: it reports real failures instead of swallowing them', async () => {
+    const token = await signup('Manual Vapi Sync Org', 'manual-vapi-sync@test.com');
+
+    const vapiCredsRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/vapi/credentials',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { api_key: 'vapi-test-key' },
+    });
+    expect(vapiCredsRes.statusCode).toBe(200);
+
+    // Imported with NO sip_trunk_metadata - cannot be synced to Vapi.
+    const importRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/phone-numbers/import',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { provider_key: 'byon', phone_number: '+14845554444', capabilities: { voice_inbound: true, voice_outbound: true, sms: false } },
+    });
+    expect(importRes.json().data.vapi_phone_number_id).toBeNull();
+    const numberId = importRes.json().data.id;
+
+    const syncRes = await app.inject({ method: 'POST', url: `/api/v1/phone-numbers/${numberId}/sync-vapi`, headers: { authorization: `Bearer ${token}` } });
+    expect(syncRes.statusCode).toBe(422);
+    expect(syncRes.json().error.message).toMatch(/SIP trunk/i);
   });
 });

@@ -150,6 +150,9 @@ export interface AiAgentVersion {
   voice_id: string | null;
   status: AgentVersionStatus;
   published_at: string | null;
+  /** Set once this version has been imported/created in Vapi - null until
+   * the first eager sync-on-publish or lazy sync-on-first-call. */
+  vapi_assistant_id: string | null;
   created_by: string | null;
   created_at: string;
 }

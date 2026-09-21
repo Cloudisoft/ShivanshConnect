@@ -64,6 +64,10 @@ export interface PhoneNumber {
   assigned_agent_id: string | null;
   assigned_campaign_id: string | null;
   sip_trunk_metadata: { host?: string; username?: string } | null;
+  /** Set once this number has been imported into Vapi - null until the
+   * first eager sync-on-purchase/import, a manual sync, or the lazy
+   * sync-on-first-call. */
+  vapi_phone_number_id: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;

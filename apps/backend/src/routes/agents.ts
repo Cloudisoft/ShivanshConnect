@@ -18,10 +18,11 @@ import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS, DEFAULT_AGENT_PERSONALITY, DEFAULT_CALL_ENDING_RULES, DEFAULT_TRANSFER_RULES } from '@shivanshconnect/shared';
 import { getLlmProvider, LlmNotConfiguredError } from '../lib/llm/index.js';
 import { renderTemplate } from '../lib/promptVariables.js';
+import { buildAssistantConfig, getOrgVapiProvider } from '../services/callOrigination.js';
 
 const AGENT_COLUMNS = 'id, organization_id, name, description, role, status, current_version_id, created_by, created_at, updated_at';
 const VERSION_COLUMNS =
-  'id, agent_id, organization_id, version_number, personality, language, accent, greeting_template, system_prompt, fallback_behavior, transfer_rules, call_ending_rules, llm_provider, llm_model, llm_temperature, llm_max_tokens, voice_id, status, published_at, created_by, created_at';
+  'id, agent_id, organization_id, version_number, personality, language, accent, greeting_template, system_prompt, fallback_behavior, transfer_rules, call_ending_rules, llm_provider, llm_model, llm_temperature, llm_max_tokens, voice_id, status, published_at, vapi_assistant_id, created_by, created_at';
 
 async function getOwnedAgent(supabase: ReturnType<typeof getSupabaseAdmin>, id: string, orgId: string) {
   const { data: agent, error } = await supabase.from('ai_agents').select(AGENT_COLUMNS).eq('id', id).maybeSingle();
@@ -439,7 +440,33 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     });
 
     const { data: updatedVersion } = await supabase.from('ai_agent_versions').select(VERSION_COLUMNS).eq('id', versionId).single();
-    return ok(updatedVersion, { message: 'Version published.' });
+
+    // Best-effort: creates/updates this version's Vapi assistant right
+    // away so it's call-ready without waiting on the lazy create-on-
+    // first-call path in services/callOrigination.ts. Never fails
+    // publishing itself - Vapi may not be connected yet, and a campaign
+    // call still builds its own per-call assistant regardless (see
+    // originateCall()'s campaignId/voiceOverride branch), so this is
+    // purely a head start for a plain manual call against this agent.
+    let vapiAssistantId: string | null = null;
+    try {
+      const provider = await getOrgVapiProvider(supabase, orgId);
+      if (provider && updatedVersion) {
+        const assistantConfig = await buildAssistantConfig(supabase, orgId, agent, updatedVersion, null, null);
+        const result = updatedVersion.vapi_assistant_id
+          ? await provider.updateAssistant(updatedVersion.vapi_assistant_id, assistantConfig)
+          : await provider.createAssistant(assistantConfig);
+        vapiAssistantId = result.providerAssistantId;
+        await supabase.from('ai_agent_versions').update({ vapi_assistant_id: vapiAssistantId }).eq('id', versionId);
+      }
+    } catch {
+      // best-effort - the version is still published either way
+    }
+
+    return ok(
+      { ...updatedVersion, vapi_assistant_id: vapiAssistantId ?? updatedVersion?.vapi_assistant_id ?? null },
+      { message: vapiAssistantId ? 'Version published and synced with Vapi.' : 'Version published.' },
+    );
   });
 
   // POST /api/v1/agents/:id/versions/:versionId/restore - creates a NEW
