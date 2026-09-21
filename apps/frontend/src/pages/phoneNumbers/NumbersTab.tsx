@@ -7,6 +7,7 @@ import { useTelephonyProviders } from '../../hooks/useTelephonyProviders';
 import {
   useDeletePhoneNumber,
   usePhoneNumbers,
+  useSyncNumberWithVapi,
   useUpdatePhoneNumber,
   type PhoneNumberFilters,
 } from '../../hooks/usePhoneNumbers';
@@ -21,6 +22,35 @@ function CapabilityBadges({ capabilities }: { capabilities: PhoneNumber['capabil
       {capabilities.voice_outbound && <Badge tone="success">Outbound</Badge>}
       {capabilities.sms && <Badge tone="neutral">SMS</Badge>}
       {!capabilities.voice_inbound && !capabilities.voice_outbound && !capabilities.sms && <Badge tone="neutral">None</Badge>}
+    </div>
+  );
+}
+
+function VapiSyncStatus({ number }: { number: PhoneNumber }): JSX.Element {
+  const sync = useSyncNumberWithVapi();
+  const [error, setError] = useState<string | null>(null);
+
+  if (number.vapi_phone_number_id) {
+    return <Badge tone="success">Synced</Badge>;
+  }
+
+  return (
+    <div>
+      <Button
+        variant="secondary"
+        disabled={sync.isPending}
+        onClick={async () => {
+          setError(null);
+          try {
+            await sync.mutateAsync(number.id);
+          } catch (err) {
+            setError(err instanceof ApiClientError ? err.message : 'Could not sync this number with Vapi.');
+          }
+        }}
+      >
+        {sync.isPending ? 'Syncing...' : 'Sync to Vapi'}
+      </Button>
+      {error && <p className="mt-1 max-w-[12rem] text-xs text-red-600">{error}</p>}
     </div>
   );
 }
@@ -179,6 +209,7 @@ export function NumbersTab(): JSX.Element {
                 <th className="px-4 py-2">Provider</th>
                 <th className="px-4 py-2">Capabilities</th>
                 <th className="px-4 py-2">Status</th>
+                <th className="px-4 py-2">Vapi</th>
                 <th className="px-4 py-2">Agent</th>
                 <th className="px-4 py-2">Created</th>
                 <th className="px-4 py-2" />
@@ -200,6 +231,7 @@ export function NumbersTab(): JSX.Element {
                   <td className="px-4 py-3">
                     <Badge tone={number.status === 'active' ? 'success' : number.status === 'releasing' ? 'warning' : 'neutral'}>{number.status}</Badge>
                   </td>
+                  <td className="px-4 py-3">{canManage ? <VapiSyncStatus number={number} /> : <Badge tone={number.vapi_phone_number_id ? 'success' : 'neutral'}>{number.vapi_phone_number_id ? 'Synced' : 'Not synced'}</Badge>}</td>
                   <td className="px-4 py-3">
                     {canManage ? (
                       <AssignAgentSelect number={number} />

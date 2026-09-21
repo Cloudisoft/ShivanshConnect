@@ -19,9 +19,28 @@ import type { EncryptedEnvelope } from '../lib/crypto/credentials.js';
 import { encryptCredentials } from '../lib/crypto/credentials.js';
 import { createTelephonyProviderAdapter, type PhoneNumberCapabilities } from '../lib/telephony/index.js';
 import { toAdapterCredentials } from './phoneNumberProviders.js';
+import { ensureVapiPhoneNumberImported, getOrgVapiProvider } from '../services/callOrigination.js';
 
 const PHONE_NUMBER_COLUMNS =
-  'id, organization_id, provider_key, provider_number_id, phone_number, friendly_name, capabilities, status, assigned_agent_id, assigned_campaign_id, sip_trunk_metadata, created_by, created_at, updated_at';
+  'id, organization_id, provider_key, provider_number_id, phone_number, friendly_name, capabilities, status, assigned_agent_id, assigned_campaign_id, sip_trunk_metadata, vapi_phone_number_id, created_by, created_at, updated_at';
+
+/** Best-effort: imports a number into Vapi right after it enters the
+ * registry (purchase/single import), so it's call-ready without a
+ * separate manual step. Never throws and never fails the calling
+ * request - Vapi may not be connected yet, or this number may never end
+ * up assigned to a Vapi-engine campaign at all, and either is fine; the
+ * lazy import in services/callOrigination.ts still runs at call time as
+ * the authoritative fallback. Returns the resulting vapi_phone_number_id
+ * (or null) purely so a caller can report an immediate, honest result. */
+async function bestEffortSyncVapi(supabase: ReturnType<typeof getSupabaseAdmin>, orgId: string, phoneNumberRow: Record<string, any>): Promise<string | null> {
+  try {
+    const provider = await getOrgVapiProvider(supabase, orgId);
+    if (!provider) return null;
+    return await ensureVapiPhoneNumberImported(supabase, orgId, phoneNumberRow, provider);
+  } catch {
+    return null; // best-effort - the row still has a normal ShivanshConnect status either way
+  }
+}
 
 function toApiCapabilities(caps: PhoneNumberCapabilities) {
   return { voice_inbound: caps.voiceInbound, voice_outbound: caps.voiceOutbound, sms: caps.sms };
@@ -272,7 +291,12 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
       ipAddress: req.ip,
     });
 
-    return ok(sanitizeRow(created), { message: `${purchased.phoneNumber} purchased from ${TELEPHONY_PROVIDER_LABELS[providerKey]}.` });
+    const vapiPhoneNumberId = await bestEffortSyncVapi(supabase, orgId, created);
+    const message = vapiPhoneNumberId
+      ? `${purchased.phoneNumber} purchased from ${TELEPHONY_PROVIDER_LABELS[providerKey]} and synced with Vapi.`
+      : `${purchased.phoneNumber} purchased from ${TELEPHONY_PROVIDER_LABELS[providerKey]}.`;
+
+    return ok(sanitizeRow({ ...created, vapi_phone_number_id: vapiPhoneNumberId }), { message });
   });
 
   // POST /api/v1/phone-numbers/import - BYON manual declaration (no
@@ -355,7 +379,10 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
       ipAddress: req.ip,
     });
 
-    return ok(sanitizeRow(created), { message: `${imported.phoneNumber} imported.` });
+    const vapiPhoneNumberId = await bestEffortSyncVapi(supabase, orgId, created);
+    const message = vapiPhoneNumberId ? `${imported.phoneNumber} imported and synced with Vapi.` : `${imported.phoneNumber} imported.`;
+
+    return ok(sanitizeRow({ ...created, vapi_phone_number_id: vapiPhoneNumberId }), { message });
   });
 
   // PATCH /api/v1/phone-numbers/:id - assign/unassign to an agent, rename,
@@ -396,6 +423,41 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return ok(sanitizeRow(updated), { message: 'Phone number updated.' });
+  });
+
+  // POST /api/v1/phone-numbers/:id/sync-vapi - explicit, user-triggered
+  // Vapi import/refresh for one number. Unlike bestEffortSyncVapi() above,
+  // this is NOT silent: a genuine failure (Vapi not connected, the
+  // provider credentials rejected, etc.) is reported back, not swallowed -
+  // the whole point of a manual "Sync" action is an honest result the
+  // user can act on.
+  app.post('/:id/sync-vapi', async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    const existing = await getOwnedNumber(supabase, id, orgId);
+
+    const provider = await getOrgVapiProvider(supabase, orgId);
+    if (!provider) {
+      throw new ValidationError('Vapi is not connected for this organization. Add an API key under Settings > Integrations first.');
+    }
+    const vapiPhoneNumberId = await ensureVapiPhoneNumberImported(supabase, orgId, existing, provider);
+
+    const { data: updated, error } = await supabase.from('phone_numbers').select(PHONE_NUMBER_COLUMNS).eq('id', id).single();
+    if (error) throw error;
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.PHONE_NUMBER_UPDATED,
+      entityType: 'phone_number',
+      entityId: id,
+      newValue: { vapi_phone_number_id: vapiPhoneNumberId },
+      ipAddress: req.ip,
+    });
+
+    return ok(sanitizeRow(updated), { message: `${existing.phone_number} synced with Vapi.` });
   });
 
   // DELETE /api/v1/phone-numbers/:id - releases the number from

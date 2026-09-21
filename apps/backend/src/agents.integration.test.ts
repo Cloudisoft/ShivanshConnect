@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createFakeSupabase } from './test/fakeSupabase.js';
 
 /**
@@ -14,6 +14,7 @@ process.env.SUPABASE_URL = 'http://localhost:54321';
 process.env.SUPABASE_ANON_KEY = 'test-anon-key';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
 process.env.FRONTEND_URL = 'http://localhost:5173';
+process.env.CREDENTIAL_ENCRYPTION_KEY = 'a'.repeat(64);
 
 const fake = createFakeSupabase();
 
@@ -200,5 +201,51 @@ describe('Phase 3: agent create -> draft version -> publish -> restore', () => {
       headers: { authorization: `Bearer ${otherToken}` },
     });
     expect(crossRes.statusCode).toBe(404);
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('publishing a version automatically syncs a Vapi assistant when the org has Vapi connected', async () => {
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === 'https://api.vapi.ai/assistant' && init?.method === 'POST') {
+        return { ok: true, json: async () => ({ id: 'asst_from_publish' }) } as unknown as Response;
+      }
+      throw new Error(`Unexpected fetch call in test: ${init?.method ?? 'GET'} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const vapiCredsRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/vapi/credentials',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { api_key: 'vapi-test-key' },
+    });
+    expect(vapiCredsRes.statusCode).toBe(200);
+
+    const agentRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agents',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Vapi-Synced Agent', role: 'sales_agent' },
+    });
+    const agentId = agentRes.json().data.id;
+
+    const versionRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/versions`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { system_prompt: 'You are a helpful sales agent.', greeting_template: 'Hi there!', llm_model: 'gpt-4o-mini' },
+    });
+    const versionId = versionRes.json().data.id;
+
+    const publishRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agentId}/versions/${versionId}/publish`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(publishRes.statusCode).toBe(200);
+    expect(publishRes.json().data.vapi_assistant_id).toBe('asst_from_publish');
+    expect(publishRes.json().message).toMatch(/synced with vapi/i);
   });
 });

@@ -48,7 +48,18 @@ export async function resolveDefaultEngine(supabase: Supabase, orgId: string): P
   return configured === 'pipecat' ? 'pipecat' : 'vapi';
 }
 
-async function buildAssistantConfig(
+/** Returns this org's connected VapiProvider, or null if Vapi has no
+ * credentials stored for it - never throws, so callers doing a
+ * best-effort/eager sync (phone number purchase, agent publish) can skip
+ * cleanly instead of failing the primary action. */
+export async function getOrgVapiProvider(supabase: Supabase, orgId: string): Promise<VapiProvider | null> {
+  const { data: credRow } = await supabase.from('vapi_credentials').select('encrypted_credentials').eq('organization_id', orgId).maybeSingle();
+  if (!credRow) return null;
+  const apiKey = decryptCredentials<{ api_key: string }>(credRow.encrypted_credentials as EncryptedEnvelope).api_key;
+  return createOrchestrationProvider('vapi', { api_key: apiKey }) as VapiProvider;
+}
+
+export async function buildAssistantConfig(
   supabase: Supabase,
   orgId: string,
   agent: { id: string },
@@ -311,10 +322,8 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
 
   try {
     if (engine === 'vapi') {
-      const { data: credRow } = await supabase.from('vapi_credentials').select('encrypted_credentials').eq('organization_id', orgId).maybeSingle();
-      if (!credRow) throw new OrchestrationProviderNotConfiguredError('Vapi is not connected for this organization. Add an API key under Settings > Integrations first.');
-      const apiKey = decryptCredentials<{ api_key: string }>(credRow.encrypted_credentials as EncryptedEnvelope).api_key;
-      const provider = createOrchestrationProvider('vapi', { api_key: apiKey }) as VapiProvider;
+      const provider = await getOrgVapiProvider(supabase, orgId);
+      if (!provider) throw new OrchestrationProviderNotConfiguredError('Vapi is not connected for this organization. Add an API key under Settings > Integrations first.');
 
       let assistantId = version.vapi_assistant_id as string | null;
       if (!assistantId || params.voiceOverride || campaignId) {
