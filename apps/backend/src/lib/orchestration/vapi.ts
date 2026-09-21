@@ -266,6 +266,18 @@ export class VapiProvider implements CallOrchestrationProvider {
    * trunk` links a BYON SIP-declared number by its trunk credentials. This
    * must succeed (or already exist) before createCall() can use the
    * number. */
+  /** Vapi's Telnyx phone-number import does not accept a raw API key
+   * inline the way Twilio's does - it requires a `credentialId`
+   * referencing a credential resource registered with Vapi first (POST
+   * /credential). Registers one on every call rather than caching it,
+   * since this only runs once per not-yet-imported number (the result is
+   * cached on phone_numbers.vapi_phone_number_id by the caller) - a
+   * little Vapi-side credential churn, never a wrong/fabricated id. */
+  private async ensureTelnyxCredential(apiKey: string): Promise<string> {
+    const created = await this.request<{ id: string }>('POST', '/credential', { provider: 'telnyx', apiKey });
+    return created.id;
+  }
+
   async importPhoneNumber(input: {
     provider: 'twilio' | 'telnyx' | 'byo-sip-trunk';
     e164: string;
@@ -280,8 +292,11 @@ export class VapiProvider implements CallOrchestrationProvider {
       payload.twilioAccountSid = input.twilioAccountSid;
       payload.twilioAuthToken = input.twilioAuthToken;
     } else if (input.provider === 'telnyx') {
+      if (!input.telnyxApiKey) {
+        throw new OrchestrationProviderError('A Telnyx API key is required to import a Telnyx number into Vapi.');
+      }
       payload.provider = 'telnyx';
-      payload.credentialId = input.telnyxApiKey; // Vapi requires a pre-registered Telnyx credential id
+      payload.credentialId = await this.ensureTelnyxCredential(input.telnyxApiKey);
     } else {
       payload.provider = 'byo-phone-number';
       payload.numberE164CheckEnabled = true;
