@@ -70,7 +70,7 @@ const server = createServer(async (req, res) => {
 
     const body = await readFile(resolved);
     const type = CONTENT_TYPES[extname(resolved)] ?? 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': extname(resolved) === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable' });
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': extname(resolved) === '.html' ? 'no-store' : 'public, max-age=31536000, immutable' });
     res.end(body);
   } catch (err) {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
