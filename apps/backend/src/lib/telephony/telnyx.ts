@@ -1,4 +1,6 @@
 import {
+  type AvailableNumber,
+  type AvailableNumberSearchParams,
   type ImportNumberInput,
   type PhoneNumberCapabilities,
   type TelephonyNumberInfo,
@@ -9,6 +11,13 @@ import {
 } from './types.js';
 
 const TELNYX_API_BASE = 'https://api.telnyx.com/v2';
+
+interface TelnyxAvailableNumber {
+  phone_number: string;
+  region_information?: Array<{ region_name?: string; region_type?: string }>;
+  features?: Array<{ name: string } | string>;
+  cost_information?: { upfront_cost?: string; monthly_cost?: string; currency?: string } | null;
+}
 
 interface TelnyxPhoneNumber {
   id: string;
@@ -48,6 +57,8 @@ function toNumberInfo(n: TelnyxPhoneNumber): TelephonyNumberInfo {
  *   GET /v2/phone_numbers                     - list (paginated, `data` array)
  *   GET /v2/phone_numbers/{id}                - get one
  *   GET /v2/number_lookup/{E164}              - validate
+ *   GET /v2/available_phone_numbers           - search purchasable inventory (real pricing included)
+ *   POST /v2/number_orders                    - purchase
  * If no API key is configured, every method throws
  * TelephonyProviderNotConfiguredError immediately - never fabricated
  * numbers.
@@ -174,5 +185,75 @@ export class TelnyxProvider implements TelephonyNumberProviderAdapter {
     }
     const json = (await res.json()) as { data: TelnyxPhoneNumber };
     return json.data.status === 'active' ? 'active' : 'inactive';
+  }
+
+  async searchAvailableNumbers(params: AvailableNumberSearchParams): Promise<AvailableNumber[]> {
+    const apiKey = this.requireKey();
+    const query = new URLSearchParams({
+      'filter[country_code]': params.country,
+      'filter[limit]': String(Math.min(params.limit ?? 20, 50)),
+      'filter[features]': 'voice',
+    });
+    if (params.areaCode) query.set('filter[national_destination_code]', params.areaCode);
+    if (params.contains) query.set('filter[phone_number][contains]', params.contains);
+
+    let res: Response;
+    try {
+      res = await fetch(`${TELNYX_API_BASE}/available_phone_numbers?${query.toString()}`, { headers: this.headers(apiKey) });
+    } catch (err) {
+      throw new TelephonyProviderError('Failed to reach the Telnyx API.', err);
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new TelephonyProviderError(`Telnyx available-numbers search failed (${res.status}): ${body.slice(0, 500)}`);
+    }
+    const json = (await res.json()) as { data: TelnyxAvailableNumber[] };
+    return (json.data ?? []).map((n) => {
+      const names = featureNames(n.features);
+      const hasVoice = names.includes('voice');
+      const monthlyCost = n.cost_information?.monthly_cost;
+      const region = n.region_information?.find((r) => r.region_type === 'state')?.region_name ?? null;
+      const locality = n.region_information?.find((r) => r.region_type === 'rate_center' || r.region_type === 'city')?.region_name ?? null;
+      return {
+        phoneNumber: n.phone_number,
+        friendlyName: null,
+        locality,
+        region,
+        capabilities: { voiceInbound: hasVoice, voiceOutbound: hasVoice, sms: names.includes('sms') },
+        monthlyPrice: monthlyCost ? Number.parseFloat(monthlyCost) : null,
+        currency: n.cost_information?.currency ?? null,
+      };
+    });
+  }
+
+  async purchaseNumber(e164: string): Promise<TelephonyNumberInfo> {
+    const apiKey = this.requireKey();
+    let res: Response;
+    try {
+      res = await fetch(`${TELNYX_API_BASE}/number_orders`, {
+        method: 'POST',
+        headers: { ...this.headers(apiKey), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_numbers: [{ phone_number: e164 }] }),
+      });
+    } catch (err) {
+      throw new TelephonyProviderError('Failed to reach the Telnyx API.', err);
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new TelephonyProviderError(`Telnyx number purchase failed (${res.status}): ${body.slice(0, 500)}`);
+    }
+    const json = (await res.json()) as {
+      data: { phone_numbers: Array<{ id: string; phone_number: string; status?: string }> };
+    };
+    const purchased = json.data.phone_numbers[0];
+    if (!purchased) {
+      throw new TelephonyProviderError('Telnyx accepted the number order but returned no phone number in its response.');
+    }
+    return {
+      providerNumberId: purchased.id,
+      phoneNumber: purchased.phone_number,
+      friendlyName: null,
+      capabilities: { voiceInbound: true, voiceOutbound: true, sms: false },
+    };
   }
 }

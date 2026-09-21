@@ -15,6 +15,8 @@ describe('BYONProvider', () => {
     await expect(provider.disconnect()).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
     await expect(provider.listNumbers()).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
     await expect(provider.getNumberStatus()).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
+    await expect(provider.searchAvailableNumbers()).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
+    await expect(provider.purchaseNumber()).rejects.toBeInstanceOf(TelephonyProviderNotSupportedError);
   });
 
   it('never makes a network call - manual declaration only', async () => {

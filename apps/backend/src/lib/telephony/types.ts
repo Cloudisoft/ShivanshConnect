@@ -42,6 +42,30 @@ export interface TelephonyNumberInfo {
 
 export type TelephonyNumberStatus = 'active' | 'inactive';
 
+/** What a provider inventory search accepts. `country` is a 2-letter ISO
+ * code (e.g. "US"); `areaCode`/`contains` narrow the search the same way
+ * Twilio's/Telnyx's own search UIs do. */
+export interface AvailableNumberSearchParams {
+  country: string;
+  areaCode?: string;
+  contains?: string;
+  limit?: number;
+}
+
+/** A number from the provider's purchasable inventory - never a number
+ * this org (or anyone) already owns. `monthlyPrice`/`currency` are null
+ * when the provider's API did not return real pricing for this search -
+ * never a guessed or hardcoded number. */
+export interface AvailableNumber {
+  phoneNumber: string;
+  friendlyName: string | null;
+  locality: string | null;
+  region: string | null;
+  capabilities: PhoneNumberCapabilities;
+  monthlyPrice: number | null;
+  currency: string | null;
+}
+
 /** What a BYON manual import (or a Twilio/Telnyx single-number import)
  * accepts. Twilio/Telnyx only ever use `providerNumberId`; BYON only ever
  * uses `e164` + `capabilities` (+ optional `sipTrunkMetadata`) - see each
@@ -115,4 +139,12 @@ export interface TelephonyNumberProviderAdapter {
   /** Real-time status of a provider-owned number. Not supported for
    * BYON (see class doc). */
   getNumberStatus(providerNumberId: string): Promise<TelephonyNumberStatus>;
+  /** Searches the provider's real purchasable inventory - never a
+   * fabricated list. Not supported for BYON (no provider inventory to
+   * search; it has no third-party API at all). */
+  searchAvailableNumbers(params: AvailableNumberSearchParams): Promise<AvailableNumber[]>;
+  /** Purchases (provisions) a specific number from the provider's
+   * inventory - a real, billable action against the org's own connected
+   * account. Not supported for BYON. */
+  purchaseNumber(e164: string): Promise<TelephonyNumberInfo>;
 }

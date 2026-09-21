@@ -1,4 +1,6 @@
 import {
+  type AvailableNumber,
+  type AvailableNumberSearchParams,
   type ImportNumberInput,
   type PhoneNumberCapabilities,
   type TelephonyNumberInfo,
@@ -10,6 +12,41 @@ import {
 
 const TWILIO_API_BASE = 'https://api.twilio.com/2010-04-01';
 const TWILIO_LOOKUP_BASE = 'https://lookups.twilio.com/v2';
+const TWILIO_PRICING_BASE = 'https://pricing.twilio.com/v1';
+
+interface TwilioAvailableNumber {
+  phone_number: string;
+  friendly_name: string | null;
+  locality: string | null;
+  region: string | null;
+  capabilities: { voice?: boolean; sms?: boolean; mms?: boolean; fax?: boolean };
+}
+
+/** Twilio's Pricing API returns per-country, per-number-type pricing (not
+ * per individual number) - the closest real figure available for what a
+ * local number in this country will cost per month. Never guessed: if the
+ * lookup fails or the country isn't priced, callers get null, not a made-up
+ * number. */
+async function fetchLocalMonthlyPrice(
+  country: string,
+  authHeader: Record<string, string>,
+): Promise<{ amount: number; currency: string } | null> {
+  try {
+    const res = await fetch(`${TWILIO_PRICING_BASE}/PhoneNumbers/Countries/${encodeURIComponent(country)}`, { headers: authHeader });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      price_unit?: string;
+      phone_number_prices?: Array<{ number_type: string; current_price: string | null }>;
+    };
+    const local = json.phone_number_prices?.find((p) => p.number_type === 'local');
+    if (!local?.current_price || !json.price_unit) return null;
+    const amount = Number.parseFloat(local.current_price);
+    if (!Number.isFinite(amount)) return null;
+    return { amount, currency: json.price_unit };
+  } catch {
+    return null; // pricing is best-effort - never blocks the search itself
+  }
+}
 
 interface TwilioIncomingPhoneNumber {
   sid: string;
@@ -46,6 +83,8 @@ function toNumberInfo(n: TwilioIncomingPhoneNumber): TelephonyNumberInfo {
  *   GET /2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers.json     - list
  *   GET /2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers/{Sid}.json - get one
  *   GET https://lookups.twilio.com/v2/PhoneNumbers/{E164}                - validate
+ *   GET /2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers/{Country}/Local.json - search inventory
+ *   POST /2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers.json     - purchase
  * If no credentials are configured, every method throws
  * TelephonyProviderNotConfiguredError immediately - never fabricated
  * numbers.
@@ -188,5 +227,59 @@ export class TwilioProvider implements TelephonyNumberProviderAdapter {
     // Twilio's IncomingPhoneNumbers resource has no separate "status"
     // field - a 200 response for a still-owned SID means it is active.
     return 'active';
+  }
+
+  async searchAvailableNumbers(params: AvailableNumberSearchParams): Promise<AvailableNumber[]> {
+    const { accountSid, authToken } = this.requireCredentials();
+    const authHeader = this.authHeader(accountSid, authToken);
+    const query = new URLSearchParams({ PageSize: String(Math.min(params.limit ?? 20, 50)) });
+    if (params.areaCode) query.set('AreaCode', params.areaCode);
+    if (params.contains) query.set('Contains', params.contains);
+
+    let res: Response;
+    try {
+      res = await fetch(
+        `${TWILIO_API_BASE}/Accounts/${encodeURIComponent(accountSid)}/AvailablePhoneNumbers/${encodeURIComponent(params.country)}/Local.json?${query.toString()}`,
+        { headers: authHeader },
+      );
+    } catch (err) {
+      throw new TelephonyProviderError('Failed to reach the Twilio API.', err);
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new TelephonyProviderError(`Twilio available-numbers search failed (${res.status}): ${body.slice(0, 500)}`);
+    }
+    const json = (await res.json()) as { available_phone_numbers: TwilioAvailableNumber[] };
+    const price = await fetchLocalMonthlyPrice(params.country, authHeader);
+
+    return (json.available_phone_numbers ?? []).map((n) => ({
+      phoneNumber: n.phone_number,
+      friendlyName: n.friendly_name,
+      locality: n.locality,
+      region: n.region,
+      capabilities: toCapabilities(n.capabilities),
+      monthlyPrice: price?.amount ?? null,
+      currency: price?.currency ?? null,
+    }));
+  }
+
+  async purchaseNumber(e164: string): Promise<TelephonyNumberInfo> {
+    const { accountSid, authToken } = this.requireCredentials();
+    const form = new URLSearchParams({ PhoneNumber: e164 });
+    let res: Response;
+    try {
+      res = await fetch(`${TWILIO_API_BASE}/Accounts/${encodeURIComponent(accountSid)}/IncomingPhoneNumbers.json`, {
+        method: 'POST',
+        headers: { ...this.authHeader(accountSid, authToken), 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+      });
+    } catch (err) {
+      throw new TelephonyProviderError('Failed to reach the Twilio API.', err);
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new TelephonyProviderError(`Twilio number purchase failed (${res.status}): ${body.slice(0, 500)}`);
+    }
+    return toNumberInfo((await res.json()) as TwilioIncomingPhoneNumber);
   }
 }

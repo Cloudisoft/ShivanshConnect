@@ -63,6 +63,7 @@ export const AUDIT_ACTIONS = {
   TELEPHONY_PROVIDER_CREDENTIALS_SAVED: 'telephony_provider.credentials_saved',
   TELEPHONY_PROVIDER_CONNECTION_TESTED: 'telephony_provider.connection_tested',
   PHONE_NUMBER_SYNCED: 'phone_number.synced',
+  PHONE_NUMBER_PURCHASED: 'phone_number.purchased',
   PHONE_NUMBER_IMPORTED: 'phone_number.imported',
   PHONE_NUMBER_UPDATED: 'phone_number.updated',
   PHONE_NUMBER_DELETED: 'phone_number.deleted',
