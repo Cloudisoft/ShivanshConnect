@@ -111,7 +111,6 @@ export const DEFAULT_CALL_ENDING_RULES: AgentCallEndingRules = {
 export const PROMPT_VARIABLES = [
   'first_name',
   'last_name',
-  'company',
   'phone',
   'email',
   'custom_field',
@@ -227,12 +226,12 @@ export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
     key: 'sales_outreach',
     name: 'Sales outreach',
     content:
-      "Hi {{first_name}}, this is {{agent_name}} calling from {{company}}. Do you have a quick minute?\n\n" +
-      "I'm reaching out because we help businesses like yours save time on {{pain_point}}. " +
+      "Hi {{first_name}}, this is {{agent_name}} calling. Do you have a quick minute?\n\n" +
+      "I'm reaching out because we help people like you save time on {{pain_point}}. " +
       "Have you had a chance to think about how you're currently handling that?\n\n" +
       '[Listen and adapt based on their response]\n\n' +
       "If it sounds like a fit: Great - I'd love to set up a quick 15-minute call with one of our specialists " +
-      'to walk you through exactly how this could work for {{company}}. Does {{proposed_time}} work for you?\n\n' +
+      'to walk you through exactly how this could work for you. Does {{proposed_time}} work for you?\n\n' +
       "If not interested: No problem at all, {{first_name}}. Thanks for your time today, and if anything changes " +
       "feel free to reach out to us at {{callback_number}}.",
   },
@@ -240,7 +239,7 @@ export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
     key: 'appointment_reminder',
     name: 'Appointment reminder',
     content:
-      'Hi {{first_name}}, this is a reminder call from {{company}} about your upcoming appointment on ' +
+      'Hi {{first_name}}, this is a reminder call about your upcoming appointment on ' +
       '{{appointment_date}} at {{appointment_time}}.\n\n' +
       'Can you confirm you will be able to make it?\n\n' +
       '[If confirmed]: Perfect, we will see you then. Is there anything you need to prepare beforehand?\n\n' +
@@ -252,7 +251,7 @@ export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
     key: 'support_callback',
     name: 'Support callback',
     content:
-      'Hi {{first_name}}, this is {{agent_name}} from {{company}} support, returning your call about {{issue_summary}}.\n\n' +
+      'Hi {{first_name}}, this is {{agent_name}} from support, returning your call about {{issue_summary}}.\n\n' +
       'Is now still a good time to talk?\n\n' +
       "[If yes]: Let's go through what's happening. Can you walk me through the issue from the start?\n\n" +
       '[Troubleshoot / gather details]\n\n' +
@@ -307,7 +306,6 @@ export interface AgentPreviewRequest {
   lead?: {
     first_name?: string;
     last_name?: string;
-    company?: string;
     phone?: string;
     email?: string;
     custom_field?: Record<string, string>;

@@ -9,7 +9,7 @@ import { renderTemplate } from './promptVariables.js';
  */
 describe('renderTemplate', () => {
   it('substitutes known variables', () => {
-    expect(renderTemplate('Hi {{first_name}} {{last_name}} from {{company}}', { first_name: 'Ada', last_name: 'Lovelace', company: 'Acme' })).toBe('Hi Ada Lovelace from Acme');
+    expect(renderTemplate('Hi {{first_name}} {{last_name}}, your appointment is confirmed', { first_name: 'Ada', last_name: 'Lovelace' })).toBe('Hi Ada Lovelace, your appointment is confirmed');
   });
 
   it('substitutes custom_field.<key> variables', () => {

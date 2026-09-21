@@ -9,7 +9,7 @@ export function PreviewTab({ agentId }: { agentId: string }): JSX.Element {
   const preview = useAgentPreview(agentId);
   const [message, setMessage] = useState('');
   const [firstName, setFirstName] = useState('Alex');
-  const [company, setCompany] = useState('Acme Co');
+  const [lastName, setLastName] = useState('Morgan');
   const [history, setHistory] = useState<AgentPreviewMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notConfigured, setNotConfigured] = useState(false);
@@ -25,7 +25,7 @@ export function PreviewTab({ agentId }: { agentId: string }): JSX.Element {
       const result = await preview.mutateAsync({
         message,
         history,
-        lead: { first_name: firstName, company },
+        lead: { first_name: firstName, last_name: lastName },
       });
       setHistory([...nextHistory, { role: 'assistant' as const, content: result.reply }]);
     } catch (err) {
@@ -47,8 +47,8 @@ export function PreviewTab({ agentId }: { agentId: string }): JSX.Element {
             <Input id="preview_first_name" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
           </div>
           <div>
-            <Label htmlFor="preview_company">Company</Label>
-            <Input id="preview_company" value={company} onChange={(e) => setCompany(e.target.value)} />
+            <Label htmlFor="preview_last_name">Last name</Label>
+            <Input id="preview_last_name" value={lastName} onChange={(e) => setLastName(e.target.value)} />
           </div>
         </div>
       </Card>

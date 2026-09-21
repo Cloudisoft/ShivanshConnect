@@ -123,7 +123,7 @@ async function resolveCallPersonalization(
   if (leadId) {
     const { data } = await supabase
       .from('leads')
-      .select('first_name, last_name, company, phone_normalized, email, custom_fields')
+      .select('first_name, last_name, phone_normalized, email, custom_fields')
       .eq('id', leadId)
       .eq('organization_id', orgId)
       .maybeSingle();
@@ -133,7 +133,6 @@ async function resolveCallPersonalization(
   const context: PromptVariableContext = {
     first_name: lead?.first_name || undefined,
     last_name: lead?.last_name || undefined,
-    company: lead?.company || undefined,
     phone: lead?.phone_normalized || undefined,
     email: lead?.email || undefined,
     custom_field: (lead?.custom_fields as Record<string, string> | undefined) ?? undefined,

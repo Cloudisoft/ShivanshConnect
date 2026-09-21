@@ -55,7 +55,6 @@ export interface Lead {
   lead_list_id: string | null;
   first_name: string;
   last_name: string;
-  company: string | null;
   phone_original: string;
   phone_normalized: string;
   country_code: string;
@@ -156,7 +155,6 @@ export interface ImportJobRow {
 export const IMPORTABLE_LEAD_FIELDS = [
   'first_name',
   'last_name',
-  'company',
   'phone',
   'email',
   'address',

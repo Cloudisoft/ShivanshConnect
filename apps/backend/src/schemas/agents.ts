@@ -76,7 +76,6 @@ export const agentPreviewRequestSchema = z.object({
     .object({
       first_name: z.string().trim().max(200).optional(),
       last_name: z.string().trim().max(200).optional(),
-      company: z.string().trim().max(200).optional(),
       phone: z.string().trim().max(50).optional(),
       email: z.string().trim().max(200).optional(),
       custom_field: z.record(z.string()).optional(),

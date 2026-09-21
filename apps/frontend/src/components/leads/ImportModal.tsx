@@ -47,7 +47,7 @@ export function ImportModal({ leadListId, onClose }: { leadListId: string; onClo
           <div className="mt-4 space-y-3">
             {uploadError && <Alert>{uploadError}</Alert>}
             <p className="text-sm text-ink-500">
-              Upload a CSV or XLSX file. Phone is required; first name, last name, email, company and address
+              Upload a CSV or XLSX file. Phone is required; first name, last name, email and address
               columns are detected automatically, and you can adjust the mapping before anything is imported.
             </p>
             <input

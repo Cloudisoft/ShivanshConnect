@@ -24,7 +24,6 @@ export interface LeadsExportFilters {
 const BASE_COLUMNS: Array<{ key: string; header: string }> = [
   { key: 'first_name', header: 'First Name' },
   { key: 'last_name', header: 'Last Name' },
-  { key: 'company', header: 'Company' },
   { key: 'phone_original', header: 'Phone (Original)' },
   { key: 'phone_normalized', header: 'Phone (E.164)' },
   { key: 'email', header: 'Email' },
@@ -45,7 +44,7 @@ const BASE_COLUMNS: Array<{ key: string; header: string }> = [
 ];
 
 const LEAD_SELECT_COLUMNS =
-  'id, lead_list_id, first_name, last_name, company, phone_original, phone_normalized, email, address, city, state, zip, country, status, attempts, last_called_at, last_disposition, next_callback_at, is_dnc, dnc_reason, custom_fields, created_at';
+  'id, lead_list_id, first_name, last_name, phone_original, phone_normalized, email, address, city, state, zip, country, status, attempts, last_called_at, last_disposition, next_callback_at, is_dnc, dnc_reason, custom_fields, created_at';
 
 function applyLeadFilters(builder: any, orgId: string, filters: LeadsExportFilters): any {
   let b = builder.eq('organization_id', orgId);

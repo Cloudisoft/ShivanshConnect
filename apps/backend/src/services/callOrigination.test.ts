@@ -58,7 +58,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
       agent_id: agentId,
       organization_id: orgId,
       version_number: 1,
-      system_prompt: 'You are a helpful sales agent for {{company}}. Reach out to {{email}} if needed.',
+      system_prompt: 'You are a helpful sales agent. Reach out to {{email}} if needed.',
       greeting_template: 'Hi, am I speaking with {{first_name}}?',
       vapi_assistant_id: null,
       status: 'published',
@@ -107,7 +107,6 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
       organization_id: orgId,
       first_name: 'Priya',
       last_name: 'Shah',
-      company: 'Acme Inc',
       phone_normalized: '+14845552222',
       email: 'priya@acme.example',
       custom_fields: {},
@@ -130,7 +129,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     expect(createCall).toHaveBeenCalledTimes(1);
     const params = createCall.mock.calls[0][0];
     expect(params.firstMessageOverride).toBe('Hi, am I speaking with Priya?');
-    expect(params.systemPromptOverride).toBe('You are a helpful sales agent for Acme Inc. Reach out to priya@acme.example if needed.');
+    expect(params.systemPromptOverride).toBe('You are a helpful sales agent. Reach out to priya@acme.example if needed.');
   });
 
   it('an unnamed lead gets the generic fallback greeting with the real voice + campaign name, not the named template', async () => {
@@ -141,7 +140,6 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
       organization_id: orgId,
       first_name: '',
       last_name: '',
-      company: 'Acme Inc',
       phone_normalized: '+14845552222',
       email: 'unknown@acme.example',
       custom_fields: {},
@@ -169,7 +167,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
 
     const params = createCall.mock.calls[0][0];
     expect(params.firstMessageOverride).toBe('Hi, my name is Sarah from Fall Outreach. How are you doing today?');
-    expect(params.systemPromptOverride).toContain('You are a helpful sales agent for Acme Inc.');
+    expect(params.systemPromptOverride).toContain('You are a helpful sales agent.');
     expect(params.systemPromptOverride).toContain('politely ask for their name');
   });
 
@@ -202,7 +200,6 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
       organization_id: orgId,
       first_name: 'Dan',
       last_name: '',
-      company: '',
       phone_normalized: '+14845552222',
       email: '',
       custom_fields: {},

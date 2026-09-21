@@ -83,7 +83,6 @@ export function LeadDetailPage(): JSX.Element {
           <Card>
             <h2 className="text-sm font-semibold text-ink-900">Contact</h2>
             <dl className="mt-3 space-y-2 text-sm">
-              <Row label="Company" value={lead.company} />
               <Row label="Email" value={lead.email} />
               <Row label="Address" value={[lead.address, lead.city, lead.state, lead.zip].filter(Boolean).join(', ')} />
               <Row label="Country" value={lead.country} />
@@ -166,7 +165,6 @@ function EditLeadForm({
   const [form, setForm] = useState({
     first_name: lead.first_name,
     last_name: lead.last_name,
-    company: lead.company ?? '',
     phone: lead.phone_normalized,
     email: lead.email ?? '',
     status: lead.status as LeadStatus,
@@ -178,7 +176,6 @@ function EditLeadForm({
     onSubmit({
       first_name: form.first_name,
       last_name: form.last_name,
-      company: form.company || null,
       phone: form.phone,
       email: form.email || null,
       status: form.status,
@@ -204,10 +201,6 @@ function EditLeadForm({
         <div>
           <Label htmlFor="edit_email">Email</Label>
           <Input id="edit_email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
-        </div>
-        <div>
-          <Label htmlFor="edit_company">Company</Label>
-          <Input id="edit_company" value={form.company} onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))} />
         </div>
         <div>
           <Label htmlFor="edit_status">Status</Label>
