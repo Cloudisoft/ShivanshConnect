@@ -244,4 +244,72 @@ describe('VapiProvider', () => {
     const provider = new VapiProvider('sk-test');
     await expect(provider.createAssistant(BASE_CONFIG)).rejects.toBeInstanceOf(OrchestrationProviderError);
   });
+
+  it('importPhoneNumber() for Twilio sends inline account SID/auth token, no credential lookup', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'vapi-pn-1' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new VapiProvider('sk-test');
+    const result = await provider.importPhoneNumber({
+      provider: 'twilio',
+      e164: '+14845551234',
+      twilioAccountSid: 'AC123',
+      twilioAuthToken: 'secret-token',
+    });
+
+    expect(result.vapiPhoneNumberId).toBe('vapi-pn-1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.vapi.ai/phone-number');
+    expect(JSON.parse(init.body)).toEqual({
+      number: '+14845551234',
+      provider: 'twilio',
+      twilioAccountSid: 'AC123',
+      twilioAuthToken: 'secret-token',
+    });
+  });
+
+  it('importPhoneNumber() for Telnyx first registers a real Vapi credential, then imports with its id (never the raw API key)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'cred_abc' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'vapi-pn-2' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new VapiProvider('sk-test');
+    const result = await provider.importPhoneNumber({ provider: 'telnyx', e164: '+14845551234', telnyxApiKey: 'KEY01A0B6' });
+
+    expect(result.vapiPhoneNumberId).toBe('vapi-pn-2');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const [credUrl, credInit] = fetchMock.mock.calls[0];
+    expect(credUrl).toBe('https://api.vapi.ai/credential');
+    expect(JSON.parse(credInit.body)).toEqual({ provider: 'telnyx', apiKey: 'KEY01A0B6' });
+
+    const [numberUrl, numberInit] = fetchMock.mock.calls[1];
+    expect(numberUrl).toBe('https://api.vapi.ai/phone-number');
+    expect(JSON.parse(numberInit.body)).toEqual({ number: '+14845551234', provider: 'telnyx', credentialId: 'cred_abc' });
+  });
+
+  it('importPhoneNumber() for Telnyx without an API key throws, never calls Vapi', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new VapiProvider('sk-test');
+    await expect(provider.importPhoneNumber({ provider: 'telnyx', e164: '+14845551234' })).rejects.toBeInstanceOf(OrchestrationProviderError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('importPhoneNumber() for BYON builds a SIP URI from the trunk gateway host', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'vapi-pn-3' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new VapiProvider('sk-test');
+    await provider.importPhoneNumber({ provider: 'byo-sip-trunk', e164: '+14845551234', sipTrunkGatewayHost: 'sip.example.com' });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      number: '+14845551234',
+      provider: 'byo-phone-number',
+      numberE164CheckEnabled: true,
+      sipUri: 'sip:+14845551234@sip.example.com',
+    });
+  });
 });
