@@ -23,7 +23,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   } = await supabase.auth.getSession();
 
   const headers = new Headers(init.headers);
-  headers.set('Content-Type', 'application/json');
+  if (init.body !== undefined) {
+    headers.set('Content-Type', 'application/json');
+  }
   if (session?.access_token) {
     headers.set('Authorization', `Bearer ${session.access_token}`);
   }
@@ -52,7 +54,9 @@ async function requestWithMeta<T>(
   } = await supabase.auth.getSession();
 
   const headers = new Headers(init.headers);
-  headers.set('Content-Type', 'application/json');
+  if (init.body !== undefined) {
+    headers.set('Content-Type', 'application/json');
+  }
   if (session?.access_token) {
     headers.set('Authorization', `Bearer ${session.access_token}`);
   }
