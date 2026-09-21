@@ -94,6 +94,15 @@ export function useUpdatePhoneNumber() {
   });
 }
 
+export function usePhoneNumberBulkAction() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { phone_number_ids: string[]; action: 'delete' | 'assign_agent'; assigned_agent_id?: string | null }) =>
+      api.post<{ action: string; affected: number }>('/phone-numbers/bulk-actions', input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['phone-numbers'] }),
+  });
+}
+
 export function useSyncNumberWithVapi() {
   const queryClient = useQueryClient();
   return useMutation({

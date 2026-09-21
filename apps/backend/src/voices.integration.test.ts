@@ -178,6 +178,63 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     expect(catalogB.json().data.find((p: any) => p.key === 'elevenlabs').status).toBe('not_connected');
   });
 
+  it('POST /voices/bulk-delete removes only the caller org\'s own ids, scoped correctly cross-org', async () => {
+    const signupA = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/signup',
+      payload: { organization_name: 'Bulk Delete Org A', full_name: 'Bella Bulk', email: 'bella@bulkvoice.com', password: 'supersecret123' },
+    });
+    const tokenA = signupA.json().data.session.access_token;
+
+    const signupB = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/signup',
+      payload: { organization_name: 'Bulk Delete Org B', full_name: 'Bo Bulk', email: 'bo@bulkvoice.com', password: 'supersecret123' },
+    });
+    const tokenB = signupB.json().data.session.access_token;
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/voice-providers/elevenlabs/credentials',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { kind: 'api_key', api_key: 'sk-elevenlabs-real-secret-key-12345' },
+    });
+    const syncRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/voices/sync/elevenlabs',
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(syncRes.json().data.created).toBe(2);
+
+    const listA = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
+    const [voice1, voice2] = listA.json().data;
+
+    // Org B cannot delete Org A's voices by id - scoped out, affected=0.
+    const crossOrgAttempt = await app.inject({
+      method: 'POST',
+      url: '/api/v1/voices/bulk-delete',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { voice_ids: [voice1.id, voice2.id] },
+    });
+    expect(crossOrgAttempt.statusCode).toBe(200);
+    expect(crossOrgAttempt.json().data.affected).toBe(0);
+    const listAStillThere = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
+    expect(listAStillThere.json().data).toHaveLength(2);
+
+    // Org A deletes both of its own voices in one call.
+    const bulkDeleteRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/voices/bulk-delete',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { voice_ids: [voice1.id, voice2.id] },
+    });
+    expect(bulkDeleteRes.statusCode).toBe(200);
+    expect(bulkDeleteRes.json().data.affected).toBe(2);
+
+    const listAfter = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
+    expect(listAfter.json().data).toHaveLength(0);
+  });
+
   it('rejects voice cloning with no explicit consent, and completes cloning once consent + a real provider response arrive', async () => {
     const signup = await app.inject({
       method: 'POST',

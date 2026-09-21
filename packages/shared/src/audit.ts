@@ -59,6 +59,7 @@ export const AUDIT_ACTIONS = {
   VOICE_SYNCED: 'voice.synced',
   VOICE_CLONE_REQUESTED: 'voice.clone_requested',
   VOICE_DELETED: 'voice.deleted',
+  VOICE_BULK_ACTION: 'voice.bulk_action',
 
   TELEPHONY_PROVIDER_CREDENTIALS_SAVED: 'telephony_provider.credentials_saved',
   TELEPHONY_PROVIDER_CONNECTION_TESTED: 'telephony_provider.connection_tested',
@@ -67,6 +68,7 @@ export const AUDIT_ACTIONS = {
   PHONE_NUMBER_IMPORTED: 'phone_number.imported',
   PHONE_NUMBER_UPDATED: 'phone_number.updated',
   PHONE_NUMBER_DELETED: 'phone_number.deleted',
+  PHONE_NUMBER_BULK_ACTION: 'phone_number.bulk_action',
 
   VAPI_CREDENTIALS_SAVED: 'vapi.credentials_saved',
   VAPI_CONNECTION_TESTED: 'vapi.connection_tested',
