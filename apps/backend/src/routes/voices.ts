@@ -5,6 +5,7 @@ import { ok, paginationMeta } from '../lib/response.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { uuidSchema } from '../schemas/common.js';
 import {
+  bulkDeleteVoicesSchema,
   cloneVoiceMetadataSchema,
   listVoicesQuerySchema,
   previewVoiceSchema,
@@ -298,6 +299,38 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return reply.status(202).send(ok(withHostingFlag(voice), { message: 'Voice cloning started.' }));
+  });
+
+  // POST /api/v1/voices/bulk-delete
+  app.post('/bulk-delete', async (req) => {
+    const body = bulkDeleteVoicesSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const { data: owned, error: ownedError } = await supabase
+      .from('voices')
+      .select('id')
+      .eq('organization_id', orgId)
+      .in('id', body.voice_ids);
+    if (ownedError) throw ownedError;
+    const ids = (owned ?? []).map((v) => v.id as string);
+
+    if (ids.length > 0) {
+      const { error } = await supabase.from('voices').delete().in('id', ids);
+      if (error) throw error;
+    }
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.VOICE_BULK_ACTION,
+      entityType: 'voice',
+      entityId: null,
+      newValue: { action: 'delete', affected: ids.length },
+      ipAddress: req.ip,
+    });
+
+    return ok({ action: 'delete', affected: ids.length });
   });
 
   // DELETE /api/v1/voices/:id

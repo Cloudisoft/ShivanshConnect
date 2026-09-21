@@ -7,6 +7,7 @@ import { uuidSchema } from '../schemas/common.js';
 import {
   importPhoneNumberSchema,
   listPhoneNumbersQuerySchema,
+  phoneNumberBulkActionSchema,
   purchaseNumberSchema,
   searchAvailableNumbersQuerySchema,
   telephonyProviderKeySchema,
@@ -383,6 +384,52 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
     const message = vapiPhoneNumberId ? `${imported.phoneNumber} imported and synced with Vapi.` : `${imported.phoneNumber} imported.`;
 
     return ok(sanitizeRow({ ...created, vapi_phone_number_id: vapiPhoneNumberId }), { message });
+  });
+
+  // POST /api/v1/phone-numbers/bulk-actions - delete, or bulk assign/
+  // unassign to an agent, over an explicit id array.
+  app.post('/bulk-actions', async (req) => {
+    const body = phoneNumberBulkActionSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const { data: owned, error: ownedError } = await supabase
+      .from('phone_numbers')
+      .select('id')
+      .eq('organization_id', orgId)
+      .in('id', body.phone_number_ids);
+    if (ownedError) throw ownedError;
+    const ids = (owned ?? []).map((n) => n.id as string);
+
+    let affected = 0;
+    if (ids.length > 0) {
+      if (body.action === 'delete') {
+        const { error } = await supabase.from('phone_numbers').delete().in('id', ids);
+        if (error) throw error;
+        affected = ids.length;
+      } else {
+        if (body.assigned_agent_id) {
+          const { data: agent, error } = await supabase.from('ai_agents').select('id, organization_id').eq('id', body.assigned_agent_id).maybeSingle();
+          if (error) throw error;
+          if (!agent || agent.organization_id !== orgId) throw new ValidationError('That agent does not belong to your organization.');
+        }
+        const { error } = await supabase.from('phone_numbers').update({ assigned_agent_id: body.assigned_agent_id ?? null }).in('id', ids);
+        if (error) throw error;
+        affected = ids.length;
+      }
+    }
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.PHONE_NUMBER_BULK_ACTION,
+      entityType: 'phone_number',
+      entityId: null,
+      newValue: { action: body.action, affected, assigned_agent_id: body.assigned_agent_id ?? null },
+      ipAddress: req.ip,
+    });
+
+    return ok({ action: body.action, affected });
   });
 
   // PATCH /api/v1/phone-numbers/:id - assign/unassign to an agent, rename,

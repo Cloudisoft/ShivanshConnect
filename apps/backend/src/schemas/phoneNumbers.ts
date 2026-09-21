@@ -87,3 +87,11 @@ export const updatePhoneNumberSchema = z
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field must be provided.' });
 export type UpdatePhoneNumberInput = z.infer<typeof updatePhoneNumberSchema>;
+
+// POST /phone-numbers/bulk-actions
+export const phoneNumberBulkActionSchema = z.object({
+  phone_number_ids: z.array(uuidSchema).min(1).max(500),
+  action: z.enum(['delete', 'assign_agent']),
+  assigned_agent_id: uuidSchema.nullable().optional(),
+});
+export type PhoneNumberBulkActionInput = z.infer<typeof phoneNumberBulkActionSchema>;

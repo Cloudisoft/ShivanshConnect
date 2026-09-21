@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { VOICE_PROVIDER_KEYS } from '@shivanshconnect/shared';
-import { paginationSchema } from './common.js';
+import { paginationSchema, uuidSchema } from './common.js';
 
 export const voiceProviderKeySchema = z.enum(VOICE_PROVIDER_KEYS);
 
@@ -39,3 +39,8 @@ export const cloneVoiceMetadataSchema = z.object({
   }),
 });
 export type CloneVoiceMetadataInput = z.infer<typeof cloneVoiceMetadataSchema>;
+
+export const bulkDeleteVoicesSchema = z.object({
+  voice_ids: z.array(uuidSchema).min(1).max(500),
+});
+export type BulkDeleteVoicesInput = z.infer<typeof bulkDeleteVoicesSchema>;

@@ -62,6 +62,14 @@ export function useDeleteVoice() {
   });
 }
 
+export function useBulkDeleteVoices() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (voiceIds: string[]) => api.post<{ action: 'delete'; affected: number }>('/voices/bulk-delete', { voice_ids: voiceIds }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['voices'] }),
+  });
+}
+
 export interface CloneVoiceInput {
   provider_key: VoiceProviderKey;
   name: string;

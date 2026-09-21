@@ -6,6 +6,7 @@ import { useAgents } from '../../hooks/useAgents';
 import { useTelephonyProviders } from '../../hooks/useTelephonyProviders';
 import {
   useDeletePhoneNumber,
+  usePhoneNumberBulkAction,
   usePhoneNumbers,
   useSyncNumberWithVapi,
   useUpdatePhoneNumber,
@@ -137,12 +138,55 @@ export function NumbersTab(): JSX.Element {
   const canManage = hasPermission('numbers.manage');
   const [filters, setFilters] = useState<PhoneNumberFilters>({});
   const [showImport, setShowImport] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const numbersQuery = usePhoneNumbers(filters);
   const providersQuery = useTelephonyProviders();
+  const bulkAction = usePhoneNumberBulkAction();
   const numbers = numbersQuery.data?.data ?? [];
   const agentsQuery = useAgents(1, 100);
-  const agentNameById = new Map((agentsQuery.data?.data ?? []).map((a) => [a.id, a.name]));
+  const agents = agentsQuery.data?.data ?? [];
+  const agentNameById = new Map(agents.map((a) => [a.id, a.name]));
+
+  function toggleNumber(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected((prev) => (prev.size === numbers.length ? new Set() : new Set(numbers.map((n) => n.id))));
+  }
+
+  function resetSelection() {
+    setSelected(new Set());
+    setConfirmingBulkDelete(false);
+  }
+
+  async function handleBulkDelete() {
+    setBulkError(null);
+    try {
+      await bulkAction.mutateAsync({ phone_number_ids: Array.from(selected), action: 'delete' });
+      resetSelection();
+    } catch (err) {
+      setBulkError(err instanceof ApiClientError ? err.message : 'Could not delete the selected numbers.');
+    }
+  }
+
+  async function handleBulkAssign(agentId: string) {
+    setBulkError(null);
+    try {
+      await bulkAction.mutateAsync({ phone_number_ids: Array.from(selected), action: 'assign_agent', assigned_agent_id: agentId || null });
+      resetSelection();
+    } catch (err) {
+      setBulkError(err instanceof ApiClientError ? err.message : 'Could not reassign the selected numbers.');
+    }
+  }
 
   return (
     <div>
@@ -192,6 +236,60 @@ export function NumbersTab(): JSX.Element {
         </select>
       </div>
 
+      {canManage && selected.size > 0 && (
+        <Card className="mt-4 flex flex-wrap items-center justify-between gap-3 !p-3">
+          <div className="flex items-center gap-3 text-sm text-ink-700">
+            <span>
+              <strong>{selected.size}</strong> selected
+            </span>
+            <button type="button" className="text-xs text-ink-500 underline" onClick={resetSelection}>
+              Clear selection
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="rounded-md border border-ink-300 bg-white px-2 py-1.5 text-sm"
+              defaultValue=""
+              disabled={bulkAction.isPending}
+              onChange={(e) => {
+                handleBulkAssign(e.target.value);
+                e.target.value = '';
+              }}
+            >
+              <option value="" disabled>
+                Assign to agent...
+              </option>
+              <option value="">Unassign</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+            {confirmingBulkDelete ? (
+              <>
+                <span className="text-xs text-ink-600">Delete {selected.size} number(s)?</span>
+                <Button variant="danger" disabled={bulkAction.isPending} onClick={handleBulkDelete}>
+                  {bulkAction.isPending ? 'Deleting...' : 'Confirm'}
+                </Button>
+                <Button variant="ghost" onClick={() => setConfirmingBulkDelete(false)}>
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button variant="danger" onClick={() => setConfirmingBulkDelete(true)}>
+                <Trash2 className="h-4 w-4" /> Delete selected
+              </Button>
+            )}
+          </div>
+        </Card>
+      )}
+      {bulkError && (
+        <div className="mt-3">
+          <Alert>{bulkError}</Alert>
+        </div>
+      )}
+
       {numbersQuery.isLoading && <p className="mt-6 text-sm text-ink-500">Loading phone numbers...</p>}
 
       {!numbersQuery.isLoading && numbers.length === 0 && (
@@ -205,6 +303,16 @@ export function NumbersTab(): JSX.Element {
           <table className="w-full text-left text-sm">
             <thead className="border-b border-ink-200 bg-ink-50 text-xs uppercase text-ink-500">
               <tr>
+                {canManage && (
+                  <th className="px-4 py-2">
+                    <input
+                      type="checkbox"
+                      checked={numbers.length > 0 && selected.size === numbers.length}
+                      onChange={toggleAll}
+                      aria-label="Select all phone numbers"
+                    />
+                  </th>
+                )}
                 <th className="px-4 py-2">Number</th>
                 <th className="px-4 py-2">Provider</th>
                 <th className="px-4 py-2">Capabilities</th>
@@ -218,6 +326,11 @@ export function NumbersTab(): JSX.Element {
             <tbody className="divide-y divide-ink-100">
               {numbers.map((number) => (
                 <tr key={number.id}>
+                  {canManage && (
+                    <td className="px-4 py-3">
+                      <input type="checkbox" checked={selected.has(number.id)} onChange={() => toggleNumber(number.id)} aria-label={`Select ${number.phone_number}`} />
+                    </td>
+                  )}
                   <td className="px-4 py-3 font-mono text-ink-800">
                     {number.phone_number}
                     {number.friendly_name && <div className="font-sans text-xs text-ink-500">{number.friendly_name}</div>}

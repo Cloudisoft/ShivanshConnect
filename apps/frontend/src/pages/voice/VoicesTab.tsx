@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Play, RefreshCw, Trash2 } from 'lucide-react';
 import { VOICE_PROVIDER_LABELS, type Voice, type VoiceProviderKey } from '@shivanshconnect/shared';
 import { useAuth } from '../../hooks/useAuth';
-import { useDeleteVoice, usePreviewVoice, useSyncVoices, useVoices, type VoiceFilters } from '../../hooks/useVoices';
+import { useBulkDeleteVoices, useDeleteVoice, usePreviewVoice, useSyncVoices, useVoices, type VoiceFilters } from '../../hooks/useVoices';
 import { useVoiceProviders } from '../../hooks/useVoiceProviders';
 import { Alert, Badge, Button, Card } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
@@ -97,11 +97,39 @@ export function VoicesTab(): JSX.Element {
   const { hasPermission } = useAuth();
   const canManage = hasPermission('voices.manage');
   const [filters, setFilters] = useState<VoiceFilters>({});
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const voicesQuery = useVoices(filters);
   const providersQuery = useVoiceProviders();
+  const bulkDelete = useBulkDeleteVoices();
   const voices = voicesQuery.data?.data ?? [];
   const connectedProviders = (providersQuery.data ?? []).filter((p) => p.status === 'connected');
+
+  function toggleVoice(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected((prev) => (prev.size === voices.length ? new Set() : new Set(voices.map((v) => v.id))));
+  }
+
+  async function handleBulkDelete() {
+    setBulkError(null);
+    try {
+      await bulkDelete.mutateAsync(Array.from(selected));
+      setSelected(new Set());
+      setConfirmingBulkDelete(false);
+    } catch (err) {
+      setBulkError(err instanceof ApiClientError ? err.message : 'Could not delete the selected voices.');
+    }
+  }
 
   return (
     <div>
@@ -151,6 +179,39 @@ export function VoicesTab(): JSX.Element {
         </select>
       </div>
 
+      {canManage && selected.size > 0 && (
+        <Card className="mt-4 flex flex-wrap items-center justify-between gap-3 !p-3">
+          <div className="flex items-center gap-3 text-sm text-ink-700">
+            <span>
+              <strong>{selected.size}</strong> selected
+            </span>
+            <button type="button" className="text-xs text-ink-500 underline" onClick={() => setSelected(new Set())}>
+              Clear selection
+            </button>
+          </div>
+          {confirmingBulkDelete ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-ink-600">Delete {selected.size} voice(s)?</span>
+              <Button variant="danger" disabled={bulkDelete.isPending} onClick={handleBulkDelete}>
+                {bulkDelete.isPending ? 'Deleting...' : 'Confirm'}
+              </Button>
+              <Button variant="ghost" onClick={() => setConfirmingBulkDelete(false)}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button variant="danger" onClick={() => setConfirmingBulkDelete(true)}>
+              <Trash2 className="h-4 w-4" /> Delete selected
+            </Button>
+          )}
+        </Card>
+      )}
+      {bulkError && (
+        <div className="mt-3">
+          <Alert>{bulkError}</Alert>
+        </div>
+      )}
+
       {voicesQuery.isLoading && <p className="mt-6 text-sm text-ink-500">Loading voices...</p>}
 
       {!voicesQuery.isLoading && voices.length === 0 && (
@@ -164,6 +225,16 @@ export function VoicesTab(): JSX.Element {
           <table className="w-full text-left text-sm">
             <thead className="border-b border-ink-200 bg-ink-50 text-xs uppercase text-ink-500">
               <tr>
+                {canManage && (
+                  <th className="px-4 py-2">
+                    <input
+                      type="checkbox"
+                      checked={voices.length > 0 && selected.size === voices.length}
+                      onChange={toggleAll}
+                      aria-label="Select all voices"
+                    />
+                  </th>
+                )}
                 <th className="px-4 py-2">Provider</th>
                 <th className="px-4 py-2">Voice name</th>
                 <th className="px-4 py-2">Gender</th>
@@ -177,6 +248,11 @@ export function VoicesTab(): JSX.Element {
             <tbody className="divide-y divide-ink-100">
               {voices.map((voice) => (
                 <tr key={voice.id}>
+                  {canManage && (
+                    <td className="px-4 py-3">
+                      <input type="checkbox" checked={selected.has(voice.id)} onChange={() => toggleVoice(voice.id)} aria-label={`Select ${voice.name}`} />
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-ink-800">{VOICE_PROVIDER_LABELS[voice.provider_key]}</span>

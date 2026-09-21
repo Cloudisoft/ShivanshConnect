@@ -283,4 +283,64 @@ describe('Phase 5: telephony provider connect -> sync -> list, BYON import, dedu
     expect(syncRes.statusCode).toBe(422);
     expect(syncRes.json().error.message).toMatch(/SIP trunk/i);
   });
+
+  it('POST /phone-numbers/bulk-actions bulk-deletes and bulk-assigns, scoped cross-org', async () => {
+    const tokenA = await signup('Bulk Numbers Org A', 'bulk-numbers-a@test.com');
+    const tokenB = await signup('Bulk Numbers Org B', 'bulk-numbers-b@test.com');
+
+    async function importByon(token: string, phone: string) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/phone-numbers/import',
+        headers: { authorization: `Bearer ${token}` },
+        payload: { provider_key: 'byon', phone_number: phone, capabilities: { voice_inbound: true, voice_outbound: true, sms: false } },
+      });
+      return res.json().data.id as string;
+    }
+
+    const numberA1 = await importByon(tokenA, '+14845551001');
+    const numberA2 = await importByon(tokenA, '+14845551002');
+
+    // Org B cannot bulk-act on Org A's numbers - scoped out, affected=0.
+    const crossOrgAttempt = await app.inject({
+      method: 'POST',
+      url: '/api/v1/phone-numbers/bulk-actions',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { phone_number_ids: [numberA1, numberA2], action: 'delete' },
+    });
+    expect(crossOrgAttempt.statusCode).toBe(200);
+    expect(crossOrgAttempt.json().data.affected).toBe(0);
+
+    const agentRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agents',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { name: 'Bulk Assign Agent', role: 'sales_agent' },
+    });
+    const agentId = agentRes.json().data.id;
+
+    const assignRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/phone-numbers/bulk-actions',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { phone_number_ids: [numberA1, numberA2], action: 'assign_agent', assigned_agent_id: agentId },
+    });
+    expect(assignRes.statusCode).toBe(200);
+    expect(assignRes.json().data.affected).toBe(2);
+
+    const listAfterAssign = await app.inject({ method: 'GET', url: '/api/v1/phone-numbers', headers: { authorization: `Bearer ${tokenA}` } });
+    expect(listAfterAssign.json().data.every((n: any) => n.assigned_agent_id === agentId)).toBe(true);
+
+    const deleteRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/phone-numbers/bulk-actions',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { phone_number_ids: [numberA1, numberA2], action: 'delete' },
+    });
+    expect(deleteRes.statusCode).toBe(200);
+    expect(deleteRes.json().data.affected).toBe(2);
+
+    const listAfterDelete = await app.inject({ method: 'GET', url: '/api/v1/phone-numbers', headers: { authorization: `Bearer ${tokenA}` } });
+    expect(listAfterDelete.json().data).toHaveLength(0);
+  });
 });
