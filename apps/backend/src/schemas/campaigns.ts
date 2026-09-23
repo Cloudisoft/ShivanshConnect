@@ -87,6 +87,11 @@ export const rotateLeadsSchema = z.object({
 });
 export type RotateLeadsInput = z.infer<typeof rotateLeadsSchema>;
 
+export const removeLeadsSchema = z.object({
+  lead_ids: z.array(uuidSchema).min(1).max(20000),
+});
+export type RemoveLeadsInput = z.infer<typeof removeLeadsSchema>;
+
 export const updateConcurrencySchema = z.object({
   concurrency_limit: z.number().int().min(1).max(500),
 });

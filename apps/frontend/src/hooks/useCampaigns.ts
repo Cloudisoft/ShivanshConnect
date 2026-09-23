@@ -137,6 +137,15 @@ export interface RotateDecision {
   reason: string;
 }
 
+export function useRemoveLeads() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, lead_ids }: { id: string; lead_ids: string[] }) =>
+      api.post<{ removed: number; skipped_active: number }>(`/campaigns/${id}/leads/remove`, { lead_ids }),
+    onSuccess: (_d, v) => invalidate(queryClient, v.id),
+  });
+}
+
 export function useRotateLeads() {
   const queryClient = useQueryClient();
   return useMutation({

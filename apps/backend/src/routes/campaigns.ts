@@ -9,6 +9,7 @@ import {
   createCampaignSchema,
   createCampaignVersionSchema,
   listCampaignsQuerySchema,
+  removeLeadsSchema,
   rotateLeadsSchema,
   updateCampaignSchema,
   updateConcurrencySchema,
@@ -579,6 +580,59 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     const { data, error, count } = await builder;
     if (error) throw error;
     return ok(data ?? [], { pagination: paginationMeta(page, pageSize, count ?? 0) });
+  });
+
+  // POST /api/v1/campaigns/:id/leads/remove - detach lead(s) from this
+  // campaign entirely (removes the campaign_leads row, never touches the
+  // lead record itself). A lead mid-call (dialing/ringing/connected/
+  // in_progress/transferring) is never removed - detaching it out from
+  // under an active call would orphan the in-flight call's own
+  // campaign_leads row; the org must let that call finish first.
+  app.post('/:id/leads/remove', { preHandler: requirePermission('campaigns.edit') }, async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const body = removeLeadsSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    await getOwnedCampaign(supabase, id, orgId);
+
+    const ACTIVE_STATUSES = ['dialing', 'ringing', 'connected', 'in_progress', 'transferring'];
+    const { data: matched, error: matchError } = await supabase
+      .from('campaign_leads')
+      .select('id, lead_id, status')
+      .eq('campaign_id', id)
+      .in('lead_id', body.lead_ids);
+    if (matchError) throw matchError;
+
+    const removable = (matched ?? []).filter((cl: any) => !ACTIVE_STATUSES.includes(cl.status));
+    const skippedActive = (matched ?? []).length - removable.length;
+
+    if (removable.length > 0) {
+      const { error } = await supabase
+        .from('campaign_leads')
+        .delete()
+        .in(
+          'id',
+          removable.map((cl: any) => cl.id),
+        );
+      if (error) throw error;
+    }
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.CAMPAIGN_LEADS_REMOVED,
+      entityType: 'campaign',
+      entityId: id,
+      newValue: { removed: removable.length, skipped_active: skippedActive },
+      ipAddress: req.ip,
+    });
+
+    const message =
+      skippedActive > 0
+        ? `${removable.length} lead(s) removed. ${skippedActive} skipped - currently on an active call.`
+        : `${removable.length} lead(s) removed.`;
+    return ok({ removed: removable.length, skipped_active: skippedActive }, { message });
   });
 
   // POST /api/v1/campaigns/:id/leads/rotate - reuse/re-queue a worked list,
