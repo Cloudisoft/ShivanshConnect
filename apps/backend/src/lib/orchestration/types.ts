@@ -163,6 +163,15 @@ export interface CreateCallParams {
    */
   firstMessageOverride?: string | null;
   systemPromptOverride?: string | null;
+  /** The assistant's own configured model.provider (Vapi only) - Vapi's
+   * POST /call requires assistantOverrides.model to include a valid
+   * `provider` whenever ANY model field is overridden (a partial override
+   * with only `messages` fails with "assistantOverrides.model.provider
+   * must be one of the following values: ..." even though the value was
+   * never sent at all), so this must be repeated alongside
+   * systemPromptOverride's messages rather than left to Vapi to infer
+   * from the cached assistant. */
+  llmProvider?: string | null;
 }
 
 export interface CreateCallResult {

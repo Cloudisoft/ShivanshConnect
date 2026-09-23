@@ -107,6 +107,65 @@ export const DEFAULT_CALL_ENDING_RULES: AgentCallEndingRules = {
   summarize_before_ending: true,
 };
 
+/** Vapi's own real, currently-documented `model.provider` enum
+ * (https://docs.vapi.ai - Assistant.model.provider). llm_provider was
+ * previously a free-text field, so any value that didn't match this exact
+ * list (or was just missing on an override) made the call origination
+ * itself fail: "Vapi request failed (400 POST /call):
+ * assistantOverrides.model.provider must be one of the following
+ * values: ...". Constraining it here, in both the create/edit form and
+ * the backend schema, is what actually prevents that at the source. */
+export const LLM_PROVIDERS = [
+  'openai',
+  'anthropic',
+  'google',
+  'azure-openai',
+  'groq',
+  'together-ai',
+  'openrouter',
+  'perplexity-ai',
+  'deepinfra',
+  'anyscale',
+  'custom-llm',
+  'baseten',
+  'runpod',
+  'vapi',
+  'anthropic-bedrock',
+  'anthropic-vertex',
+  'minimax',
+  'xai',
+  'inflection-ai',
+  'cerebras',
+  'deep-seek',
+  'mistral',
+] as const;
+export type LlmProvider = (typeof LLM_PROVIDERS)[number];
+
+export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  google: 'Google',
+  'azure-openai': 'Azure OpenAI',
+  groq: 'Groq',
+  'together-ai': 'Together AI',
+  openrouter: 'OpenRouter',
+  'perplexity-ai': 'Perplexity',
+  deepinfra: 'DeepInfra',
+  anyscale: 'Anyscale',
+  'custom-llm': 'Custom LLM',
+  baseten: 'Baseten',
+  runpod: 'RunPod',
+  vapi: 'Vapi',
+  'anthropic-bedrock': 'Anthropic (Bedrock)',
+  'anthropic-vertex': 'Anthropic (Vertex)',
+  minimax: 'MiniMax',
+  xai: 'xAI',
+  'inflection-ai': 'Inflection AI',
+  cerebras: 'Cerebras',
+  'deep-seek': 'DeepSeek',
+  mistral: 'Mistral',
+};
+
 /** {{variable}} palette shown next to prompt/greeting/script editors. */
 export const PROMPT_VARIABLES = [
   'first_name',

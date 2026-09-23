@@ -155,6 +155,7 @@ export function CdrPage(): JSX.Element {
             <thead className="bg-ink-50 text-left text-xs font-medium uppercase tracking-wide text-ink-500">
               <tr>
                 <th className="px-4 py-2">Started</th>
+                <th className="px-4 py-2">Ended</th>
                 <th className="px-4 py-2">Lead</th>
                 <th className="px-4 py-2">Destination</th>
                 <th className="px-4 py-2">Campaign</th>
@@ -169,6 +170,7 @@ export function CdrPage(): JSX.Element {
               {rows.map((row) => (
                 <tr key={row.call_id} className="cursor-pointer hover:bg-ink-50" onClick={() => setSelectedCallId(row.call_id)}>
                   <td className="px-4 py-2 text-ink-900">{row.started_at ? new Date(row.started_at).toLocaleString() : '-'}</td>
+                  <td className="px-4 py-2 text-ink-900">{row.ended_at ? new Date(row.ended_at).toLocaleString() : '-'}</td>
                   <td className="px-4 py-2 text-ink-700">{row.lead_name ?? '-'}</td>
                   <td className="px-4 py-2 font-mono text-ink-700">{row.destination_number}</td>
                   <td className="px-4 py-2 text-ink-700">{row.campaign_name ?? '-'}</td>
