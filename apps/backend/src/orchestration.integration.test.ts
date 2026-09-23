@@ -40,6 +40,18 @@ describe('Phase 6: call origination via Vapi + webhook idempotency + cross-org i
       const method = init?.method ?? 'GET';
 
       if (url === 'https://api.vapi.ai/assistant' && method === 'POST') {
+        // Mirrors Vapi's own real validation (POST /assistant rejects a
+        // name over 40 characters) so a regression of the `Agent ${uuid}`
+        // bug - 42 characters, always over the limit - fails loudly in
+        // every test that originates a call, not just a dedicated one.
+        const body = JSON.parse(init?.body as string);
+        if (typeof body.name !== 'string' || body.name.length > 40) {
+          return {
+            ok: false,
+            status: 400,
+            json: async () => ({ message: ['name must be shorter than or equal to 40 characters'], error: 'Bad Request', statusCode: 400 }),
+          } as unknown as Response;
+        }
         vapiAssistantCounter += 1;
         return { ok: true, status: 200, json: async () => ({ id: `asst_test_${vapiAssistantCounter}` }) } as unknown as Response;
       }
