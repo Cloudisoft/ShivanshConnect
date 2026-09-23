@@ -49,7 +49,7 @@ export const agentVersionConfigSchema = z.object({
   accent: z.string().trim().max(100).nullable().optional(),
   greeting_template: z.string().trim().max(5000).optional(),
   system_prompt: z.string().trim().max(20000).optional(),
-  fallback_behavior: z.string().trim().max(2000).nullable().optional(),
+  fallback_behavior: z.string().trim().max(20000).nullable().optional(),
   transfer_rules: transferRulesSchema.optional(),
   call_ending_rules: callEndingRulesSchema.optional(),
   llm_provider: z.string().trim().min(1).max(50).optional(),
