@@ -172,6 +172,12 @@ export interface CreateCallParams {
    * systemPromptOverride's messages rather than left to Vapi to infer
    * from the cached assistant. */
   llmProvider?: string | null;
+  /** The assistant's own configured model.model (Vapi only) - same
+   * requirement as llmProvider: Vapi's POST /call rejects a partial
+   * assistantOverrides.model that omits `model`, failing with
+   * "assistantOverrides.model.model must be one of the following
+   * values: ..." even though the field was never sent at all. */
+  llmModel?: string | null;
 }
 
 export interface CreateCallResult {

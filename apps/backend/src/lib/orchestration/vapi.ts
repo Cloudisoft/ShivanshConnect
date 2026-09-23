@@ -341,10 +341,17 @@ export class VapiProvider implements CallOrchestrationProvider {
       const assistantOverrides: Record<string, unknown> = {};
       if (params.firstMessageOverride) assistantOverrides.firstMessage = params.firstMessageOverride;
       if (params.systemPromptOverride) {
-        // Vapi requires `provider` on the override's model object even for
-        // a partial (messages-only) override - see CreateCallParams'
-        // llmProvider doc comment for why this can't just be omitted.
-        assistantOverrides.model = { provider: params.llmProvider ?? 'openai', messages: [{ role: 'system', content: params.systemPromptOverride }] };
+        // Vapi requires BOTH `provider` and `model` on the override's model
+        // object even for a partial (messages-only) override - omitting
+        // either fails 400 ("assistantOverrides.model.<field> must be one
+        // of the following values: ...") exactly as if an invalid value had
+        // been sent, even though neither was ever included at all. See
+        // CreateCallParams' llmProvider/llmModel doc comments.
+        assistantOverrides.model = {
+          provider: params.llmProvider ?? 'openai',
+          model: params.llmModel ?? 'gpt-4o-mini',
+          messages: [{ role: 'system', content: params.systemPromptOverride }],
+        };
       }
       payload.assistantOverrides = assistantOverrides;
     }

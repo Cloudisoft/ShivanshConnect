@@ -483,7 +483,13 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
           </div>
           <div>
             <Label htmlFor="llm_model">Model</Label>
-            <Input id="llm_model" value={form.llm_model} onChange={(e) => setForm((f) => ({ ...f, llm_model: e.target.value }))} />
+            <Input
+              id="llm_model"
+              placeholder="e.g. gpt-4o-mini, gpt-4o, claude-3-5-sonnet-20241022"
+              value={form.llm_model}
+              onChange={(e) => setForm((f) => ({ ...f, llm_model: e.target.value }))}
+            />
+            <p className="mt-1 text-xs text-ink-500">Must be a real model id for the provider above - Vapi rejects an unrecognized one when placing a call.</p>
           </div>
           <div>
             <Label htmlFor="llm_temperature">Temperature</Label>
