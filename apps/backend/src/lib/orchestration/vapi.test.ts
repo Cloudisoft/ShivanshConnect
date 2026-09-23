@@ -167,20 +167,25 @@ describe('VapiProvider', () => {
       firstMessageOverride: 'Hi, am I speaking with Priya?',
       systemPromptOverride: 'You are a helpful sales agent. This lead works at Acme Inc.',
       llmProvider: 'anthropic',
+      llmModel: 'claude-3-5-sonnet-20241022',
     });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    // Real Vapi behavior: a partial assistantOverrides.model without
-    // `provider` fails 400 ("assistantOverrides.model.provider must be
-    // one of the following values: ...") even though provider was never
-    // sent at all - it must always be repeated alongside messages.
+    // Real Vapi behavior: a partial assistantOverrides.model missing
+    // `provider` or `model` fails 400 ("assistantOverrides.model.<field>
+    // must be one of the following values: ...") even though neither was
+    // ever sent at all - both must always be repeated alongside messages.
     expect(body.assistantOverrides).toEqual({
       firstMessage: 'Hi, am I speaking with Priya?',
-      model: { provider: 'anthropic', messages: [{ role: 'system', content: 'You are a helpful sales agent. This lead works at Acme Inc.' }] },
+      model: {
+        provider: 'anthropic',
+        model: 'claude-3-5-sonnet-20241022',
+        messages: [{ role: 'system', content: 'You are a helpful sales agent. This lead works at Acme Inc.' }],
+      },
     });
   });
 
-  it('createCall() falls back to the "openai" provider on a model override when llmProvider is not supplied', async () => {
+  it('createCall() falls back to "openai"/"gpt-4o-mini" on a model override when llmProvider/llmModel are not supplied', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_abc', status: 'queued' }) });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -199,6 +204,7 @@ describe('VapiProvider', () => {
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.assistantOverrides.model.provider).toBe('openai');
+    expect(body.assistantOverrides.model.model).toBe('gpt-4o-mini');
   });
 
   it('transferCall() refuses a non-E.164 destination without calling the network', async () => {
