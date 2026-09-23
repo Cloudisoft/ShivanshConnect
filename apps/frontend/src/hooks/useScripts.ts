@@ -77,7 +77,7 @@ export function useUploadScript() {
       });
       const body = await res.json();
       if (!res.ok || !body.success) throw new Error(body?.error?.message ?? 'Upload failed.');
-      return body.data as Script;
+      return { script: body.data as Script, message: body.message as string | null };
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scripts'] }),
   });

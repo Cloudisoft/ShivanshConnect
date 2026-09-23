@@ -18,3 +18,4 @@ export * from './liveMonitor.js';
 export * from './evaluation.js';
 export * from './analytics.js';
 export * from './messaging.js';
+export * from './placeholderNormalizer.js';

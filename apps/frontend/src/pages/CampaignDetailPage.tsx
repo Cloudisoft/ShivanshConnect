@@ -31,6 +31,7 @@ import { useLeadLists } from '../hooks/useLeadLists';
 import { Alert, Badge, Button, Card, Input, Label } from '../components/ui';
 import { PreLaunchModal } from '../components/campaigns/PreLaunchModal';
 import { api, ApiClientError } from '../lib/apiClient';
+import { handlePlaceholderPaste } from '../lib/placeholderPaste';
 
 const TABS = ['Overview', 'Configuration', 'Leads', 'Settings'] as const;
 type Tab = (typeof TABS)[number];
@@ -220,6 +221,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const [timezone, setTimezone] = useState(campaign.timezone);
   const [error, setError] = useState<string | null>(null);
   const [savedDraft, setSavedDraft] = useState<{ id: string } | null>(null);
+  const [promptPlaceholderNotice, setPromptPlaceholderNotice] = useState<string | null>(null);
 
   const kbQuery = useKnowledgeBases(agentId || undefined);
 
@@ -312,8 +314,10 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
           rows={5}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
+          onPaste={(e) => handlePlaceholderPaste(e, prompt, setPrompt, setPromptPlaceholderNotice)}
           disabled={!canEdit}
         />
+        {promptPlaceholderNotice && <p className="mt-1.5 text-xs text-ink-500">{promptPlaceholderNotice}</p>}
       </Card>
 
       <Card className="grid gap-4 sm:grid-cols-2">

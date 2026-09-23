@@ -6,6 +6,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useCreateScript, useDeleteScript, useScriptTemplates, useScripts, useUpdateScript } from '../../hooks/useScripts';
 import { Alert, Button, Card, Input, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
+import { handlePlaceholderPaste } from '../../lib/placeholderPaste';
 
 export function ScriptsTab({ agentId }: { agentId: string }): JSX.Element {
   const { hasPermission } = useAuth();
@@ -91,6 +92,7 @@ function ScriptForm({
   const [name, setName] = useState(initialName ?? '');
   const [content, setContent] = useState(initialContent ?? '');
   const [error, setError] = useState<string | null>(null);
+  const [placeholderNotice, setPlaceholderNotice] = useState<string | null>(null);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -142,6 +144,7 @@ function ScriptForm({
             rows={8}
             value={content}
             onChange={(e) => setContent(e.target.value)}
+            onPaste={(e) => handlePlaceholderPaste(e, content, setContent, setPlaceholderNotice)}
           />
           <div className="mt-2 flex flex-wrap gap-1.5">
             {PROMPT_VARIABLES.map((v) => (
@@ -150,6 +153,7 @@ function ScriptForm({
               </code>
             ))}
           </div>
+          {placeholderNotice && <p className="mt-1.5 text-xs text-ink-500">{placeholderNotice}</p>}
         </div>
         <div className="flex gap-2">
           <Button type="submit" disabled={pending}>
