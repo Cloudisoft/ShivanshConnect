@@ -83,6 +83,18 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
         } as unknown as Response;
       }
 
+      if (url.startsWith('https://api.elevenlabs.io/v1/voices/') && method === 'GET') {
+        const voiceId = url.split('/').pop()!;
+        if (voiceId === 'el-unknown-id') {
+          return { ok: false, status: 404, text: async () => '{"detail":"Voice not found"}' } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ voice_id: voiceId, name: 'Whatever ElevenLabs Calls It', labels: { gender: 'male', accent: 'british' } }),
+        } as unknown as Response;
+      }
+
       if (url === 'https://api.elevenlabs.io/v1/voices/add' && method === 'POST') {
         const name = init?.body instanceof FormData ? init.body.get('name') : null;
         if (name === 'Fail This Clone') {
@@ -184,6 +196,64 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     expect(listB.json().data).toHaveLength(0);
     const catalogB = await app.inject({ method: 'GET', url: '/api/v1/voice-providers', headers: { authorization: `Bearer ${tokenB}` } });
     expect(catalogB.json().data.find((p: any) => p.key === 'elevenlabs').status).toBe('not_connected');
+  });
+
+  it('POST /voices/import-by-id registers specific voices under caller-chosen names, fetching real metadata, and reports per-voice failures', async () => {
+    const signup = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/signup',
+      payload: { organization_name: 'Import By Id Org', full_name: 'Imani Import', email: 'imani@importbyid.com', password: 'supersecret123' },
+    });
+    const token = signup.json().data.session.access_token;
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/voice-providers/elevenlabs/credentials',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { kind: 'api_key', api_key: 'sk-elevenlabs-real-secret-key-12345' },
+    });
+
+    const importRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/voices/import-by-id',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        provider_key: 'elevenlabs',
+        voices: [
+          { provider_voice_id: 'el-christopher', name: 'christopher' },
+          { provider_voice_id: 'el-ella', name: 'ella' },
+          { provider_voice_id: 'el-unknown-id', name: 'ghost' },
+        ],
+      },
+    });
+    expect(importRes.statusCode).toBe(200);
+    expect(importRes.json().data.created).toBe(2);
+    expect(importRes.json().data.updated).toBe(0);
+    expect(importRes.json().data.failed).toHaveLength(1);
+    expect(importRes.json().data.failed[0].provider_voice_id).toBe('el-unknown-id');
+
+    const list = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${token}` } });
+    const names = list.json().data.map((v: any) => v.name).sort();
+    expect(names).toEqual(['christopher', 'ella']);
+    // The caller-chosen name is kept, not ElevenLabs' own voice name.
+    expect(list.json().data.every((v: any) => v.name !== 'Whatever ElevenLabs Calls It')).toBe(true);
+    // Real metadata (gender/accent) was fetched from the provider, not
+    // left as an unknown default.
+    expect(list.json().data.every((v: any) => v.gender === 'male' && v.accent === 'british')).toBe(true);
+
+    // Re-importing the same id with a new name updates in place rather
+    // than creating a duplicate row.
+    const reimportRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/voices/import-by-id',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { provider_key: 'elevenlabs', voices: [{ provider_voice_id: 'el-christopher', name: 'chris-renamed' }] },
+    });
+    expect(reimportRes.json().data.created).toBe(0);
+    expect(reimportRes.json().data.updated).toBe(1);
+    const listAfterRename = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${token}` } });
+    expect(listAfterRename.json().data).toHaveLength(2);
+    expect(listAfterRename.json().data.map((v: any) => v.name).sort()).toEqual(['chris-renamed', 'ella']);
   });
 
   it('POST /voices/bulk-delete removes only the caller org\'s own ids, scoped correctly cross-org', async () => {

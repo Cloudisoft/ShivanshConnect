@@ -1,10 +1,18 @@
 import { useRef, useState } from 'react';
-import { Play, RefreshCw, Trash2 } from 'lucide-react';
+import { Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { VOICE_PROVIDER_LABELS, type Voice, type VoiceProviderKey } from '@shivanshconnect/shared';
 import { useAuth } from '../../hooks/useAuth';
-import { useBulkDeleteVoices, useDeleteVoice, usePreviewVoice, useSyncVoices, useVoices, type VoiceFilters } from '../../hooks/useVoices';
+import {
+  useBulkDeleteVoices,
+  useDeleteVoice,
+  useImportVoicesById,
+  usePreviewVoice,
+  useSyncVoices,
+  useVoices,
+  type VoiceFilters,
+} from '../../hooks/useVoices';
 import { useVoiceProviders } from '../../hooks/useVoiceProviders';
-import { Alert, Badge, Button, Card } from '../../components/ui';
+import { Alert, Badge, Button, Card, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
 
 const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000/api/v1').replace(/\/api\/v1\/?$/, '');
@@ -93,6 +101,113 @@ function SyncButton({ providerKey }: { providerKey: VoiceProviderKey }): JSX.Ele
   );
 }
 
+/** Parses lines like "dI1NUXhJknE1XUw1Jsws - christopher" (also tolerates
+ * "id, name", "id: name" or just whitespace) into { provider_voice_id,
+ * name } pairs - the exact shape a caller pastes an id/name list in as. */
+function parseVoiceLines(text: string): { provider_voice_id: string; name: string }[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\S+)\s*[-,:]\s*(.+)$/);
+      if (match) return { provider_voice_id: match[1], name: match[2].trim() };
+      const parts = line.split(/\s+/);
+      return { provider_voice_id: parts[0], name: parts.slice(1).join(' ').trim() };
+    })
+    .filter((v) => v.provider_voice_id && v.name);
+}
+
+function ImportByIdModal({ providerKeys, onClose }: { providerKeys: VoiceProviderKey[]; onClose: () => void }): JSX.Element {
+  const importVoices = useImportVoicesById();
+  const [providerKey, setProviderKey] = useState<VoiceProviderKey>(providerKeys[0]);
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ created: number; updated: number; failed: { provider_voice_id: string; name: string; error: string }[] } | null>(null);
+
+  const parsed = parseVoiceLines(text);
+
+  async function handleImport() {
+    setError(null);
+    setResult(null);
+    try {
+      const res = await importVoices.mutateAsync({ provider_key: providerKey, voices: parsed });
+      setResult(res);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Import failed.');
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
+      <Card className="w-full max-w-lg">
+        <h2 className="text-sm font-semibold text-ink-900">Import voices by ID</h2>
+        <p className="mt-1 text-xs text-ink-500">
+          Paste one voice per line as <code>voice_id - name</code>. Real metadata (gender, language) is fetched
+          from the provider; the name you give here is what's kept, not the provider's own name.
+        </p>
+
+        <div className="mt-3">
+          <Label htmlFor="import_provider">Provider</Label>
+          <select
+            id="import_provider"
+            className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm"
+            value={providerKey}
+            onChange={(e) => setProviderKey(e.target.value as VoiceProviderKey)}
+          >
+            {providerKeys.map((k) => (
+              <option key={k} value={k}>
+                {VOICE_PROVIDER_LABELS[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mt-3">
+          <Label htmlFor="import_text">Voices</Label>
+          <textarea
+            id="import_text"
+            className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 font-mono text-xs"
+            rows={8}
+            placeholder={'dI1NUXhJknE1XUw1Jsws - christopher\nB5k6pLxsuVvKdakZjLSv - ella'}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-ink-500">{parsed.length} voice(s) parsed.</p>
+        </div>
+
+        {error && <Alert>{error}</Alert>}
+        {result && (
+          <Alert variant={result.failed.length > 0 ? 'error' : 'success'}>
+            {result.created} added, {result.updated} updated
+            {result.failed.length > 0 && (
+              <>
+                , {result.failed.length} failed:
+                <ul className="mt-1 list-disc pl-4">
+                  {result.failed.map((f) => (
+                    <li key={f.provider_voice_id}>
+                      {f.name} ({f.provider_voice_id}): {f.error}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </Alert>
+        )}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            {result ? 'Done' : 'Cancel'}
+          </Button>
+          <Button onClick={handleImport} disabled={importVoices.isPending || parsed.length === 0}>
+            {importVoices.isPending ? 'Importing...' : `Import ${parsed.length || ''}`}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export function VoicesTab(): JSX.Element {
   const { hasPermission } = useAuth();
   const canManage = hasPermission('voices.manage');
@@ -100,6 +215,7 @@ export function VoicesTab(): JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [showImportById, setShowImportById] = useState(false);
 
   const voicesQuery = useVoices(filters);
   const providersQuery = useVoiceProviders();
@@ -143,9 +259,16 @@ export function VoicesTab(): JSX.Element {
             {connectedProviders.map((p) => (
               <SyncButton key={p.key} providerKey={p.key} />
             ))}
+            <Button variant="secondary" onClick={() => setShowImportById(true)}>
+              <Plus className="h-3.5 w-3.5" /> Import by ID
+            </Button>
           </div>
         )}
       </div>
+
+      {showImportById && (
+        <ImportByIdModal providerKeys={connectedProviders.map((p) => p.key)} onClose={() => setShowImportById(false)} />
+      )}
 
       {canManage && connectedProviders.length === 0 && !providersQuery.isLoading && (
         <Alert variant="info">
