@@ -205,6 +205,57 @@ describe('Phase 6: call origination via Vapi + webhook idempotency + cross-org i
     expect(fake.tables.webhook_events.length).toBe(webhookEventsBefore);
   });
 
+  it('resolves an unanswered call to completed instead of getting stuck at dialing/ringing (real no-answer path)', async () => {
+    const token = await signup('Orchestration No Answer Org', 'orch-noanswer@test.com');
+    const { agent, phoneNumber } = await setUpAgentAndNumber(token);
+
+    const createCallRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/calls',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { agent_id: agent.id, phone_number_id: phoneNumber.id, customer_number: '+14845557777', engine: 'vapi' },
+    });
+    expect(createCallRes.statusCode).toBe(200);
+    const call = createCallRes.json().data;
+    expect(call.status).toBe('dialing');
+
+    // Vapi webhook: status-update -> ringing. A real no-answer call NEVER
+    // reaches 'in-progress'/'answered' - this is the exact gap the
+    // transition table was missing (dialing/ringing had no path straight
+    // to 'completed'), which silently rejected the transition below and
+    // left the call showing 'dialing' forever instead of its real outcome.
+    const ringingWebhook = await app.inject({
+      method: 'POST',
+      url: '/api/v1/webhooks/vapi',
+      payload: { message: { type: 'status-update', status: 'ringing', call: { id: call.vapi_call_id }, timestamp: 1000 } },
+    });
+    expect(ringingWebhook.statusCode).toBe(200);
+
+    const afterRinging = await app.inject({ method: 'GET', url: `/api/v1/calls/${call.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(afterRinging.json().data.status).toBe('ringing');
+    expect(afterRinging.json().data.answered_at).toBeNull();
+
+    // Vapi webhook: end-of-call-report with no-answer, straight from
+    // 'ringing' - no 'in-progress' step ever occurred.
+    const endReportWebhook = await app.inject({
+      method: 'POST',
+      url: '/api/v1/webhooks/vapi',
+      payload: { message: { type: 'end-of-call-report', call: { id: call.vapi_call_id }, endedReason: 'no-answer', durationSeconds: 0, timestamp: 2000 } },
+    });
+    expect(endReportWebhook.statusCode).toBe(200);
+
+    const afterEnded = await app.inject({ method: 'GET', url: `/api/v1/calls/${call.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(afterEnded.json().data.status).toBe('completed');
+    expect(afterEnded.json().data.ended_reason).toBe('no-answer');
+    expect(afterEnded.json().data.duration_seconds).toBe(0);
+
+    // The invalid-transition rejection path must never have fired for this
+    // call - the fix landed the real transition instead of silently
+    // dropping it.
+    const events = fake.tables.call_events.filter((e) => e.call_id === call.id);
+    expect(events.some((e) => e.event_type === 'call.invalid_transition_rejected')).toBe(false);
+  });
+
   it('never lets a webhook payload for org A update a call belonging to org B, and a stray call id is recorded but changes nothing', async () => {
     const tokenA = await signup('Orchestration Org B1', 'orch-b1@test.com');
     const tokenB = await signup('Orchestration Org B2', 'orch-b2@test.com');

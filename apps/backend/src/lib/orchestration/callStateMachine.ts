@@ -41,8 +41,14 @@ const TRANSITIONS: Record<CallStatus, ReadonlySet<CallStatus>> = {
   // some engines (Vapi's own 'in-progress' status in particular) report
   // dial-connect-and-answer as a single transition without a distinct
   // separately-observable 'ringing'/'answered' event in between.
-  dialing: new Set(['ringing', 'answered', 'in_progress', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
-  ringing: new Set(['answered', 'in_progress', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
+  // 'completed' is reachable directly from 'dialing'/'ringing' too: an
+  // unanswered call (no-answer, or the caller declines/hangs up before
+  // picking up) ends without ever passing through 'answered'/'in_progress'
+  // - the engine's end-of-call-report still reports it as ended, not
+  // failed, and rejecting that transition left real no-answer calls stuck
+  // showing 'dialing' forever instead of their actual terminal outcome.
+  dialing: new Set(['ringing', 'answered', 'in_progress', 'completed', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
+  ringing: new Set(['answered', 'in_progress', 'completed', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
   answered: new Set(['in_progress', 'failed', 'completed', 'dnc']),
   in_progress: new Set(['transfer_pending', 'completed', 'failed', 'voicemail', 'answering_machine', 'dnc']),
   voicemail: new Set(['completed', 'failed', 'dnc']),

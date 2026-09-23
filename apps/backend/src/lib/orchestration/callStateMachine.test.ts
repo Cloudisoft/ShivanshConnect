@@ -54,4 +54,14 @@ describe('call state machine', () => {
   it('rejects skipping straight from queued to in_progress (must go through dialing first)', () => {
     expect(isValidCallTransition('queued', 'in_progress')).toBe(false);
   });
+
+  it('allows an unanswered call to end directly from dialing/ringing (no-answer, declined before pickup)', () => {
+    // A real no-answer call never passes through 'answered'/'in_progress' -
+    // the engine's end-of-call-report still reports it 'completed'
+    // (disposition captures the no-answer outcome separately). Rejecting
+    // this left real calls stuck showing 'dialing' forever instead of
+    // their actual terminal state.
+    expect(isValidCallTransition('dialing', 'completed')).toBe(true);
+    expect(isValidCallTransition('ringing', 'completed')).toBe(true);
+  });
 });
