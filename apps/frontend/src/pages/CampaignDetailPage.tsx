@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeftRight, Info } from 'lucide-react';
 import {
@@ -215,7 +215,12 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const voicesQuery = useVoices();
   const scriptsQuery = useScripts();
 
-  const v = campaign.current_version;
+  // A saved-but-unpublished draft never showed up here at all: the GET
+  // only ever returned current_version (the last PUBLISHED version - see
+  // routes/campaigns.ts), so reopening this tab after "Save draft" looked
+  // like the draft's contents had vanished. draft_version is the fix -
+  // prefer it over the published version whenever one exists.
+  const v = campaign.draft_version ?? campaign.current_version;
   const [prompt, setPrompt] = useState(v?.prompt ?? '');
   const [agentId, setAgentId] = useState(v?.ai_agent_id ?? '');
   const [phoneNumberId, setPhoneNumberId] = useState(campaign.phone_number_id ?? '');
@@ -237,6 +242,28 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const [promptPlaceholderNotice, setPromptPlaceholderNotice] = useState<string | null>(null);
 
   const kbQuery = useKnowledgeBases(agentId || undefined);
+
+  const versionId = v?.id;
+  useEffect(() => {
+    // Re-sync the form when which version is actually active changes
+    // (e.g. a draft just got created/loaded, or was published and
+    // archived) - deliberately keyed on the version id, not the campaign
+    // object itself, since this query polls every 5s for live counts and
+    // would otherwise wipe out in-progress edits on every refetch.
+    setPrompt(v?.prompt ?? '');
+    setAgentId(v?.ai_agent_id ?? '');
+    setVoiceId(v?.voice_id ?? '');
+    setScriptId(v?.script_id ?? '');
+    setKbIds(v?.knowledge_base_ids ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versionId]);
+
+  const existingDraftId = campaign.draft_version?.id ?? null;
+  useEffect(() => {
+    // Reopening a campaign that already has a saved draft should offer
+    // "Publish this draft" immediately, not only after clicking Save again.
+    setSavedDraft(existingDraftId ? { id: existingDraftId } : null);
+  }, [existingDraftId]);
 
   function toggleDay(day: number) {
     setCallingDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day].sort()));
@@ -308,13 +335,25 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
         </Alert>
       )}
 
-      {v && (
+      {campaign.draft_version ? (
         <Alert variant="info">
           <div className="flex items-center gap-2">
             <Info className="h-4 w-4" />
-            Current published version: v{v.version_number}, published {v.published_at ? new Date(v.published_at).toLocaleString() : 'never'}. Editing below and saving creates a NEW draft version - it does not change what's currently running.
+            Showing your saved draft (v{campaign.draft_version.version_number}) - it's not live yet. Publish it to replace{' '}
+            {campaign.current_version ? `the currently published v${campaign.current_version.version_number}` : "what's running"}.
           </div>
         </Alert>
+      ) : (
+        campaign.current_version && (
+          <Alert variant="info">
+            <div className="flex items-center gap-2">
+              <Info className="h-4 w-4" />
+              Current published version: v{campaign.current_version.version_number}, published{' '}
+              {campaign.current_version.published_at ? new Date(campaign.current_version.published_at).toLocaleString() : 'never'}. Editing below and
+              saving creates a NEW draft version - it does not change what's currently running.
+            </div>
+          </Alert>
+        )
       )}
 
       <Card>
@@ -537,7 +576,6 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
           )}
         </div>
       )}
-      {campaign.status === 'running' && <Alert variant="info">Pause this campaign to edit its configuration.</Alert>}
     </div>
   );
 }

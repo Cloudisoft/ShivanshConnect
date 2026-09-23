@@ -104,15 +104,21 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     const supabase = getSupabaseAdmin();
     const orgId = req.user!.organizationId;
     const campaign = await getOwnedCampaign(supabase, id, orgId);
-    const counts = await computeCampaignCounts(supabase, id);
 
-    let currentVersion = null;
-    if (campaign.current_version_id) {
-      const { data } = await supabase.from('campaign_versions').select('*').eq('id', campaign.current_version_id).maybeSingle();
-      currentVersion = data;
-    }
+    // current_version_id only ever points at the last PUBLISHED version
+    // (see the /publish handler below - creating a version never touches
+    // it) - a draft saved via POST /:id/versions was never returned here
+    // at all, so reopening the Configuration tab after saving a draft
+    // showed empty/stale fields instead of what was actually saved.
+    const [counts, currentVersionResult, draftVersionResult] = await Promise.all([
+      computeCampaignCounts(supabase, id),
+      campaign.current_version_id
+        ? supabase.from('campaign_versions').select('*').eq('id', campaign.current_version_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase.from('campaign_versions').select('*').eq('campaign_id', id).eq('status', 'draft').order('version_number', { ascending: false }).limit(1).maybeSingle(),
+    ]);
 
-    return ok({ ...campaign, counts, current_version: currentVersion });
+    return ok({ ...campaign, counts, current_version: currentVersionResult.data ?? null, draft_version: draftVersionResult.data ?? null });
   });
 
   // PATCH /api/v1/campaigns/:id
