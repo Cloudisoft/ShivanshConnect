@@ -115,6 +115,7 @@ function OverviewTab({ campaign }: { campaign: CampaignDetail }): JSX.Element {
   const pause = useCampaignLifecycleAction('pause');
   const resume = useCampaignLifecycleAction('resume');
   const stop = useCampaignLifecycleAction('stop');
+  const restart = useCampaignLifecycleAction('restart');
   const updateConcurrency = useUpdateConcurrency();
   const [concurrencyDraft, setConcurrencyDraft] = useState(campaign.concurrency_limit);
 
@@ -174,6 +175,11 @@ function OverviewTab({ campaign }: { campaign: CampaignDetail }): JSX.Element {
           {['running', 'paused', 'scheduled'].includes(campaign.status) && (
             <Button variant="danger" onClick={() => stop.mutate(campaign.id)} disabled={stop.isPending}>
               Stop
+            </Button>
+          )}
+          {['stopped', 'completed', 'failed'].includes(campaign.status) && (
+            <Button onClick={() => restart.mutate(campaign.id)} disabled={restart.isPending}>
+              Restart campaign
             </Button>
           )}
         </div>

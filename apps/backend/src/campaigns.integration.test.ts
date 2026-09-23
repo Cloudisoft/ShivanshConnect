@@ -274,6 +274,38 @@ describe('Phase 7: campaign engine end-to-end', () => {
     expect(fake.tables.calls.some((c) => c.lead_id === dncLead.id)).toBe(false);
   });
 
+  it('restarts a stopped campaign back to running, but rejects restart from any other status', async () => {
+    const token = await signup('Restart Org', `restart-${Date.now()}@test.com`);
+    const { agent, phoneNumber } = await setUpOrgBasics(token);
+    const { campaign, version } = await createCampaignWithLeads(token, agent.id, phoneNumber.id, 5);
+
+    // Never restartable before it has ever run.
+    const restartTooEarly = await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/restart`, headers: { authorization: `Bearer ${token}` } });
+    expect(restartTooEarly.statusCode).toBe(422);
+
+    await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/versions/${version.id}/publish`, headers: { authorization: `Bearer ${token}` } });
+    await app.inject({ method: 'PATCH', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` }, payload: { transfer_number_e164: '+14845550099' } });
+
+    const startRes = await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/start`, headers: { authorization: `Bearer ${token}` } });
+    expect(startRes.json().data.status).toBe('running');
+
+    // Never restartable while still running - /stop or /pause first.
+    const restartWhileRunning = await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/restart`, headers: { authorization: `Bearer ${token}` } });
+    expect(restartWhileRunning.statusCode).toBe(422);
+
+    const stopRes = await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/stop`, headers: { authorization: `Bearer ${token}` } });
+    expect(stopRes.json().data.status).toBe('stopped');
+
+    // Now restartable: goes straight back to running (same preflight-gated
+    // path /start uses), and can be dispatched against immediately.
+    const restartRes = await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/restart`, headers: { authorization: `Bearer ${token}` } });
+    expect(restartRes.statusCode).toBe(200);
+    expect(restartRes.json().data.status).toBe('running');
+
+    const result = await processCampaign(fake.tables.campaigns.find((c) => c.id === campaign.id)!);
+    expect(result.dispatched).toBeGreaterThan(0);
+  });
+
   it('never lets a running campaign edit change the already-published snapshot, even after the underlying agent is re-published', async () => {
     const token = await signup('Snapshot Org', `snapshot-${Date.now()}@test.com`);
     const { agent, phoneNumber } = await setUpOrgBasics(token);

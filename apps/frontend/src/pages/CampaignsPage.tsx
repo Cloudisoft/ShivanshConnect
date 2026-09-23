@@ -73,6 +73,7 @@ function CampaignCard({ campaign }: { campaign: CampaignWithCounts }): JSX.Eleme
   const pause = useCampaignLifecycleAction('pause');
   const resume = useCampaignLifecycleAction('resume');
   const stop = useCampaignLifecycleAction('stop');
+  const restart = useCampaignLifecycleAction('restart');
   const archive = useCampaignLifecycleAction('archive');
   const duplicate = useDuplicateCampaign();
   const deleteCampaign = useDeleteCampaign();
@@ -80,7 +81,7 @@ function CampaignCard({ campaign }: { campaign: CampaignWithCounts }): JSX.Eleme
   const counts = campaign.counts;
   const called = counts.total - counts.pending - counts.retry_pending;
   const progressPct = counts.total > 0 ? Math.round((called / counts.total) * 100) : 0;
-  const busy = start.isPending || pause.isPending || resume.isPending || stop.isPending || archive.isPending || deleteCampaign.isPending;
+  const busy = start.isPending || pause.isPending || resume.isPending || stop.isPending || restart.isPending || archive.isPending || deleteCampaign.isPending;
 
   function handleDelete() {
     if (!window.confirm(`Delete "${campaign.name}"? This permanently removes the campaign and cannot be undone.`)) return;
@@ -148,6 +149,11 @@ function CampaignCard({ campaign }: { campaign: CampaignWithCounts }): JSX.Eleme
           {['running', 'paused', 'scheduled'].includes(campaign.status) && (
             <Button variant="secondary" disabled={busy} onClick={() => stop.mutate(campaign.id)}>
               Stop
+            </Button>
+          )}
+          {['stopped', 'completed', 'failed'].includes(campaign.status) && (
+            <Button variant="secondary" disabled={busy} onClick={() => restart.mutate(campaign.id)}>
+              Restart
             </Button>
           )}
           <Button variant="ghost" disabled={duplicate.isPending} onClick={() => duplicate.mutate(campaign.id)}>
