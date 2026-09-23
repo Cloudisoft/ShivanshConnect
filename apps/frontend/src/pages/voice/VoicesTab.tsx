@@ -269,7 +269,9 @@ export function VoicesTab(): JSX.Element {
                   <td className="px-4 py-3 font-mono text-xs text-ink-500">{voice.provider_voice_id.slice(0, 24)}</td>
                   <td className="px-4 py-3">
                     {voice.is_cloned && voice.clone_status && voice.clone_status !== 'ready' && voice.clone_status !== 'n/a' ? (
-                      <Badge tone={voice.clone_status === 'failed' ? 'danger' : 'warning'}>{voice.clone_status}</Badge>
+                      <span title={voice.clone_status === 'failed' && voice.clone_error ? voice.clone_error : undefined}>
+                        <Badge tone={voice.clone_status === 'failed' ? 'danger' : 'warning'}>{voice.clone_status}</Badge>
+                      </span>
                     ) : (
                       <Badge tone={voice.status === 'active' ? 'success' : 'neutral'}>{voice.status}</Badge>
                     )}

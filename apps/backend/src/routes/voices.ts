@@ -22,7 +22,7 @@ import { toAdapterCredentials } from './voiceProviders.js';
 import { randomUUID } from 'node:crypto';
 
 const VOICE_COLUMNS =
-  'id, organization_id, provider_key, provider_voice_id, name, gender, language, accent, description, status, is_cloned, source_sample_storage_path, clone_status, consent_confirmed, created_by, created_at, updated_at';
+  'id, organization_id, provider_key, provider_voice_id, name, gender, language, accent, description, status, is_cloned, source_sample_storage_path, clone_status, clone_error, consent_confirmed, created_by, created_at, updated_at';
 
 const SELF_HOSTED_PROVIDERS: VoiceProviderKey[] = ['omnivoice', 'voxcpm'];
 
@@ -289,11 +289,17 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
           });
           await supabase
             .from('voices')
-            .update({ provider_voice_id: result.providerVoiceId, clone_status: result.status })
+            .update({ provider_voice_id: result.providerVoiceId, clone_status: result.status, clone_error: null })
             .eq('id', voice.id);
         } catch (err) {
           req.log.error({ err, voiceId: voice.id }, 'Voice cloning failed');
-          await supabase.from('voices').update({ clone_status: 'failed' }).eq('id', voice.id);
+          // The adapter's own error message already carries the real
+          // provider response (see e.g. CartesiaProvider.createVoice,
+          // which forwards the API's status + body) - previously logged
+          // server-side only and discarded, leaving the org with no way
+          // to know why cloning failed. Now surfaced on the voice row.
+          const message = err instanceof Error ? err.message : 'Cloning failed for an unknown reason.';
+          await supabase.from('voices').update({ clone_status: 'failed', clone_error: message.slice(0, 2000) }).eq('id', voice.id);
         }
       })().catch((err) => req.log.error({ err, voiceId: voice.id }, 'Voice cloning hand-off failed'));
     });

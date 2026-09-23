@@ -387,6 +387,46 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     return ok(updated);
   });
 
+  // DELETE /api/v1/agents/:id/versions/:versionId - draft/archived history
+  // only; the published version is the live one and must be replaced via
+  // publish, never deleted out from under a running agent.
+  app.delete('/:id/versions/:versionId', async (req) => {
+    const { id, versionId } = req.params as { id: string; versionId: string };
+    uuidSchema.parse(id);
+    uuidSchema.parse(versionId);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    await getOwnedAgent(supabase, id, orgId);
+    const existing = await getOwnedVersion(supabase, id, versionId, orgId);
+
+    if (existing.status === 'published') {
+      throw new ValidationError('The published version cannot be deleted - publish a different version first.');
+    }
+
+    const { count: callCount } = await supabase
+      .from('calls')
+      .select('id', { count: 'exact', head: true })
+      .eq('ai_agent_version_id', versionId);
+    if (callCount && callCount > 0) {
+      throw new ConflictError(`This version was used for ${callCount} call${callCount === 1 ? '' : 's'} and can't be deleted - its call history depends on it.`);
+    }
+
+    const { error } = await supabase.from('ai_agent_versions').delete().eq('id', versionId);
+    if (error) throw error;
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.AGENT_VERSION_DELETED,
+      entityType: 'ai_agent_version',
+      entityId: versionId,
+      oldValue: { agent_id: id, version_number: existing.version_number, status: existing.status },
+      ipAddress: req.ip,
+    });
+
+    return ok({ deleted: true });
+  });
+
   // POST /api/v1/agents/:id/versions/:versionId/publish
   app.post('/:id/versions/:versionId/publish', async (req) => {
     const { id, versionId } = req.params as { id: string; versionId: string };

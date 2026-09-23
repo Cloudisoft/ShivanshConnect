@@ -46,6 +46,7 @@ export const AUDIT_ACTIONS = {
   AGENT_VERSION_UPDATED: 'agent_version.updated',
   AGENT_VERSION_PUBLISHED: 'agent_version.published',
   AGENT_VERSION_RESTORED: 'agent_version.restored',
+  AGENT_VERSION_DELETED: 'agent_version.deleted',
   SCRIPT_CREATED: 'script.created',
   SCRIPT_UPDATED: 'script.updated',
   SCRIPT_DELETED: 'script.deleted',

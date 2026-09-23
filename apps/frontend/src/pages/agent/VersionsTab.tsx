@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { Trash2 } from 'lucide-react';
 import type { AiAgentVersion } from '@shivanshconnect/shared';
 import { useAuth } from '../../hooks/useAuth';
-import { useAgentVersions, usePublishAgentVersion, useRestoreAgentVersion } from '../../hooks/useAgents';
+import { useAgentVersions, useDeleteAgentVersion, usePublishAgentVersion, useRestoreAgentVersion } from '../../hooks/useAgents';
 import { Alert, Badge, Button, Card } from '../../components/ui';
-import { ApiClientError } from '../../lib/apiClient';
+import { ApiClientError, describeApiError } from '../../lib/apiClient';
 
 const STATUS_TONE: Record<AiAgentVersion['status'], 'neutral' | 'success' | 'warning'> = {
   draft: 'neutral',
@@ -25,8 +26,10 @@ export function VersionsTab({ agentId }: { agentId: string }): JSX.Element {
   const versionsQuery = useAgentVersions(agentId);
   const publishVersion = usePublishAgentVersion(agentId);
   const restoreVersion = useRestoreAgentVersion(agentId);
+  const deleteVersion = useDeleteAgentVersion(agentId);
   const [error, setError] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
 
   const versions = versionsQuery.data ?? [];
 
@@ -63,6 +66,18 @@ export function VersionsTab({ agentId }: { agentId: string }): JSX.Element {
       await restoreVersion.mutateAsync(versionId);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : 'Could not restore this version.');
+    }
+  }
+
+  async function handleDelete(versionId: string) {
+    setError(null);
+    try {
+      await deleteVersion.mutateAsync(versionId);
+      setConfirmingDeleteId(null);
+      setCompareIds((prev) => prev.filter((id) => id !== versionId));
+    } catch (err) {
+      setError(err instanceof ApiClientError ? describeApiError(err, 'Could not delete this version.') : 'Could not delete this version.');
+      setConfirmingDeleteId(null);
     }
   }
 
@@ -106,6 +121,23 @@ export function VersionsTab({ agentId }: { agentId: string }): JSX.Element {
                 <Button variant="ghost" disabled={restoreVersion.isPending} onClick={() => handleRestore(v.id)}>
                   Restore as new draft
                 </Button>
+              )}
+              {canManage && v.status !== 'published' && (
+                confirmingDeleteId === v.id ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-ink-600">Delete v{v.version_number}?</span>
+                    <Button variant="danger" disabled={deleteVersion.isPending} onClick={() => handleDelete(v.id)}>
+                      {deleteVersion.isPending ? 'Deleting...' : 'Confirm'}
+                    </Button>
+                    <Button variant="ghost" onClick={() => setConfirmingDeleteId(null)}>
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <Button variant="ghost" onClick={() => setConfirmingDeleteId(v.id)} aria-label={`Delete version ${v.version_number}`}>
+                    <Trash2 className="h-4 w-4 text-red-600" />
+                  </Button>
+                )
               )}
             </div>
           </Card>
