@@ -60,7 +60,7 @@ export function useDuplicateCampaign() {
   });
 }
 
-export function useCampaignLifecycleAction(action: 'start' | 'pause' | 'resume' | 'stop' | 'archive') {
+export function useCampaignLifecycleAction(action: 'start' | 'pause' | 'resume' | 'stop' | 'restart' | 'archive') {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post<Campaign>(`/campaigns/${id}/${action}`),

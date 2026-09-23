@@ -438,6 +438,38 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     return ok(updated, { message: 'Campaign stopped.' });
   });
 
+  // POST /api/v1/campaigns/:id/restart - a stopped/completed/failed
+  // campaign is otherwise terminal (unlike a paused one, which /resume
+  // already handles); this reopens it for dialing again without going
+  // through archive/duplicate. Leads themselves are untouched - whatever
+  // is still eligible under the campaign's own cooldown/attempt rules
+  // (campaign_leads) simply continues from where it left off, exactly
+  // like a fresh /start would pick them up.
+  app.post('/:id/restart', { preHandler: requirePermission('campaigns.start') }, async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    const campaign = await getOwnedCampaign(supabase, id, orgId);
+    if (!['stopped', 'completed', 'failed'].includes(campaign.status)) {
+      throw new ValidationError(`Campaign cannot be restarted from status "${campaign.status}".`);
+    }
+
+    const preflight = await runCampaignPreflight(supabase, orgId, id);
+    if (!preflight.ready) {
+      throw new ValidationError('Campaign is not ready to restart.', { errors: preflight.errors });
+    }
+
+    const isFutureStart = campaign.start_date && new Date(campaign.start_date) > new Date();
+    const nextStatus = isFutureStart ? 'scheduled' : 'running';
+
+    const { data: updated, error } = await supabase.from('campaigns').update({ status: nextStatus }).eq('id', id).select('*').single();
+    if (error) throw error;
+
+    await writeAuditLog({ organizationId: orgId, userId: req.user!.id, action: AUDIT_ACTIONS.CAMPAIGN_RESTARTED, entityType: 'campaign', entityId: id, oldValue: { status: campaign.status }, newValue: { status: nextStatus }, ipAddress: req.ip });
+    return ok(updated, { message: nextStatus === 'running' ? 'Campaign restarted.' : 'Campaign scheduled to restart.' });
+  });
+
   // POST /api/v1/campaigns/:id/archive
   app.post('/:id/archive', { preHandler: requirePermission('campaigns.delete') }, async (req) => {
     const { id } = req.params as { id: string };

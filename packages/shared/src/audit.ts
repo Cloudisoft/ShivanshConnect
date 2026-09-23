@@ -88,6 +88,7 @@ export const AUDIT_ACTIONS = {
   CAMPAIGN_PAUSED: 'campaign.paused',
   CAMPAIGN_RESUMED: 'campaign.resumed',
   CAMPAIGN_STOPPED: 'campaign.stopped',
+  CAMPAIGN_RESTARTED: 'campaign.restarted',
   CAMPAIGN_ARCHIVED: 'campaign.archived',
   CAMPAIGN_CONCURRENCY_CHANGED: 'campaign.concurrency_changed',
   CAMPAIGN_LEADS_ATTACHED: 'campaign.leads_attached',
