@@ -306,6 +306,50 @@ describe('Phase 7: campaign engine end-to-end', () => {
     expect(result.dispatched).toBeGreaterThan(0);
   });
 
+  it('removes attached leads from a campaign, but never one currently on an active call', async () => {
+    const token = await signup('Remove Leads Org', `remove-leads-${Date.now()}@test.com`);
+    const { agent, phoneNumber } = await setUpOrgBasics(token);
+    const { campaign, version } = await createCampaignWithLeads(token, agent.id, phoneNumber.id, 5);
+
+    await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/versions/${version.id}/publish`, headers: { authorization: `Bearer ${token}` } });
+    await app.inject({ method: 'PATCH', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` }, payload: { transfer_number_e164: '+14845550099' } });
+    await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/start`, headers: { authorization: `Bearer ${token}` } });
+
+    const dispatchResult = await processCampaign(fake.tables.campaigns.find((c) => c.id === campaign.id)!);
+    expect(dispatchResult.dispatched).toBe(3); // concurrency_limit is 3
+
+    const allCampaignLeads = fake.tables.campaign_leads.filter((cl) => cl.campaign_id === campaign.id);
+    const dialingLead = allCampaignLeads.find((cl) => cl.status === 'dialing')!;
+    const pendingLead = allCampaignLeads.find((cl) => cl.status === 'pending')!;
+
+    const removeRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/campaigns/${campaign.id}/leads/remove`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { lead_ids: [dialingLead.lead_id, pendingLead.lead_id] },
+    });
+    expect(removeRes.statusCode).toBe(200);
+    expect(removeRes.json().data).toEqual({ removed: 1, skipped_active: 1 });
+
+    // The pending lead is gone entirely; the actively-dialing one is left
+    // untouched - never orphan an in-flight call by yanking its row out
+    // from under it.
+    const remaining = fake.tables.campaign_leads.filter((cl) => cl.campaign_id === campaign.id);
+    expect(remaining.some((cl) => cl.lead_id === pendingLead.lead_id)).toBe(false);
+    expect(remaining.some((cl) => cl.lead_id === dialingLead.lead_id)).toBe(true);
+
+    // Cross-org isolation: a different org cannot act on this campaign at
+    // all - 404, not a silent no-op.
+    const otherToken = await signup('Remove Leads Org B', `remove-leads-b-${Date.now()}@test.com`);
+    const crossOrgRemove = await app.inject({
+      method: 'POST',
+      url: `/api/v1/campaigns/${campaign.id}/leads/remove`,
+      headers: { authorization: `Bearer ${otherToken}` },
+      payload: { lead_ids: [dialingLead.lead_id] },
+    });
+    expect(crossOrgRemove.statusCode).toBe(404);
+  });
+
   it('never lets a running campaign edit change the already-published snapshot, even after the underlying agent is re-published', async () => {
     const token = await signup('Snapshot Org', `snapshot-${Date.now()}@test.com`);
     const { agent, phoneNumber } = await setUpOrgBasics(token);

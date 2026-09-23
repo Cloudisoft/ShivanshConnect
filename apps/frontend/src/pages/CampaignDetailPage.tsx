@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeftRight, Info } from 'lucide-react';
+import { ArrowLeft, ArrowLeftRight, Info, Trash2 } from 'lucide-react';
 import {
   BACKGROUND_NOISE_OPTIONS,
   CAMPAIGN_STATUS_LABELS,
@@ -16,6 +16,7 @@ import {
   useCampaignPreflight,
   useCreateCampaignVersion,
   usePublishCampaignVersion,
+  useRemoveLeads,
   useRotateLeads,
   useUpdateCampaign,
   useUpdateConcurrency,
@@ -71,7 +72,11 @@ export function CampaignDetailPage(): JSX.Element {
 
   return (
     <div>
-      <div className="flex items-center justify-between">
+      <Link to="/campaigns" className="inline-flex items-center gap-1.5 text-sm text-ink-500 hover:text-ink-700">
+        <ArrowLeft className="h-4 w-4" /> Back to campaigns
+      </Link>
+
+      <div className="mt-3 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-ink-900">{campaign.name}</h1>
           {campaign.description && <p className="mt-1 text-sm text-ink-500">{campaign.description}</p>}
@@ -593,6 +598,7 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
   const leadsQuery = useCampaignLeads(campaignId, page, 25, statusFilter || undefined);
   const leadListsQuery = useLeadLists();
   const attachLeads = useAttachLeads();
+  const removeLeads = useRemoveLeads();
   const rotateLeads = useRotateLeads();
   const [selectedListId, setSelectedListId] = useState('');
   const [rotatePreview, setRotatePreview] = useState<{ rotated: number; excluded: number; decisions: RotateDecision[] } | null>(null);
@@ -620,6 +626,16 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
   async function handleConfirmRotate() {
     await rotateLeads.mutateAsync({ id: campaignId, dry_run: false });
     setRotatePreview(null);
+  }
+
+  async function handleRemove(leadId: string) {
+    if (!window.confirm('Remove this lead from the campaign? It will not be dialed again unless re-attached.')) return;
+    setError(null);
+    try {
+      await removeLeads.mutateAsync({ id: campaignId, lead_ids: [leadId] });
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Failed to remove this lead.');
+    }
   }
 
   return (
@@ -711,23 +727,41 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
               <th className="px-2 py-1">Disposition</th>
               <th className="px-2 py-1">Attempts</th>
               <th className="px-2 py-1">Next eligible</th>
+              {hasPermission('campaigns.edit') && <th className="px-2 py-1 text-right">Actions</th>}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.id} className="border-t border-ink-100">
-                <td className="px-2 py-1">{row.leads ? `${row.leads.first_name} ${row.leads.last_name}` : '-'}</td>
-                <td className="px-2 py-1">{row.leads?.phone_normalized ?? '-'}</td>
-                <td className="px-2 py-1">
-                  <Badge>{row.status}</Badge>
-                </td>
-                <td className="px-2 py-1">
-                  {row.final_disposition ? <Badge tone="neutral">{row.final_disposition}</Badge> : <span className="text-ink-400">-</span>}
-                </td>
-                <td className="px-2 py-1">{row.attempt_count}</td>
-                <td className="px-2 py-1">{row.next_eligible_at ? new Date(row.next_eligible_at).toLocaleString() : '-'}</td>
-              </tr>
-            ))}
+            {rows.map((row) => {
+              const isActive = ['dialing', 'ringing', 'connected', 'in_progress', 'transferring'].includes(row.status);
+              return (
+                <tr key={row.id} className="border-t border-ink-100">
+                  <td className="px-2 py-1">{row.leads ? `${row.leads.first_name} ${row.leads.last_name}` : '-'}</td>
+                  <td className="px-2 py-1">{row.leads?.phone_normalized ?? '-'}</td>
+                  <td className="px-2 py-1">
+                    <Badge>{row.status}</Badge>
+                  </td>
+                  <td className="px-2 py-1">
+                    {row.final_disposition ? <Badge tone="neutral">{row.final_disposition}</Badge> : <span className="text-ink-400">-</span>}
+                  </td>
+                  <td className="px-2 py-1">{row.attempt_count}</td>
+                  <td className="px-2 py-1">{row.next_eligible_at ? new Date(row.next_eligible_at).toLocaleString() : '-'}</td>
+                  {hasPermission('campaigns.edit') && (
+                    <td className="px-2 py-1 text-right">
+                      <button
+                        type="button"
+                        className="text-ink-400 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                        onClick={() => handleRemove(row.lead_id)}
+                        disabled={isActive || removeLeads.isPending}
+                        title={isActive ? 'This lead is on an active call and cannot be removed right now.' : 'Remove from campaign'}
+                        aria-label="Remove from campaign"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {pagination && pagination.total_pages > 1 && (

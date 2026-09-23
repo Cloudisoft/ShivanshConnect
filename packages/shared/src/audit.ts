@@ -92,6 +92,7 @@ export const AUDIT_ACTIONS = {
   CAMPAIGN_ARCHIVED: 'campaign.archived',
   CAMPAIGN_CONCURRENCY_CHANGED: 'campaign.concurrency_changed',
   CAMPAIGN_LEADS_ATTACHED: 'campaign.leads_attached',
+  CAMPAIGN_LEADS_REMOVED: 'campaign.leads_removed',
   CAMPAIGN_LEADS_ROTATED: 'campaign.leads_rotated',
   DIALING_SETTINGS_UPDATED: 'dialing_settings.updated',
 
