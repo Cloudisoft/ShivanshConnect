@@ -341,7 +341,10 @@ export class VapiProvider implements CallOrchestrationProvider {
       const assistantOverrides: Record<string, unknown> = {};
       if (params.firstMessageOverride) assistantOverrides.firstMessage = params.firstMessageOverride;
       if (params.systemPromptOverride) {
-        assistantOverrides.model = { messages: [{ role: 'system', content: params.systemPromptOverride }] };
+        // Vapi requires `provider` on the override's model object even for
+        // a partial (messages-only) override - see CreateCallParams'
+        // llmProvider doc comment for why this can't just be omitted.
+        assistantOverrides.model = { provider: params.llmProvider ?? 'openai', messages: [{ role: 'system', content: params.systemPromptOverride }] };
       }
       payload.assistantOverrides = assistantOverrides;
     }

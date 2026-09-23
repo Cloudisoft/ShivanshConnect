@@ -365,6 +365,7 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
         transferDestinationE164: transferDestination,
         firstMessageOverride,
         systemPromptOverride,
+        llmProvider: version.llm_provider,
       });
 
       await supabase.from('calls').update({ vapi_call_id: created.providerCallId, started_at: new Date().toISOString() }).eq('id', call.id);

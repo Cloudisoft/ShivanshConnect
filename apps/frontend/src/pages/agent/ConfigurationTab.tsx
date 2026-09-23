@@ -3,6 +3,8 @@ import { Play } from 'lucide-react';
 import {
   BEHAVIOR_TRAITS,
   EVALUATION_SCORE_CATEGORY_LABELS,
+  LLM_PROVIDERS,
+  LLM_PROVIDER_LABELS,
   PERSONALITY_TONES,
   PERSONALITY_TRAITS,
   PROMPT_VARIABLES,
@@ -466,7 +468,18 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <Label htmlFor="llm_provider">Provider</Label>
-            <Input id="llm_provider" value={form.llm_provider} onChange={(e) => setForm((f) => ({ ...f, llm_provider: e.target.value }))} />
+            <select
+              id="llm_provider"
+              className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+              value={form.llm_provider}
+              onChange={(e) => setForm((f) => ({ ...f, llm_provider: e.target.value }))}
+            >
+              {LLM_PROVIDERS.map((p) => (
+                <option key={p} value={p}>
+                  {LLM_PROVIDER_LABELS[p]}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <Label htmlFor="llm_model">Model</Label>

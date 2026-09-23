@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AGENT_ROLES } from '@shivanshconnect/shared';
+import { AGENT_ROLES, LLM_PROVIDERS } from '@shivanshconnect/shared';
 import { paginationSchema } from './common.js';
 
 export const createAgentSchema = z.object({
@@ -52,7 +52,7 @@ export const agentVersionConfigSchema = z.object({
   fallback_behavior: z.string().trim().max(20000).nullable().optional(),
   transfer_rules: transferRulesSchema.optional(),
   call_ending_rules: callEndingRulesSchema.optional(),
-  llm_provider: z.string().trim().min(1).max(50).optional(),
+  llm_provider: z.enum(LLM_PROVIDERS).optional(),
   llm_model: z.string().trim().min(1).max(100).optional(),
   llm_temperature: z.number().min(0).max(2).optional(),
   llm_max_tokens: z.number().int().positive().max(32000).optional(),

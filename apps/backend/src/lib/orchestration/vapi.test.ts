@@ -166,13 +166,39 @@ describe('VapiProvider', () => {
       transferDestinationE164: null,
       firstMessageOverride: 'Hi, am I speaking with Priya?',
       systemPromptOverride: 'You are a helpful sales agent. This lead works at Acme Inc.',
+      llmProvider: 'anthropic',
     });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    // Real Vapi behavior: a partial assistantOverrides.model without
+    // `provider` fails 400 ("assistantOverrides.model.provider must be
+    // one of the following values: ...") even though provider was never
+    // sent at all - it must always be repeated alongside messages.
     expect(body.assistantOverrides).toEqual({
       firstMessage: 'Hi, am I speaking with Priya?',
-      model: { messages: [{ role: 'system', content: 'You are a helpful sales agent. This lead works at Acme Inc.' }] },
+      model: { provider: 'anthropic', messages: [{ role: 'system', content: 'You are a helpful sales agent. This lead works at Acme Inc.' }] },
     });
+  });
+
+  it('createCall() falls back to the "openai" provider on a model override when llmProvider is not supplied', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_abc', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new VapiProvider('sk-test');
+    await provider.createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: null,
+      systemPromptOverride: 'You are a helpful sales agent.',
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.assistantOverrides.model.provider).toBe('openai');
   });
 
   it('transferCall() refuses a non-E.164 destination without calling the network', async () => {
