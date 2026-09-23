@@ -12,6 +12,7 @@ import {
 } from '../hooks/useScripts';
 import { Alert, Button, Card, Input, Label } from '../components/ui';
 import { ApiClientError } from '../lib/apiClient';
+import { handlePlaceholderPaste } from '../lib/placeholderPaste';
 
 export function ScriptsPage(): JSX.Element {
   const { hasPermission } = useAuth();
@@ -24,6 +25,7 @@ export function ScriptsPage(): JSX.Element {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
 
   const scripts = scriptsQuery.data?.data ?? [];
   const pagination = scriptsQuery.data?.pagination;
@@ -32,8 +34,14 @@ export function ScriptsPage(): JSX.Element {
     const file = e.target.files?.[0];
     if (!file) return;
     setError(null);
+    setUploadNotice(null);
     try {
-      await uploadScript.mutateAsync(file);
+      const { message } = await uploadScript.mutateAsync(file);
+      // Placeholders like [First Name] or <Phone Number> get auto-converted
+      // to {{first_name}} etc. on upload (see normalizePlaceholders in
+      // @shivanshconnect/shared) - the message names what changed, if
+      // anything, so the user knows to double-check unmapped ones.
+      if (message && message !== 'Script uploaded.') setUploadNotice(message);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed.');
     } finally {
@@ -62,6 +70,11 @@ export function ScriptsPage(): JSX.Element {
       </div>
 
       {error && <div className="mt-4"><Alert>{error}</Alert></div>}
+      {uploadNotice && (
+        <div className="mt-4">
+          <Alert variant="info">{uploadNotice}</Alert>
+        </div>
+      )}
       {creating && <ScriptEditor onClose={() => setCreating(false)} />}
 
       {scriptsQuery.isLoading && <p className="mt-8 text-sm text-ink-500">Loading scripts...</p>}
@@ -138,6 +151,7 @@ function ScriptEditor({
   const [name, setName] = useState(initialName ?? '');
   const [content, setContent] = useState(initialContent ?? '');
   const [error, setError] = useState<string | null>(null);
+  const [placeholderNotice, setPlaceholderNotice] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -189,6 +203,7 @@ function ScriptEditor({
             rows={10}
             value={content}
             onChange={(e) => setContent(e.target.value)}
+            onPaste={(e) => handlePlaceholderPaste(e, content, setContent, setPlaceholderNotice)}
           />
           <div className="mt-2 flex flex-wrap gap-1.5">
             {PROMPT_VARIABLES.map((v) => (
@@ -197,6 +212,7 @@ function ScriptEditor({
               </code>
             ))}
           </div>
+          {placeholderNotice && <p className="mt-1.5 text-xs text-ink-500">{placeholderNotice}</p>}
         </div>
         <div className="flex gap-2">
           <Button type="submit" disabled={pending}>

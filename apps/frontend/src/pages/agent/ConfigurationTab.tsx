@@ -19,6 +19,7 @@ import { useAgentEvaluationSummary } from '../../hooks/useEvaluations';
 import { usePreviewVoice, useVoices } from '../../hooks/useVoices';
 import { Alert, Button, Card, Input, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
+import { handlePlaceholderPaste } from '../../lib/placeholderPaste';
 
 /** Phase 11: the evaluation-summary widget (spec sections 24/86) - real
  * server-aggregated (GROUP BY/AVG) average overall score and per-category
@@ -262,6 +263,8 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
   const [form, setForm] = useState<DraftForm>(() => formFromVersion(draft ?? published));
   const [error, setError] = useState<string | null>(null);
   const [confirmPublish, setConfirmPublish] = useState(false);
+  const [greetingPlaceholderNotice, setGreetingPlaceholderNotice] = useState<string | null>(null);
+  const [promptPlaceholderNotice, setPromptPlaceholderNotice] = useState<string | null>(null);
 
   const draftId = draft?.id;
   const publishedId = published?.id;
@@ -381,8 +384,12 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
             rows={2}
             value={form.greeting_template}
             onChange={(e) => setForm((f) => ({ ...f, greeting_template: e.target.value }))}
+            onPaste={(e) =>
+              handlePlaceholderPaste(e, form.greeting_template, (v) => setForm((f) => ({ ...f, greeting_template: v })), setGreetingPlaceholderNotice)
+            }
           />
           <VariablePalette />
+          {greetingPlaceholderNotice && <p className="mt-1.5 text-xs text-ink-500">{greetingPlaceholderNotice}</p>}
         </div>
         <div className="mt-4">
           <Label htmlFor="system_prompt">System prompt</Label>
@@ -392,8 +399,10 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
             rows={10}
             value={form.system_prompt}
             onChange={(e) => setForm((f) => ({ ...f, system_prompt: e.target.value }))}
+            onPaste={(e) => handlePlaceholderPaste(e, form.system_prompt, (v) => setForm((f) => ({ ...f, system_prompt: v })), setPromptPlaceholderNotice)}
           />
           <VariablePalette />
+          {promptPlaceholderNotice && <p className="mt-1.5 text-xs text-ink-500">{promptPlaceholderNotice}</p>}
         </div>
         <div className="mt-4">
           <Label htmlFor="fallback">Fallback behavior</Label>

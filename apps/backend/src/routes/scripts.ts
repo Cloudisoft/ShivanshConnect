@@ -6,7 +6,7 @@ import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { uuidSchema } from '../schemas/common.js';
 import { createScriptSchema, listScriptsQuerySchema, updateScriptSchema } from '../schemas/scripts.js';
 import { writeAuditLog } from '../lib/audit.js';
-import { AUDIT_ACTIONS, SCRIPT_TEMPLATES } from '@shivanshconnect/shared';
+import { AUDIT_ACTIONS, normalizePlaceholders, SCRIPT_TEMPLATES } from '@shivanshconnect/shared';
 import { extractDocumentText, inferFileType } from '../services/extractDocumentText.js';
 
 const SCRIPT_COLUMNS = 'id, organization_id, agent_id, campaign_id, name, content, version, source, created_by, created_at, updated_at';
@@ -112,7 +112,12 @@ export async function scriptRoutes(app: FastifyInstance): Promise<void> {
     const buffer = await file.toBuffer();
     if (buffer.length === 0) throw new ValidationError('The uploaded file is empty.');
 
-    const content = await extractDocumentText(buffer, fileType);
+    const extracted = await extractDocumentText(buffer, fileType);
+    // Uploaded scripts commonly use whatever placeholder convention their
+    // source system used ([First Name], <Phone Number>, %email%, ...) -
+    // auto-convert the recognizable ones to this app's {{variable}} syntax
+    // so the script is usable for calls without manual find-and-replace.
+    const { text: content, replaced, unrecognized } = normalizePlaceholders(extracted);
     const nameField = (file.fields?.name as any)?.value as string | undefined;
     const name = (nameField && nameField.trim()) || file.filename.replace(/\.[^.]+$/, '');
 
@@ -140,7 +145,11 @@ export async function scriptRoutes(app: FastifyInstance): Promise<void> {
       ipAddress: req.ip,
     });
 
-    return reply.status(201).send(ok(script, { message: 'Script uploaded.' }));
+    let message = 'Script uploaded.';
+    if (replaced.length > 0) message += ` Converted ${replaced.length} placeholder${replaced.length === 1 ? '' : 's'} to {{variable}} format.`;
+    if (unrecognized.length > 0) message += ` ${unrecognized.length} placeholder-like value${unrecognized.length === 1 ? '' : 's'} could not be auto-mapped - review before use: ${unrecognized.join(', ')}.`;
+
+    return reply.status(201).send(ok(script, { message }));
   });
 
   // PATCH /api/v1/scripts/:id
