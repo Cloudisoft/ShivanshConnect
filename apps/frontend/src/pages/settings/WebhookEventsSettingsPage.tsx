@@ -54,7 +54,10 @@ export function WebhookEventsSettingsPage(): JSX.Element {
       <h2 className="text-base font-semibold text-ink-900">Webhook events</h2>
       <p className="mt-1 text-sm text-ink-500">
         Raw inbound delivery log from Vapi, Pipecat, Twilio and Telnyx - every delivery is deduplicated by its own
-        provider event id, so a genuine retry never processes twice. Failed deliveries can be replayed here.
+        provider event id, so a genuine retry never processes twice. Any event can be replayed here - useful not
+        only for a failed delivery, but also to force downstream state (e.g. a call/lead status) to be re-derived
+        after a bug fix, for a webhook that was received and marked "processed" successfully at the time even
+        though its actual outcome wasn't fully applied.
       </p>
 
       <div className="mt-4 flex flex-wrap gap-3">
@@ -112,7 +115,7 @@ export function WebhookEventsSettingsPage(): JSX.Element {
                   <td className="max-w-xs truncate px-4 py-2 text-xs text-red-600">{event.error ?? ''}</td>
                   <td className="px-4 py-2 text-xs text-ink-600">{event.retry_count}</td>
                   <td className="px-4 py-2">
-                    {event.processing_status === 'failed' && <ReplayButton event={event} />}
+                    <ReplayButton event={event} />
                   </td>
                 </tr>
               ))}
