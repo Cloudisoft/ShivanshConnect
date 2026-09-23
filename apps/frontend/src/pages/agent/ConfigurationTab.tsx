@@ -410,13 +410,13 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
             id="fallback"
             className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
             rows={2}
-            maxLength={2000}
+            maxLength={20000}
             placeholder="What the agent should do when it doesn't understand the caller"
             value={form.fallback_behavior}
             onChange={(e) => setForm((f) => ({ ...f, fallback_behavior: e.target.value }))}
           />
-          <p className={`mt-1 text-right text-xs ${form.fallback_behavior.length > 1900 ? 'text-red-600' : 'text-ink-400'}`}>
-            {form.fallback_behavior.length} / 2000
+          <p className={`mt-1 text-right text-xs ${form.fallback_behavior.length > 19000 ? 'text-red-600' : 'text-ink-400'}`}>
+            {form.fallback_behavior.length} / 20000
           </p>
         </div>
       </Card>
