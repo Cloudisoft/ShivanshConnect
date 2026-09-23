@@ -63,6 +63,10 @@ describe('VapiProvider', () => {
     // Vapi fields for natural turn-taking and a sane silence timeout,
     // always set.
     expect(body.startSpeakingPlan).toEqual({ waitSeconds: 0.4, smartEndpointingPlan: { provider: 'vapi' } });
+    // Explicitly requested rather than relying on Vapi's own undocumented
+    // default set - without 'transcript' here, Live Monitor's real-time
+    // transcript feed would never receive anything from Vapi to ingest.
+    expect(body.serverMessages).toEqual(['status-update', 'end-of-call-report', 'transcript', 'tool-calls']);
     expect(body.silenceTimeoutSeconds).toBe(30);
     // No voicemailDetection/backgroundDenoisingEnabled without config.
     expect(body.voicemailDetection).toBeUndefined();

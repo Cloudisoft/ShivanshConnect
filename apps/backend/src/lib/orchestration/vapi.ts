@@ -176,6 +176,13 @@ export class VapiProvider implements CallOrchestrationProvider {
         messages: [{ role: 'system', content: systemContent }],
       },
       metadata: { agentId: config.agentId, agentVersionId: config.agentVersionId, organizationId: config.organizationId },
+      // Explicitly request every webhook message type routes/webhooks.ts
+      // actually handles, rather than relying on Vapi's own undocumented
+      // default set - without this, Vapi may never deliver 'transcript'
+      // messages at all, silently starving Live Monitor's real-time
+      // transcript feed (services/liveTranscriptIngestion.ts) even though
+      // everything downstream of the webhook is correctly wired.
+      serverMessages: ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'],
     };
 
     if (config.voice) {

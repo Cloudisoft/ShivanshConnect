@@ -226,6 +226,7 @@ export function CallDetailPanel({
           <div>
             <h2 className="text-lg font-semibold text-ink-900">{call.customer_number}</h2>
             <p className="text-sm text-ink-500">{call.ai_agent_name ?? 'Unassigned agent'} - {call.campaign_name ?? 'Manual call'}</p>
+            <p className="text-sm text-ink-500">Voice: {call.voice_name ?? 'Default'}</p>
           </div>
           <div className="flex items-center gap-3">
             <Badge tone={STATE_TONE[mode]}>{STATE_LABEL[mode]}</Badge>
