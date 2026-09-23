@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeftRight, Info } from 'lucide-react';
 import {
   BACKGROUND_NOISE_OPTIONS,
@@ -49,9 +49,21 @@ const STATUS_TONE: Record<CampaignStatus, 'neutral' | 'success' | 'warning' | 'd
 
 export function CampaignDetailPage(): JSX.Element {
   const { id } = useParams<{ id: string }>();
-  const [tab, setTab] = useState<Tab>('Overview');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const initialTab: Tab = (TABS as readonly string[]).includes(requestedTab ?? '') ? (requestedTab as Tab) : 'Overview';
+  const [tab, setTab] = useState<Tab>(initialTab);
   const campaignQuery = useCampaign(id);
   const campaign = campaignQuery.data;
+
+  function selectTab(t: Tab) {
+    setTab(t);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', t);
+      return next;
+    }, { replace: true });
+  }
 
   if (campaignQuery.isLoading || !campaign) {
     return <p className="text-sm text-ink-500">Loading campaign...</p>;
@@ -72,7 +84,7 @@ export function CampaignDetailPage(): JSX.Element {
           {TABS.map((t) => (
             <button
               key={t}
-              onClick={() => setTab(t)}
+              onClick={() => selectTab(t)}
               className={
                 tab === t
                   ? 'whitespace-nowrap border-b-2 border-gold-500 pb-3 text-sm font-medium text-ink-900'
@@ -197,6 +209,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const updateCampaign = useUpdateCampaign();
   const createVersion = useCreateCampaignVersion();
   const publishVersion = usePublishCampaignVersion();
+  const pause = useCampaignLifecycleAction('pause');
   const agentsQuery = useAgents(1, 100);
   const phoneNumbersQuery = usePhoneNumbers({ status: 'active' });
   const voicesQuery = useVoices();
@@ -283,6 +296,17 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   return (
     <div className="space-y-6">
       {error && <Alert>{error}</Alert>}
+
+      {campaign.status === 'running' && hasPermission('campaigns.edit') && (
+        <Alert variant="info">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>This campaign is running, so its configuration is locked. Pause it to make changes.</span>
+            <Button variant="secondary" disabled={pause.isPending} onClick={() => pause.mutate(campaign.id)}>
+              {pause.isPending ? 'Pausing...' : 'Pause to edit'}
+            </Button>
+          </div>
+        </Alert>
+      )}
 
       {v && (
         <Alert variant="info">

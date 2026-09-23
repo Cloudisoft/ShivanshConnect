@@ -124,6 +124,17 @@ function CampaignCard({ campaign }: { campaign: CampaignWithCounts }): JSX.Eleme
 
       {hasPermission('campaigns.start') && (
         <div className="flex flex-wrap gap-2 border-t border-ink-100 pt-3">
+          {hasPermission('campaigns.edit') && (
+            <Link to={`/campaigns/${campaign.id}?tab=Configuration`}>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                title={campaign.status === 'running' ? 'Pause the campaign to edit its configuration' : undefined}
+              >
+                Edit
+              </Button>
+            </Link>
+          )}
           {['draft', 'scheduled', 'paused'].includes(campaign.status) && (
             <Button variant="secondary" disabled={busy} onClick={() => (campaign.status === 'paused' ? resume : start).mutate(campaign.id)}>
               {campaign.status === 'paused' ? 'Resume' : 'Start'}
