@@ -5,6 +5,7 @@ import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok, paginationMeta } from '../lib/response.js';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { inviteUserSchema, listUsersQuerySchema, updateUserSchema } from '../schemas/users.js';
+import { invalidateUserContext } from '../lib/permissions.js';
 import { uuidSchema } from '../schemas/common.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { getEmailService } from '../lib/email.js';
@@ -224,6 +225,9 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
     if (Object.keys(patch).length > 0) {
       const { error: updateError } = await supabase.from('users').update(patch).eq('id', id);
       if (updateError) throw updateError;
+      // A status/role change (deactivation in particular) must take effect
+      // immediately, not after the cache's TTL.
+      invalidateUserContext(id);
     }
 
     if (body.status !== undefined && body.status !== target.status) {
@@ -272,6 +276,7 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
         .from('user_roles')
         .insert({ user_id: id, role_id: body.role_id, organization_id: orgId });
       if (assignError) throw assignError;
+      invalidateUserContext(id);
 
       await writeAuditLog({
         organizationId: orgId,

@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok } from '../lib/response.js';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../lib/errors.js';
 import { createRoleSchema, roleIdParamSchema, updateRoleSchema } from '../schemas/roles.js';
+import { invalidateAllUserContexts } from '../lib/permissions.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
 
@@ -162,6 +163,9 @@ export async function roleRoutes(app: FastifyInstance): Promise<void> {
           .insert((perms ?? []).map((p) => ({ role_id: id, permission_id: p.id })));
         if (linkError) throw linkError;
       }
+      // Every user holding this role is affected, and we don't track which
+      // - clear the whole cache rather than let stale permissions linger.
+      invalidateAllUserContexts();
 
       await writeAuditLog({
         organizationId: orgId,

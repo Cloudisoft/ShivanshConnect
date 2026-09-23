@@ -12,13 +12,48 @@ export interface UserContext {
 }
 
 /**
+ * loadUserContext() runs on every authenticated request (it backs the
+ * `authenticate` preHandler used by every route) - its 3 sequential DB
+ * round trips were a fixed latency tax paid before any route's own logic
+ * even started, on every button click across the whole app. Roles and
+ * permission assignments change rarely, so a short in-memory cache
+ * eliminates that tax on the (very common) case of the same user making
+ * several requests within a few seconds - invalidated explicitly wherever
+ * a user's own status/role, or a role's permissions, actually change.
+ */
+const USER_CONTEXT_CACHE_TTL_MS = 30_000;
+const userContextCache = new Map<string, { ctx: UserContext; expiresAt: number }>();
+
+export function invalidateUserContext(authUserId: string): void {
+  userContextCache.delete(authUserId);
+}
+
+export function invalidateAllUserContexts(): void {
+  userContextCache.clear();
+}
+
+export async function loadUserContext(authUserId: string): Promise<UserContext | null> {
+  const cached = userContextCache.get(authUserId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.ctx;
+  }
+  const ctx = await loadUserContextUncached(authUserId);
+  if (ctx) {
+    userContextCache.set(authUserId, { ctx, expiresAt: Date.now() + USER_CONTEXT_CACHE_TTL_MS });
+  } else {
+    userContextCache.delete(authUserId);
+  }
+  return ctx;
+}
+
+/**
  * Loads the application-level identity for a verified auth user id:
  * their public.users row, assigned roles, and the flattened set of
  * permission keys granted by those roles. Returns null if there is no
  * matching public.users row (e.g. auth user exists but signup never
  * finished, or was deleted).
  */
-export async function loadUserContext(authUserId: string): Promise<UserContext | null> {
+async function loadUserContextUncached(authUserId: string): Promise<UserContext | null> {
   const supabase = getSupabaseAdmin();
 
   const { data: userRow, error: userError } = await supabase
