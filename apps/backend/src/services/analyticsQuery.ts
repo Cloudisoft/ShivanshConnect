@@ -231,21 +231,30 @@ export async function getLiveRealtimeCounts(supabase: Supabase, orgId: string) {
 
 export async function getDashboardMetrics(supabase: Supabase, orgId: string, resolved: ResolvedPeriod): Promise<DashboardMetrics> {
   const histDates = historicalDates(resolved);
-  const { data: rollupRows } = histDates.length
-    ? await supabase.from('analytics_daily_org').select('*').eq('organization_id', orgId).in('date', histDates)
-    : { data: [] as any[] };
-  const rows: any[] = rollupRows ?? [];
 
-  const todayCalls = await fetchTodayCalls(supabase, orgId, resolved);
+  // These four are mutually independent - run them concurrently instead of
+  // as a serial chain of round trips (this was the dashboard's main load-time
+  // cost: realtime counts in particular used to run only after everything
+  // else had already finished).
+  const [rollupResult, todayCalls, todayCallbacksResult, realtime] = await Promise.all([
+    histDates.length
+      ? supabase.from('analytics_daily_org').select('*').eq('organization_id', orgId).in('date', histDates)
+      : Promise.resolve({ data: [] as any[] }),
+    fetchTodayCalls(supabase, orgId, resolved),
+    resolved.includesToday
+      ? supabase
+          .from('callbacks')
+          .select('id', { count: 'exact', head: true })
+          .eq('organization_id', orgId)
+          .gte('created_at', startOfUtcDate(resolved.todayDate).toISOString())
+          .lte('created_at', resolved.toISO)
+      : Promise.resolve({ count: 0 }),
+    getLiveRealtimeCounts(supabase, orgId),
+  ]);
+  const rows: any[] = rollupResult.data ?? [];
+  const todayCallbacks = todayCallbacksResult.count;
+
   const dispositionByCallId = await fetchDispositionCodesForCalls(supabase, orgId, todayCalls.map((c) => c.id));
-  const { count: todayCallbacks } = resolved.includesToday
-    ? await supabase
-        .from('callbacks')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', orgId)
-        .gte('created_at', startOfUtcDate(resolved.todayDate).toISOString())
-        .lte('created_at', resolved.toISO)
-    : { count: 0 };
 
   const todayDurations = todayCalls.map((c) => c.duration_seconds).filter((v): v is number => v != null);
   const todayTalk = todayCalls.map((c) => c.talk_duration_seconds).filter((v): v is number => v != null);
@@ -287,8 +296,6 @@ export async function getDashboardMetrics(supabase: Supabase, orgId: string, res
 
   const periodHours = Math.max((new Date(resolved.toISO).getTime() - new Date(resolved.fromISO).getTime()) / (1000 * 60 * 60), 1);
 
-  const realtime = await getLiveRealtimeCounts(supabase, orgId);
-
   return {
     period: resolved.period,
     date_from: resolved.fromDate,
@@ -320,14 +327,38 @@ export async function getDashboardMetrics(supabase: Supabase, orgId: string, res
 
 export async function getDashboardCharts(supabase: Supabase, orgId: string, resolved: ResolvedPeriod): Promise<DashboardCharts> {
   const histDates = historicalDates(resolved);
-  const [{ data: dailyRows }, { data: hourlyRows }, { data: campaignRows }, { data: agentRows }] = await Promise.all([
+
+  // All nine of these are mutually independent - previously fetched as a
+  // serial chain of round trips (this, plus the same pattern in
+  // getDashboardMetrics, was the dashboard's main source of slow load
+  // times). Firing them concurrently turns ~9 sequential round trips into
+  // effectively one.
+  const [
+    { data: dailyRows },
+    { data: hourlyRows },
+    { data: campaignRows },
+    { data: agentRows },
+    todayCalls,
+    { data: dispositionRows },
+    { data: campaigns },
+    { data: allCampaignsForCompletion },
+    { data: agents },
+  ] = await Promise.all([
     histDates.length ? supabase.from('analytics_daily_org').select('*').eq('organization_id', orgId).in('date', histDates) : Promise.resolve({ data: [] as any[] }),
     supabase.from('analytics_hourly_org').select('*').eq('organization_id', orgId).gte('hour_bucket', resolved.fromISO).lte('hour_bucket', resolved.toISO),
     histDates.length ? supabase.from('analytics_daily_campaign').select('*').eq('organization_id', orgId).in('date', histDates) : Promise.resolve({ data: [] as any[] }),
     histDates.length ? supabase.from('analytics_daily_agent').select('*').eq('organization_id', orgId).in('date', histDates) : Promise.resolve({ data: [] as any[] }),
+    fetchTodayCalls(supabase, orgId, resolved),
+    supabase.rpc('dashboard_disposition_breakdown', {
+      match_organization_id: orgId,
+      match_from: resolved.fromISO,
+      match_to: resolved.toISO,
+    }),
+    supabase.from('campaigns').select('id, name').eq('organization_id', orgId),
+    supabase.from('campaigns').select('id, name').eq('organization_id', orgId).in('status', ['running', 'paused', 'scheduled', 'completed']),
+    supabase.from('ai_agents').select('id, name').eq('organization_id', orgId),
   ]);
 
-  const todayCalls = await fetchTodayCalls(supabase, orgId, resolved);
   const dispositionByCallId = await fetchDispositionCodesForCalls(supabase, orgId, todayCalls.map((c) => c.id));
 
   // --- calls_by_day / average_duration_trend / connection_rate_trend / transfer_statistics ---
@@ -378,15 +409,9 @@ export async function getDashboardCharts(supabase: Supabase, orgId: string, reso
   const calls_by_hour: ChartPoint[] = hourOfDay.map((value, h) => ({ label: `${String(h).padStart(2, '0')}:00`, value }));
 
   // --- disposition_breakdown: real GROUP BY over the period (never wider) ---
-  const { data: dispositionRows } = await supabase.rpc('dashboard_disposition_breakdown', {
-    match_organization_id: orgId,
-    match_from: resolved.fromISO,
-    match_to: resolved.toISO,
-  });
   const disposition_breakdown: ChartPoint[] = ((dispositionRows as any[]) ?? []).map((r) => ({ label: r.name ?? r.code, value: Number(r.call_count) }));
 
   // --- campaign_performance / campaign_completion ---
-  const { data: campaigns } = await supabase.from('campaigns').select('id, name').eq('organization_id', orgId);
   const campaignNameById = new Map((campaigns ?? []).map((c: any) => [c.id, c.name]));
 
   const campaignAgg = new Map<string, { total: number; connected: number }>();
@@ -406,9 +431,17 @@ export async function getDashboardCharts(supabase: Supabase, orgId: string, reso
     }
   }
 
-  const { data: allCampaignLeads } = campaignAgg.size
-    ? await supabase.from('campaign_leads').select('campaign_id, status').in('campaign_id', [...campaignAgg.keys()])
-    : { data: [] as any[] };
+  const completionCampaignIds = (allCampaignsForCompletion ?? []).map((c: any) => c.id);
+
+  const [{ data: allCampaignLeads }, { data: completionLeads }] = await Promise.all([
+    campaignAgg.size
+      ? supabase.from('campaign_leads').select('campaign_id, status').in('campaign_id', [...campaignAgg.keys()])
+      : Promise.resolve({ data: [] as any[] }),
+    completionCampaignIds.length
+      ? supabase.from('campaign_leads').select('campaign_id, status, attempt_count').in('campaign_id', completionCampaignIds)
+      : Promise.resolve({ data: [] as any[] }),
+  ]);
+
   const completionByCampaign = new Map<string, { total: number; terminal: number }>();
   for (const cl of allCampaignLeads ?? []) {
     const e = completionByCampaign.get(cl.campaign_id) ?? { total: 0, terminal: 0 };
@@ -429,11 +462,6 @@ export async function getDashboardCharts(supabase: Supabase, orgId: string, reso
     };
   });
 
-  const { data: allCampaignsForCompletion } = await supabase.from('campaigns').select('id, name').eq('organization_id', orgId).in('status', ['running', 'paused', 'scheduled', 'completed']);
-  const completionCampaignIds = (allCampaignsForCompletion ?? []).map((c: any) => c.id);
-  const { data: completionLeads } = completionCampaignIds.length
-    ? await supabase.from('campaign_leads').select('campaign_id, status, attempt_count').in('campaign_id', completionCampaignIds)
-    : { data: [] as any[] };
   const completionAgg = new Map<string, { total: number; called: number }>();
   for (const cl of completionLeads ?? []) {
     const e = completionAgg.get(cl.campaign_id) ?? { total: 0, called: 0 };
@@ -447,7 +475,6 @@ export async function getDashboardCharts(supabase: Supabase, orgId: string, reso
   });
 
   // --- agent_performance ---
-  const { data: agents } = await supabase.from('ai_agents').select('id, name').eq('organization_id', orgId);
   const agentNameById = new Map((agents ?? []).map((a: any) => [a.id, a.name]));
 
   const agentAgg = new Map<string, { total: number; connected: number; durations: number[]; evalScores: number[] }>();
