@@ -141,7 +141,7 @@ export function LeadsPage(): JSX.Element {
               Clear list filter
             </Button>
           )}
-          {hasPermission('leads.import') && leadListId && (
+          {hasPermission('leads.import') && (
             <Button variant="secondary" onClick={() => setShowImport(true)}>
               <Upload className="h-4 w-4" /> Import
             </Button>
@@ -179,7 +179,7 @@ export function LeadsPage(): JSX.Element {
 
       {showAdd && <AddLeadModal leadListId={leadListId} onClose={() => setShowAdd(false)} />}
       {showPaste && <PasteNumbersModal leadListId={leadListId} onClose={() => setShowPaste(false)} />}
-      {showImport && leadListId && <ImportModal leadListId={leadListId} onClose={() => setShowImport(false)} />}
+      {showImport && <ImportModal leadListId={leadListId} onClose={() => setShowImport(false)} />}
 
       <Card className="mt-6 !p-4">
         <div className="flex flex-wrap items-end gap-3">
