@@ -77,11 +77,19 @@ export async function buildAssistantConfig(
     const { data: voiceRow } = await supabase.from('voices').select('provider_key, provider_voice_id').eq('id', version.voice_id).maybeSingle();
     if (voiceRow) voice = { providerKey: voiceRow.provider_key, providerVoiceId: voiceRow.provider_voice_id };
   }
+  // Vapi rejects assistant names over 40 characters (POST /assistant:
+  // "name must be shorter than or equal to 40 characters") - `Agent
+  // ${uuid}` alone is 42, so every outbound call using this fallback
+  // failed with a 400 before an assistant could even be created. Prefer
+  // the org's own agent name (truncated if it's implausibly long), and
+  // fall back to a short id-based name that's guaranteed to fit.
+  const { data: agentRow } = await supabase.from('ai_agents').select('name').eq('id', agent.id).maybeSingle();
+  const assistantName = (agentRow?.name?.trim() || `Agent ${agent.id.slice(0, 8)}`).slice(0, 40);
   return {
     agentId: agent.id,
     agentVersionId: version.id,
     organizationId: orgId,
-    name: `Agent ${agent.id}`,
+    name: assistantName,
     systemPrompt: version.system_prompt,
     greeting: version.greeting_template,
     personality: version.personality ?? { tone: null, personality_traits: [], behavior_traits: [] },
