@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { paginationSchema } from './common.js';
+import { paginationSchema, uuidSchema } from './common.js';
 
 export const createLeadListSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -27,3 +27,9 @@ export const exportLeadListSchema = z.object({
   type: z.enum(['leads_csv', 'leads_xlsx']),
 });
 export type ExportLeadListInput = z.infer<typeof exportLeadListSchema>;
+
+// POST /api/v1/lead-lists/bulk-delete
+export const bulkDeleteLeadListsSchema = z.object({
+  lead_list_ids: z.array(uuidSchema).min(1).max(500),
+});
+export type BulkDeleteLeadListsInput = z.infer<typeof bulkDeleteLeadListsSchema>;

@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok, paginationMeta } from '../lib/response.js';
 import { ConflictError, NotFoundError, ValidationError } from '../lib/errors.js';
 import {
+  bulkDeleteLeadListsSchema,
   createLeadListSchema,
   exportLeadListSchema,
   listLeadListsQuerySchema,
@@ -205,6 +206,45 @@ export async function leadListRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return ok({ deleted: true });
+  });
+
+  // ---------------------------------------------------------------
+  // POST /api/v1/lead-lists/bulk-delete
+  // ---------------------------------------------------------------
+  app.post('/bulk-delete', { preHandler: requirePermission('leads.delete') }, async (req) => {
+    const body = bulkDeleteLeadListsSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const { data: owned, error: ownedError } = await supabase
+      .from('lead_lists')
+      .select('id')
+      .eq('organization_id', orgId)
+      .in('id', body.lead_list_ids);
+    if (ownedError) throw ownedError;
+    const ids = (owned ?? []).map((l: any) => l.id as string);
+
+    if (ids.length > 0) {
+      // Leads themselves are not deleted - only list membership and any
+      // lead rows whose "primary list" pointer is this list are cleared,
+      // matching the single-list DELETE /:id above.
+      await supabase.from('lead_list_members').delete().in('lead_list_id', ids);
+      await supabase.from('leads').update({ lead_list_id: null }).in('lead_list_id', ids).eq('organization_id', orgId);
+      const { error } = await supabase.from('lead_lists').delete().in('id', ids);
+      if (error) throw error;
+    }
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.LEAD_LIST_BULK_ACTION,
+      entityType: 'lead_list',
+      entityId: null,
+      newValue: { action: 'delete', affected: ids.length },
+      ipAddress: req.ip,
+    });
+
+    return ok({ action: 'delete', affected: ids.length });
   });
 
   // ---------------------------------------------------------------

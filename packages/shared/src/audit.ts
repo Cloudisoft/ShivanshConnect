@@ -30,6 +30,7 @@ export const AUDIT_ACTIONS = {
   LEAD_LIST_CREATED: 'lead_list.created',
   LEAD_LIST_UPDATED: 'lead_list.updated',
   LEAD_LIST_DELETED: 'lead_list.deleted',
+  LEAD_LIST_BULK_ACTION: 'lead_list.bulk_action',
   LEAD_CREATED: 'lead.created',
   LEAD_UPDATED: 'lead.updated',
   LEAD_DELETED: 'lead.deleted',
