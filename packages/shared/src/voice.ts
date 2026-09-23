@@ -46,6 +46,9 @@ export interface Voice {
   is_cloned: boolean;
   source_sample_storage_path: string | null;
   clone_status: VoiceCloneStatus | null;
+  /** The real provider/adapter error when clone_status is 'failed' (e.g.
+   * Cartesia's actual rejection reason) - null otherwise. */
+  clone_error: string | null;
   consent_confirmed: boolean;
   created_by: string | null;
   created_at: string;

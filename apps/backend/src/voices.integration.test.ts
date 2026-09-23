@@ -84,6 +84,14 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
       }
 
       if (url === 'https://api.elevenlabs.io/v1/voices/add' && method === 'POST') {
+        const name = init?.body instanceof FormData ? init.body.get('name') : null;
+        if (name === 'Fail This Clone') {
+          return {
+            ok: false,
+            status: 422,
+            text: async () => '{"detail":"Sample audio is too short (minimum 30 seconds required)."}',
+          } as unknown as Response;
+        }
         return { ok: true, status: 200, json: async () => ({ voice_id: 'el-cloned-1' }) } as unknown as Response;
       }
 
@@ -289,5 +297,40 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     const readyVoice = await waitForCloneStatus(app, token, voice.id, ['ready', 'failed']);
     expect(readyVoice.clone_status).toBe('ready');
     expect(readyVoice.provider_voice_id).toBe('el-cloned-1');
+  });
+
+  it('surfaces the real provider error on a failed clone, not just clone_status=failed', async () => {
+    const signup = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/signup',
+      payload: { organization_name: 'Clone Failure Org', full_name: 'Cass Cadence', email: 'cass@voicetest.com', password: 'supersecret123' },
+    });
+    const token = signup.json().data.session.access_token;
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/voice-providers/elevenlabs/credentials',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { kind: 'api_key', api_key: 'sk-elevenlabs-real-secret-key-99999' },
+    });
+
+    const failingClone = buildMultipart(
+      { provider_key: 'elevenlabs', name: 'Fail This Clone', consent_confirmed: 'true' },
+      { fieldname: 'sample', filename: 'sample.wav', content: 'fake-audio-bytes', contentType: 'audio/wav' },
+    );
+    const cloneRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/voices/clone',
+      headers: { authorization: `Bearer ${token}`, 'content-type': failingClone.contentType },
+      payload: failingClone.body,
+    });
+    expect(cloneRes.statusCode).toBe(202);
+    const voice = cloneRes.json().data;
+
+    const failedVoice = await waitForCloneStatus(app, token, voice.id, ['ready', 'failed']);
+    expect(failedVoice.clone_status).toBe('failed');
+    expect(failedVoice.clone_error).toBeTruthy();
+    expect(failedVoice.clone_error).toContain('ElevenLabs voice cloning request failed (422)');
+    expect(failedVoice.clone_error).toContain('Sample audio is too short');
   });
 });

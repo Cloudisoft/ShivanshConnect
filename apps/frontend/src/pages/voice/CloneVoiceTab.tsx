@@ -23,6 +23,7 @@ export function CloneVoiceTab(): JSX.Element {
   const [providerKey, setProviderKey] = useState<VoiceProviderKey | ''>('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [gender, setGender] = useState('');
   const [consent, setConsent] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,12 +50,14 @@ export function CloneVoiceTab(): JSX.Element {
         provider_key: providerKey,
         name,
         description: description || undefined,
+        gender: gender || undefined,
         consent_confirmed: consent,
         sample: file,
       });
       setSuccess('Cloning started - see status below. It typically takes a few moments.');
       setName('');
       setDescription('');
+      setGender('');
       setFile(null);
       setConsent(false);
     } catch (err) {
@@ -106,6 +109,20 @@ export function CloneVoiceTab(): JSX.Element {
             <Input id="clone_description" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           <div>
+            <Label htmlFor="clone_gender">Gender (optional)</Label>
+            <select
+              id="clone_gender"
+              className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+              value={gender}
+              onChange={(e) => setGender(e.target.value)}
+            >
+              <option value="">Unspecified</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+              <option value="neutral">Neutral</option>
+            </select>
+          </div>
+          <div>
             <Label htmlFor="clone_sample">Reference audio sample (.mp3, .wav, .m4a)</Label>
             <input
               id="clone_sample"
@@ -139,9 +156,12 @@ export function CloneVoiceTab(): JSX.Element {
         <div className="mt-3 space-y-2">
           {clonedVoices.map((v: Voice) => (
             <Card key={v.id} className="flex items-center justify-between py-3">
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm font-medium text-ink-800">{v.name}</p>
                 <p className="text-xs text-ink-500">{VOICE_PROVIDER_LABELS[v.provider_key]}</p>
+                {v.clone_status === 'failed' && v.clone_error && (
+                  <p className="mt-1 text-xs text-red-600">{v.clone_error}</p>
+                )}
               </div>
               <Badge tone={CLONE_STATUS_TONE[v.clone_status ?? 'pending']}>{v.clone_status}</Badge>
             </Card>

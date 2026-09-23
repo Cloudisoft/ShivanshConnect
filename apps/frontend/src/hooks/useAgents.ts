@@ -111,6 +111,17 @@ export function useRestoreAgentVersion(agentId: string | undefined) {
   });
 }
 
+export function useDeleteAgentVersion(agentId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (versionId: string) => api.delete<{ deleted: boolean }>(`/agents/${agentId}/versions/${versionId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents', agentId, 'versions'] });
+      queryClient.invalidateQueries({ queryKey: ['agents', agentId] });
+    },
+  });
+}
+
 export function useAgentImprovements(agentId: string | undefined) {
   return useQuery({
     queryKey: ['agents', agentId, 'improvements'],

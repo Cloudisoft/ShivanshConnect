@@ -174,6 +174,90 @@ describe('Phase 3: agent create -> draft version -> publish -> restore', () => {
     expect(previewRes.json().error.message).toMatch(/LLM provider/i);
   });
 
+  it('deletes a draft/archived version but never the published one or a version with call history', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/agents',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'Deletable Versions Agent', role: 'sales_agent' },
+    });
+    const agent = createRes.json().data;
+
+    const v1Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agent.id}/versions`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { system_prompt: 'v1 prompt' },
+    });
+    const v1 = v1Res.json().data;
+    await app.inject({ method: 'POST', url: `/api/v1/agents/${agent.id}/versions/${v1.id}/publish`, headers: { authorization: `Bearer ${token}` } });
+
+    // The published version cannot be deleted.
+    const deletePublishedRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/agents/${agent.id}/versions/${v1.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(deletePublishedRes.statusCode).toBe(422);
+    expect(fake.tables.ai_agent_versions.some((v) => v.id === v1.id)).toBe(true);
+
+    // A version that was actually used for a call cannot be deleted either.
+    fake.tables.calls.push({
+      id: 'call-using-v1',
+      organization_id: agent.organization_id,
+      ai_agent_id: agent.id,
+      ai_agent_version_id: v1.id,
+      engine: 'vapi',
+      direction: 'outbound',
+      customer_number: '+15550000001',
+      status: 'completed',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Publishing v2 archives v1, so the "published" rejection no longer
+    // applies - the call-history check is what must now block it.
+    const v2Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agent.id}/versions`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { system_prompt: 'v2 prompt' },
+    });
+    const v2 = v2Res.json().data;
+    await app.inject({ method: 'POST', url: `/api/v1/agents/${agent.id}/versions/${v2.id}/publish`, headers: { authorization: `Bearer ${token}` } });
+
+    const archivedV1 = await app.inject({ method: 'GET', url: `/api/v1/agents/${agent.id}/versions/${v1.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(archivedV1.json().data.status).toBe('archived');
+
+    const deleteWithHistoryRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/agents/${agent.id}/versions/${v1.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(deleteWithHistoryRes.statusCode).toBe(409);
+    expect(deleteWithHistoryRes.json().error.message).toMatch(/1 call/i);
+    expect(fake.tables.ai_agent_versions.some((v) => v.id === v1.id)).toBe(true);
+
+    // A draft/archived version with NO call history deletes cleanly.
+    const v3Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agent.id}/versions`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { system_prompt: 'v3 prompt, never used' },
+    });
+    const v3 = v3Res.json().data;
+    expect(v3.status).toBe('draft');
+
+    const deleteDraftRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/agents/${agent.id}/versions/${v3.id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(deleteDraftRes.statusCode).toBe(200);
+    expect(deleteDraftRes.json().data.deleted).toBe(true);
+    expect(fake.tables.ai_agent_versions.some((v) => v.id === v3.id)).toBe(false);
+  });
+
   it('rejects cross-tenant access to an agent', async () => {
     const createRes = await app.inject({
       method: 'POST',
