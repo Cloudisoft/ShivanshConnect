@@ -204,4 +204,75 @@ describe('Phase 2: lead list -> CSV import -> commit', () => {
     });
     expect(crossJobRes.statusCode).toBe(404);
   });
+
+  it('POST /lead-lists/bulk-delete removes only the caller org\'s own lists, detaching their leads first', async () => {
+    const signupA = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/signup',
+      payload: { organization_name: 'Bulk Delete Lists Org A', full_name: 'Lyla List', email: 'lyla@bulklists.com', password: 'supersecret123' },
+    });
+    const tokenA = signupA.json().data.session.access_token;
+
+    const signupB = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/signup',
+      payload: { organization_name: 'Bulk Delete Lists Org B', full_name: 'Bo List', email: 'bo@bulklists.com', password: 'supersecret123' },
+    });
+    const tokenB = signupB.json().data.session.access_token;
+
+    const list1Res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lead-lists',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { name: 'Bulk List One' },
+    });
+    const list2Res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lead-lists',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { name: 'Bulk List Two' },
+    });
+    const list1Id = list1Res.json().data.id;
+    const list2Id = list2Res.json().data.id;
+
+    const leadRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/leads',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { first_name: 'Bulk', last_name: 'Lead', phone: '4845559876', lead_list_id: list1Id },
+    });
+    const leadId = leadRes.json().data.id;
+
+    // Org B cannot delete Org A's lists by id - scoped out, affected=0.
+    const crossOrgAttempt = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lead-lists/bulk-delete',
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { lead_list_ids: [list1Id, list2Id] },
+    });
+    expect(crossOrgAttempt.statusCode).toBe(200);
+    expect(crossOrgAttempt.json().data.affected).toBe(0);
+
+    // Org A deletes both of its own lists in one call.
+    const bulkDeleteRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lead-lists/bulk-delete',
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { lead_list_ids: [list1Id, list2Id] },
+    });
+    expect(bulkDeleteRes.statusCode).toBe(200);
+    expect(bulkDeleteRes.json().data.affected).toBe(2);
+
+    const listsAfter = await app.inject({ method: 'GET', url: '/api/v1/lead-lists', headers: { authorization: `Bearer ${tokenA}` } });
+    expect(listsAfter.json().data).toHaveLength(0);
+
+    // The lead itself survives - only its list membership is cleared.
+    const leadAfter = await app.inject({
+      method: 'GET',
+      url: `/api/v1/leads/${leadId}`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+    expect(leadAfter.statusCode).toBe(200);
+    expect(leadAfter.json().data.lead_list_id).toBeNull();
+  });
 });

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ListChecks, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import {
+  useBulkDeleteLeadLists,
   useCreateLeadList,
   useDeleteLeadList,
   useLeadLists,
@@ -22,10 +23,42 @@ export function LeadListsPage(): JSX.Element {
   const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<LeadListWithCounts | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const listsQuery = useLeadLists(page);
+  const bulkDelete = useBulkDeleteLeadLists();
   const lists = listsQuery.data?.data ?? [];
   const pagination = listsQuery.data?.pagination;
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function togglePage() {
+    setSelected((prev) => {
+      const allOnPage = lists.every((l) => prev.has(l.id));
+      const next = new Set(prev);
+      if (allOnPage) lists.forEach((l) => next.delete(l.id));
+      else lists.forEach((l) => next.add(l.id));
+      return next;
+    });
+  }
+
+  async function handleBulkDelete() {
+    setBulkError(null);
+    try {
+      await bulkDelete.mutateAsync(Array.from(selected));
+      setSelected(new Set());
+    } catch (err) {
+      setBulkError(err instanceof ApiClientError ? err.message : 'Could not delete the selected lists.');
+    }
+  }
 
   return (
     <div>
@@ -56,15 +89,57 @@ export function LeadListsPage(): JSX.Element {
         </Card>
       )}
 
+      {canDelete && lists.length > 0 && (
+        <div className="mt-4 flex items-center gap-3 text-xs text-ink-500">
+          <button type="button" className="underline" onClick={togglePage}>
+            Select page
+          </button>
+        </div>
+      )}
+
+      {selected.size > 0 && (
+        <Card className="mt-3 flex flex-wrap items-center justify-between gap-3 !p-3">
+          <div className="flex items-center gap-3 text-sm text-ink-700">
+            <span>
+              <strong>{selected.size}</strong> selected
+            </span>
+            <button type="button" className="text-xs text-ink-500 underline" onClick={() => setSelected(new Set())}>
+              Clear selection
+            </button>
+          </div>
+          {canDelete && (
+            <Button variant="danger" onClick={handleBulkDelete} disabled={bulkDelete.isPending}>
+              <Trash2 className="h-4 w-4" /> Delete
+            </Button>
+          )}
+        </Card>
+      )}
+      {bulkError && (
+        <div className="mt-3">
+          <Alert>{bulkError}</Alert>
+        </div>
+      )}
+
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {lists.map((list) => (
           <Card key={list.id} className="flex flex-col">
             <div className="flex items-start justify-between">
-              <div className="min-w-0">
-                <Link to={`/leads?lead_list_id=${list.id}`} className="truncate text-sm font-semibold text-ink-900 hover:underline">
-                  {list.name}
-                </Link>
-                {list.description && <p className="mt-1 line-clamp-2 text-xs text-ink-500">{list.description}</p>}
+              <div className="flex min-w-0 items-start gap-2">
+                {canDelete && (
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 flex-shrink-0 rounded border-ink-300"
+                    checked={selected.has(list.id)}
+                    onChange={() => toggleOne(list.id)}
+                    aria-label={`Select ${list.name}`}
+                  />
+                )}
+                <div className="min-w-0">
+                  <Link to={`/leads?lead_list_id=${list.id}`} className="truncate text-sm font-semibold text-ink-900 hover:underline">
+                    {list.name}
+                  </Link>
+                  {list.description && <p className="mt-1 line-clamp-2 text-xs text-ink-500">{list.description}</p>}
+                </div>
               </div>
               <div className="flex flex-shrink-0 gap-1">
                 {canEdit && (

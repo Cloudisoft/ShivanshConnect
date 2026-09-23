@@ -46,3 +46,14 @@ export function useDeleteLeadList() {
     },
   });
 }
+
+export function useBulkDeleteLeadLists() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (leadListIds: string[]) => api.post('/lead-lists/bulk-delete', { lead_list_ids: leadListIds }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['lead-lists'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+}
