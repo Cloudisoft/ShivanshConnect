@@ -431,10 +431,21 @@ export async function commitImportJob(jobId: string): Promise<CommitSummary> {
       if (memberError) throw memberError;
     }
 
-    for (let j = 0; j < batch.length; j += 1) {
-      const lead = (insertedLeads ?? [])[j];
-      if (!lead) continue;
-      await supabase.from('import_job_rows').update({ lead_id: lead.id }).eq('id', batch[j].id);
+    // Backfill each row's lead_id in ONE batched upsert rather than one
+    // sequential UPDATE per row - a 1000-lead import previously meant
+    // 1000 sequential round trips just for this step, which was the real
+    // cause of "importing leads takes forever." Supplying only {id,
+    // lead_id} means PostgREST's upsert only ever touches that column,
+    // never the row's other fields (raw_data, result, etc).
+    const rowLeadIdUpdates = batch
+      .map((row: any, j: number) => {
+        const lead = (insertedLeads ?? [])[j];
+        return lead ? { id: row.id, lead_id: lead.id } : null;
+      })
+      .filter((u): u is { id: string; lead_id: string } => u !== null);
+    if (rowLeadIdUpdates.length > 0) {
+      const { error: rowUpdateError } = await supabase.from('import_job_rows').upsert(rowLeadIdUpdates, { onConflict: 'id' });
+      if (rowUpdateError) throw rowUpdateError;
     }
     imported += (insertedLeads ?? []).length;
   }

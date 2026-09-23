@@ -631,11 +631,12 @@ export function createFakeSupabase() {
     private table: keyof Tables;
     private filters: Array<[string, string, any]> = [];
     private orFilters: Array<[string, string, any]> | null = null;
-    private op: 'select' | 'insert' | 'update' | 'delete' = 'select';
+    private op: 'select' | 'insert' | 'update' | 'delete' | 'upsert' = 'select';
     private payload: Row | Row[] | null = null;
     private rangeVal: [number, number] | null = null;
     private wantCount = false;
     private selectStr = '';
+    private upsertConflictCol = 'id';
 
     constructor(table: keyof Tables) {
       this.table = table;
@@ -746,6 +747,13 @@ export function createFakeSupabase() {
       return this;
     }
 
+    upsert(payload: Row | Row[], opts?: { onConflict?: string }): this {
+      this.op = 'upsert';
+      this.payload = payload;
+      this.upsertConflictCol = opts?.onConflict ?? 'id';
+      return this;
+    }
+
     private matched(): Row[] {
       let rows = tables[this.table];
       if (this.orFilters) {
@@ -780,6 +788,30 @@ export function createFakeSupabase() {
         const rows = this.matched();
         for (const row of rows) Object.assign(row, this.payload, { updated_at: new Date().toISOString() });
         return { data: rows, error: null };
+      }
+
+      if (this.op === 'upsert') {
+        const rowsToUpsert = Array.isArray(this.payload) ? this.payload : [this.payload!];
+        const conflictCol = this.upsertConflictCol;
+        const result: Row[] = [];
+        for (const r of rowsToUpsert) {
+          const existing = tables[this.table].find((row) => row[conflictCol] === r[conflictCol]);
+          if (existing) {
+            Object.assign(existing, r, { updated_at: new Date().toISOString() });
+            result.push(existing);
+          } else {
+            const inserted = {
+              id: r.id ?? randomUUID(),
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              ...defaultsFor(this.table),
+              ...r,
+            };
+            tables[this.table].push(inserted);
+            result.push(inserted);
+          }
+        }
+        return { data: result, error: null };
       }
 
       if (this.op === 'delete') {

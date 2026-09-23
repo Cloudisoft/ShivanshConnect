@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Download, Upload, X } from 'lucide-react';
-import { Alert, Badge, Button, Card, Input, Label } from '../ui';
+import { Alert, Badge, Button, Card, Label } from '../ui';
 import {
   downloadImportErrors,
   useCommitImportJob,
@@ -9,8 +10,8 @@ import {
   useUpdateImportMapping,
   useUploadImport,
 } from '../../hooks/useImportJobs';
-import { useCreateLeadList, useLeadLists } from '../../hooks/useLeadLists';
-import { IMPORTABLE_LEAD_FIELDS, type LeadList } from '@shivanshconnect/shared';
+import { useLeadLists } from '../../hooks/useLeadLists';
+import { IMPORTABLE_LEAD_FIELDS } from '@shivanshconnect/shared';
 import { ApiClientError } from '../../lib/apiClient';
 
 const PROCESSING_STATUSES = ['pending', 'parsing', 'validating', 'committing'];
@@ -20,44 +21,35 @@ const PROCESSING_STATUSES = ['pending', 'parsing', 'validating', 'committing'];
  * "list-less" import the way Paste numbers allows). When this modal is
  * opened without a leadListId already chosen (e.g. from the main Leads
  * page rather than a list-filtered view), it asks for one first instead
- * of the Import option simply not being there. */
-function ChooseListStep({ onChosen }: { onChosen: (leadListId: string) => void }): JSX.Element {
+ * of the Import option simply not being there. Creating a list happens
+ * on the real Lead Lists page (full form: name, description, etc.) -
+ * this step just picks from what already exists and links there when
+ * none do, rather than duplicating list-creation as a stripped-down
+ * inline form. */
+function ChooseListStep({ onChosen, onClose }: { onChosen: (leadListId: string) => void; onClose: () => void }): JSX.Element {
   const listsQuery = useLeadLists(1, 200);
-  const createList = useCreateLeadList();
   const [selectedId, setSelectedId] = useState('');
-  const [newListName, setNewListName] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const lists = listsQuery.data?.data ?? [];
 
-  async function handleCreateAndUse(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    try {
-      const created = await createList.mutateAsync({ name: newListName });
-      onChosen((created as LeadList).id);
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Could not create this list.');
-    }
-  }
-
   return (
     <div className="mt-4 space-y-4">
-      <p className="text-sm text-ink-500">Imported leads need to go into a list. Choose an existing one, or create a new one.</p>
-      {error && <Alert>{error}</Alert>}
+      <p className="text-sm text-ink-500">Imported leads need to go into a list.</p>
 
-      {lists.length > 0 && !creating && (
+      {listsQuery.isLoading ? (
+        <p className="text-sm text-ink-500">Loading your lists...</p>
+      ) : (
         <div className="flex items-end gap-2">
           <div className="flex-1">
             <Label htmlFor="import_list">Existing list</Label>
             <select
               id="import_list"
-              className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+              className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500 disabled:bg-ink-50 disabled:text-ink-400"
               value={selectedId}
               onChange={(e) => setSelectedId(e.target.value)}
+              disabled={lists.length === 0}
             >
-              <option value="">Select a list...</option>
+              <option value="">{lists.length === 0 ? 'No lists yet' : 'Select a list...'}</option>
               {lists.map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.name}
@@ -71,21 +63,13 @@ function ChooseListStep({ onChosen }: { onChosen: (leadListId: string) => void }
         </div>
       )}
 
-      {!creating ? (
-        <button type="button" className="text-xs font-medium text-gold-700 underline" onClick={() => setCreating(true)}>
-          {lists.length === 0 ? 'Create a list to import into' : 'Or create a new list instead'}
-        </button>
-      ) : (
-        <form className="flex items-end gap-2" onSubmit={handleCreateAndUse}>
-          <div className="flex-1">
-            <Label htmlFor="new_list_name">New list name</Label>
-            <Input id="new_list_name" value={newListName} onChange={(e) => setNewListName(e.target.value)} required minLength={1} autoFocus />
-          </div>
-          <Button type="submit" disabled={createList.isPending || !newListName.trim()}>
-            {createList.isPending ? 'Creating...' : 'Create & continue'}
-          </Button>
-        </form>
-      )}
+      <p className="text-xs text-ink-500">
+        {lists.length === 0 ? "Don't have a list yet? " : 'Need a different list? '}
+        <Link to="/lead-lists" onClick={onClose} className="font-medium text-gold-700 underline">
+          Create one on the Lead Lists page
+        </Link>
+        , then come back here to import.
+      </p>
     </div>
   );
 }
@@ -120,7 +104,7 @@ export function ImportModal({ leadListId, onClose }: { leadListId?: string; onCl
         </button>
         <h2 className="text-sm font-semibold text-ink-900">Import leads</h2>
 
-        {!chosenListId && <ChooseListStep onChosen={setChosenListId} />}
+        {!chosenListId && <ChooseListStep onChosen={setChosenListId} onClose={onClose} />}
 
         {chosenListId && !jobId && (
           <div className="mt-4 space-y-3">
