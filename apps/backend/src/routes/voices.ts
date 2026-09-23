@@ -7,6 +7,7 @@ import { uuidSchema } from '../schemas/common.js';
 import {
   bulkDeleteVoicesSchema,
   cloneVoiceMetadataSchema,
+  importVoicesByIdSchema,
   listVoicesQuerySchema,
   previewVoiceSchema,
   voiceProviderKeySchema,
@@ -145,6 +146,81 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     return ok(
       { provider_key: providerKey, created, updated, total_remote: remoteVoices.length },
       { message: `Synced ${remoteVoices.length} voice(s) from ${VOICE_PROVIDER_LABELS[providerKey]}.` },
+    );
+  });
+
+  // POST /api/v1/voices/import-by-id - registers specific existing
+  // provider voices by their real provider_voice_id under a caller-chosen
+  // display name, rather than pulling every voice on the account (that's
+  // what /sync does, using the provider's own name for each). Real
+  // per-voice metadata (gender/language/accent) is still fetched from the
+  // provider via getVoice() - only the display name is caller-supplied.
+  app.post('/import-by-id', async (req) => {
+    const body = importVoicesByIdSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const adapter = await getAdapterForOrgProvider(supabase, orgId, body.provider_key);
+
+    const { data: existingRows } = await supabase
+      .from('voices')
+      .select('id, provider_voice_id')
+      .eq('organization_id', orgId)
+      .eq('provider_key', body.provider_key);
+    const existingByProviderVoiceId = new Map((existingRows ?? []).map((r) => [r.provider_voice_id as string, r.id as string]));
+
+    let created = 0;
+    let updated = 0;
+    const failed: { provider_voice_id: string; name: string; error: string }[] = [];
+
+    for (const v of body.voices) {
+      let info;
+      try {
+        info = await adapter.getVoice(v.provider_voice_id);
+      } catch (err) {
+        failed.push({ provider_voice_id: v.provider_voice_id, name: v.name, error: err instanceof Error ? err.message : 'Could not fetch this voice from the provider.' });
+        continue;
+      }
+
+      const row = {
+        organization_id: orgId,
+        provider_key: body.provider_key,
+        provider_voice_id: v.provider_voice_id,
+        name: v.name,
+        gender: info.gender ?? 'unknown',
+        language: info.language ?? null,
+        accent: info.accent ?? null,
+        description: info.description ?? null,
+        is_cloned: false,
+        clone_status: 'n/a' as const,
+        consent_confirmed: false,
+        created_by: req.user!.id,
+      };
+      const existingId = existingByProviderVoiceId.get(v.provider_voice_id);
+      if (existingId) {
+        const { error } = await supabase.from('voices').update(row).eq('id', existingId);
+        if (error) throw error;
+        updated += 1;
+      } else {
+        const { error } = await supabase.from('voices').insert(row);
+        if (error) throw error;
+        created += 1;
+      }
+    }
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.VOICE_IMPORTED_BY_ID,
+      entityType: 'voice_provider_credentials',
+      entityId: null,
+      newValue: { provider_key: body.provider_key, created, updated, failed: failed.length },
+      ipAddress: req.ip,
+    });
+
+    return ok(
+      { created, updated, failed },
+      { message: `${created + updated} voice(s) imported${failed.length ? `, ${failed.length} failed` : ''}.` },
     );
   });
 

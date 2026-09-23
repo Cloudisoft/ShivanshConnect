@@ -44,3 +44,17 @@ export const bulkDeleteVoicesSchema = z.object({
   voice_ids: z.array(uuidSchema).min(1).max(500),
 });
 export type BulkDeleteVoicesInput = z.infer<typeof bulkDeleteVoicesSchema>;
+
+export const importVoicesByIdSchema = z.object({
+  provider_key: voiceProviderKeySchema,
+  voices: z
+    .array(
+      z.object({
+        provider_voice_id: z.string().trim().min(1).max(200),
+        name: z.string().trim().min(1).max(200),
+      }),
+    )
+    .min(1)
+    .max(100),
+});
+export type ImportVoicesByIdInput = z.infer<typeof importVoicesByIdSchema>;

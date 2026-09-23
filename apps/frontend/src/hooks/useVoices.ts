@@ -47,6 +47,18 @@ export function useSyncVoices() {
   });
 }
 
+export function useImportVoicesById() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { provider_key: VoiceProviderKey; voices: { provider_voice_id: string; name: string }[] }) =>
+      api.post<{ created: number; updated: number; failed: { provider_voice_id: string; name: string; error: string }[] }>(
+        '/voices/import-by-id',
+        input,
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['voices'] }),
+  });
+}
+
 export function usePreviewVoice() {
   return useMutation({
     mutationFn: ({ id, sampleText }: { id: string; sampleText?: string }) =>

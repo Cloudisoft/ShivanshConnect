@@ -59,6 +59,7 @@ export const AUDIT_ACTIONS = {
   VOICE_PROVIDER_CREDENTIALS_SAVED: 'voice_provider.credentials_saved',
   VOICE_PROVIDER_CONNECTION_TESTED: 'voice_provider.connection_tested',
   VOICE_SYNCED: 'voice.synced',
+  VOICE_IMPORTED_BY_ID: 'voice.imported_by_id',
   VOICE_CLONE_REQUESTED: 'voice.clone_requested',
   VOICE_DELETED: 'voice.deleted',
   VOICE_BULK_ACTION: 'voice.bulk_action',
