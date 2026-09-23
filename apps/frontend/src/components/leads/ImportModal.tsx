@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Download, Upload, X } from 'lucide-react';
-import { Alert, Badge, Button, Card } from '../ui';
+import { Alert, Badge, Button, Card, Input, Label } from '../ui';
 import {
   downloadImportErrors,
   useCommitImportJob,
@@ -9,12 +9,89 @@ import {
   useUpdateImportMapping,
   useUploadImport,
 } from '../../hooks/useImportJobs';
-import { IMPORTABLE_LEAD_FIELDS } from '@shivanshconnect/shared';
+import { useCreateLeadList, useLeadLists } from '../../hooks/useLeadLists';
+import { IMPORTABLE_LEAD_FIELDS, type LeadList } from '@shivanshconnect/shared';
 import { ApiClientError } from '../../lib/apiClient';
 
 const PROCESSING_STATUSES = ['pending', 'parsing', 'validating', 'committing'];
 
-export function ImportModal({ leadListId, onClose }: { leadListId: string; onClose: () => void }): JSX.Element {
+/** Importing a CSV/XLSX always lands the rows in a specific list (the
+ * backend endpoint is POST /lead-lists/:leadListId/import - there's no
+ * "list-less" import the way Paste numbers allows). When this modal is
+ * opened without a leadListId already chosen (e.g. from the main Leads
+ * page rather than a list-filtered view), it asks for one first instead
+ * of the Import option simply not being there. */
+function ChooseListStep({ onChosen }: { onChosen: (leadListId: string) => void }): JSX.Element {
+  const listsQuery = useLeadLists(1, 200);
+  const createList = useCreateLeadList();
+  const [selectedId, setSelectedId] = useState('');
+  const [newListName, setNewListName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const lists = listsQuery.data?.data ?? [];
+
+  async function handleCreateAndUse(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    try {
+      const created = await createList.mutateAsync({ name: newListName });
+      onChosen((created as LeadList).id);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Could not create this list.');
+    }
+  }
+
+  return (
+    <div className="mt-4 space-y-4">
+      <p className="text-sm text-ink-500">Imported leads need to go into a list. Choose an existing one, or create a new one.</p>
+      {error && <Alert>{error}</Alert>}
+
+      {lists.length > 0 && !creating && (
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <Label htmlFor="import_list">Existing list</Label>
+            <select
+              id="import_list"
+              className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+              value={selectedId}
+              onChange={(e) => setSelectedId(e.target.value)}
+            >
+              <option value="">Select a list...</option>
+              {lists.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button disabled={!selectedId} onClick={() => onChosen(selectedId)}>
+            Continue
+          </Button>
+        </div>
+      )}
+
+      {!creating ? (
+        <button type="button" className="text-xs font-medium text-gold-700 underline" onClick={() => setCreating(true)}>
+          {lists.length === 0 ? 'Create a list to import into' : 'Or create a new list instead'}
+        </button>
+      ) : (
+        <form className="flex items-end gap-2" onSubmit={handleCreateAndUse}>
+          <div className="flex-1">
+            <Label htmlFor="new_list_name">New list name</Label>
+            <Input id="new_list_name" value={newListName} onChange={(e) => setNewListName(e.target.value)} required minLength={1} autoFocus />
+          </div>
+          <Button type="submit" disabled={createList.isPending || !newListName.trim()}>
+            {createList.isPending ? 'Creating...' : 'Create & continue'}
+          </Button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+export function ImportModal({ leadListId, onClose }: { leadListId?: string; onClose: () => void }): JSX.Element {
+  const [chosenListId, setChosenListId] = useState<string | undefined>(leadListId);
   const [jobId, setJobId] = useState<string | null>(null);
   const upload = useUploadImport();
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -25,10 +102,10 @@ export function ImportModal({ leadListId, onClose }: { leadListId: string; onClo
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !chosenListId) return;
     setUploadError(null);
     try {
-      const created = await upload.mutateAsync({ leadListId, file });
+      const created = await upload.mutateAsync({ leadListId: chosenListId, file });
       setJobId(created.id);
     } catch (err) {
       setUploadError(err instanceof ApiClientError ? err.message : 'Could not upload this file.');
@@ -43,7 +120,9 @@ export function ImportModal({ leadListId, onClose }: { leadListId: string; onClo
         </button>
         <h2 className="text-sm font-semibold text-ink-900">Import leads</h2>
 
-        {!jobId && (
+        {!chosenListId && <ChooseListStep onChosen={setChosenListId} />}
+
+        {chosenListId && !jobId && (
           <div className="mt-4 space-y-3">
             {uploadError && <Alert>{uploadError}</Alert>}
             <p className="text-sm text-ink-500">

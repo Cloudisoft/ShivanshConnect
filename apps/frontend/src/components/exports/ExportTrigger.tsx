@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Download } from 'lucide-react';
 import { Button } from '../ui';
 import { ApiClientError } from '../../lib/apiClient';
@@ -52,7 +53,15 @@ export function ExportTrigger({
         <Download className="h-4 w-4" /> {pending ? 'Queuing...' : 'Export'}
       </Button>
       {error && <span className="text-xs text-red-700">{error}</span>}
-      {done && !error && <span className="text-xs text-green-700">Export queued - see Export History.</span>}
+      {done && !error && (
+        <span className="text-xs text-green-700">
+          Export queued - it isn't a direct download.{' '}
+          <Link to="/settings/exports" className="font-medium underline">
+            Open Export History
+          </Link>{' '}
+          once it's ready to download the file.
+        </span>
+      )}
     </div>
   );
 }
