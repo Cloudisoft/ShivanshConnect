@@ -96,6 +96,30 @@ async function requestBlob(path: string): Promise<Blob> {
   return res.blob();
 }
 
+/**
+ * The backend's generic VALIDATION_ERROR handler (index.ts) always sends
+ * the same vague top-level message ("The request contains invalid
+ * data.") but attaches the real per-field reasons as
+ * error.flatten()'s { fieldErrors, formErrors } shape in `details`. Every
+ * caller that only read `err.message` showed users that vague sentence
+ * with no way to tell which field was wrong or why - turning a
+ * one-field typo into an unexplained dead end. This surfaces the real
+ * reason when it's available, falling back to the plain message
+ * otherwise.
+ */
+export function describeApiError(err: unknown, fallback = 'Something went wrong. Please try again.'): string {
+  if (!(err instanceof ApiClientError)) return fallback;
+
+  const details = err.details as { fieldErrors?: Record<string, string[]>; formErrors?: string[] } | undefined;
+  const fieldMessages = Object.entries(details?.fieldErrors ?? {})
+    .filter(([, msgs]) => msgs && msgs.length > 0)
+    .map(([field, msgs]) => `${field}: ${msgs.join(', ')}`);
+  const formMessages = details?.formErrors ?? [];
+  const specific = [...fieldMessages, ...formMessages].join(' · ');
+
+  return specific ? `${err.message} (${specific})` : err.message || fallback;
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path, { method: 'GET' }),
   getPage: <T>(path: string) => requestWithMeta<T>(path, { method: 'GET' }),
