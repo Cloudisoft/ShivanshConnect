@@ -302,6 +302,48 @@ describe('Phase 7: campaign engine end-to-end', () => {
     expect(campaignDetail.json().data.current_version.ai_agent_version_id).not.toBe(newAgentVersion.id);
   });
 
+  it('returns an unpublished draft version on GET /campaigns/:id, not just the last published one', async () => {
+    const token = await signup('Draft Visibility Org', `draft-vis-${Date.now()}@test.com`);
+    const { agent, phoneNumber } = await setUpOrgBasics(token);
+    const { campaign, version } = await createCampaignWithLeads(token, agent.id, phoneNumber.id, 0);
+
+    // Nothing published yet - GET should surface the draft, not just null.
+    const beforePublish = await app.inject({ method: 'GET', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(beforePublish.json().data.current_version).toBeNull();
+    expect(beforePublish.json().data.draft_version).toBeTruthy();
+    expect(beforePublish.json().data.draft_version.id).toBe(version.id);
+    expect(beforePublish.json().data.draft_version.prompt).toBe('Hi {{first_name}}, calling about your account.');
+
+    await app.inject({ method: 'PATCH', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` }, payload: { transfer_number_e164: '+14845550099' } });
+    const publishRes = await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/versions/${version.id}/publish`, headers: { authorization: `Bearer ${token}` } });
+    expect(publishRes.statusCode).toBe(200);
+
+    // Once published, there's no outstanding draft any more.
+    const afterPublish = await app.inject({ method: 'GET', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(afterPublish.json().data.draft_version).toBeNull();
+    expect(afterPublish.json().data.current_version.id).toBe(version.id);
+
+    // Saving a NEW draft on top of a published campaign should surface
+    // that new draft too, alongside the still-live published version.
+    const newDraftRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/campaigns/${campaign.id}/versions`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        prompt: 'An updated pitch, not yet live.',
+        ai_agent_id: agent.id,
+        calling_rules: { calling_window_start: '00:00', calling_window_end: '23:59', calling_days: [1, 2, 3, 4, 5, 6, 7] },
+      },
+    });
+    expect(newDraftRes.statusCode).toBe(200);
+    const newDraft = newDraftRes.json().data;
+
+    const withNewDraft = await app.inject({ method: 'GET', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(withNewDraft.json().data.draft_version.id).toBe(newDraft.id);
+    expect(withNewDraft.json().data.draft_version.prompt).toBe('An updated pitch, not yet live.');
+    expect(withNewDraft.json().data.current_version.id).toBe(version.id);
+  });
+
   it('never dials the same lead twice under concurrent dispatch ticks (race-safe CAS claim)', async () => {
     const token = await signup('Race Org', `race-${Date.now()}@test.com`);
     const { agent, phoneNumber } = await setUpOrgBasics(token);

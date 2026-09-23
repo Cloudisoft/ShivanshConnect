@@ -3,7 +3,7 @@ import type { Campaign, CampaignCounts, CampaignVersion, DialingSettings, Prefli
 import { api } from '../lib/apiClient';
 
 export type CampaignWithCounts = Campaign & { counts: CampaignCounts };
-export type CampaignDetail = Campaign & { counts: CampaignCounts; current_version: CampaignVersion | null };
+export type CampaignDetail = Campaign & { counts: CampaignCounts; current_version: CampaignVersion | null; draft_version: CampaignVersion | null };
 
 export function useCampaigns(page = 1, pageSize = 50, status?: string) {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
