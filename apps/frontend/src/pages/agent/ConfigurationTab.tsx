@@ -18,7 +18,7 @@ import {
 import { useAgentEvaluationSummary } from '../../hooks/useEvaluations';
 import { usePreviewVoice, useVoices } from '../../hooks/useVoices';
 import { Alert, Button, Card, Input, Label } from '../../components/ui';
-import { ApiClientError } from '../../lib/apiClient';
+import { ApiClientError, describeApiError } from '../../lib/apiClient';
 import { handlePlaceholderPaste } from '../../lib/placeholderPaste';
 
 /** Phase 11: the evaluation-summary widget (spec sections 24/86) - real
@@ -286,7 +286,7 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
         await createVersion.mutateAsync(toPayload(form));
       }
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Could not save the draft.');
+      setError(err instanceof ApiClientError ? describeApiError(err, 'Could not save the draft.') : 'Could not save the draft.');
     }
   }
 
@@ -303,7 +303,7 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
       await publishVersion.mutateAsync(versionId);
       setConfirmPublish(false);
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Could not publish this version.');
+      setError(err instanceof ApiClientError ? describeApiError(err, 'Could not publish this version.') : 'Could not publish this version.');
     }
   }
 
@@ -477,7 +477,16 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
               max={2}
               step={0.1}
               value={form.llm_temperature}
-              onChange={(e) => setForm((f) => ({ ...f, llm_temperature: Number(e.target.value) }))}
+              onChange={(e) => {
+                // Number(e.target.value) turns a briefly-cleared field
+                // ('') into 0 rather than NaN, which could silently save
+                // an out-of-range value while the user is still typing a
+                // replacement - valueAsNumber correctly reports NaN there.
+                // Skip the state update entirely while empty/invalid so
+                // the field can still be cleared without snapping back.
+                const next = e.target.valueAsNumber;
+                if (!Number.isNaN(next)) setForm((f) => ({ ...f, llm_temperature: next }));
+              }}
             />
           </div>
           <div>
@@ -487,7 +496,10 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
               type="number"
               min={1}
               value={form.llm_max_tokens}
-              onChange={(e) => setForm((f) => ({ ...f, llm_max_tokens: Number(e.target.value) }))}
+              onChange={(e) => {
+                const next = e.target.valueAsNumber;
+                if (!Number.isNaN(next)) setForm((f) => ({ ...f, llm_max_tokens: next }));
+              }}
             />
           </div>
         </div>
