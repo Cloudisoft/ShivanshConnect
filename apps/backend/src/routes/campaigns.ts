@@ -15,7 +15,7 @@ import {
   updateConcurrencySchema,
 } from '../schemas/campaigns.js';
 import { writeAuditLog } from '../lib/audit.js';
-import { AUDIT_ACTIONS, CAMPAIGN_LEAD_STATUSES, type CampaignCallingRulesSnapshot, type CampaignDispositionRulesSnapshot } from '@shivanshconnect/shared';
+import { AUDIT_ACTIONS, type CampaignCallingRulesSnapshot, type CampaignDispositionRulesSnapshot } from '@shivanshconnect/shared';
 import { runCampaignPreflight } from '../services/campaignPreflight.js';
 import { decideRotation } from '../services/campaignRotate.js';
 
@@ -28,22 +28,33 @@ async function getOwnedCampaign(supabase: Supabase, id: string, orgId: string) {
   return campaign;
 }
 
+// Performance: this used to be 12 separate COUNT queries (one per
+// CAMPAIGN_LEAD_STATUSES entry) plus 2 more sequential ones (total,
+// active_calls) - 14 round trips just to render one campaign card, and
+// GET /campaigns pays that cost once per campaign in the list. Now a
+// single grouped-count RPC (see migration
+// 00000000000051_campaign_lead_status_counts_fn.sql) plus the one
+// active-calls count, run in parallel - 2 round trips total.
 async function computeCampaignCounts(supabase: Supabase, campaignId: string) {
+  const [{ data: statusCounts, error: statusError }, { count: activeCalls, error: activeError }] = await Promise.all([
+    supabase.rpc('campaign_lead_status_counts', { p_campaign_id: campaignId }),
+    supabase
+      .from('calls')
+      .select('id', { count: 'exact', head: true })
+      .eq('campaign_id', campaignId)
+      .in('status', ['queued', 'dialing', 'ringing', 'answered', 'in_progress', 'voicemail', 'answering_machine', 'transfer_pending', 'transferring']),
+  ]);
+  if (statusError) throw statusError;
+  if (activeError) throw activeError;
+
   const counts: Record<string, number> = {};
-  await Promise.all(
-    CAMPAIGN_LEAD_STATUSES.map(async (status) => {
-      const { count } = await supabase.from('campaign_leads').select('id', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('status', status);
-      counts[status] = count ?? 0;
-    }),
-  );
-  const { count: total } = await supabase.from('campaign_leads').select('id', { count: 'exact', head: true }).eq('campaign_id', campaignId);
-  const { count: activeCalls } = await supabase
-    .from('calls')
-    .select('id', { count: 'exact', head: true })
-    .eq('campaign_id', campaignId)
-    .in('status', ['queued', 'dialing', 'ringing', 'answered', 'in_progress', 'voicemail', 'answering_machine', 'transfer_pending', 'transferring']);
+  let total = 0;
+  for (const row of (statusCounts ?? []) as { status: string; count: number }[]) {
+    counts[row.status] = Number(row.count);
+    total += Number(row.count);
+  }
   return {
-    total: total ?? 0,
+    total,
     pending: counts.pending ?? 0,
     queued: counts.queued ?? 0,
     dialing: counts.dialing ?? 0,

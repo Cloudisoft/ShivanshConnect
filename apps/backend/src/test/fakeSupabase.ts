@@ -946,6 +946,21 @@ export function createFakeSupabase() {
   }
 
   /**
+   * Minimal stand-in for supabase.rpc('campaign_lead_status_counts', ...) -
+   * see 00000000000051_campaign_lead_status_counts_fn.sql. Real function is
+   * a plain GROUP BY; this mirrors that exactly against the in-memory
+   * table.
+   */
+  function campaignLeadStatusCounts(args: { p_campaign_id: string }): { data: Row[]; error: null } {
+    const counts = new Map<string, number>();
+    for (const row of tables.campaign_leads) {
+      if (row.campaign_id !== args.p_campaign_id) continue;
+      counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
+    }
+    return { data: Array.from(counts.entries()).map(([status, count]) => ({ status, count })), error: null };
+  }
+
+  /**
    * Minimal stand-in for supabase.rpc('agent_evaluation_summary', ...) -
    * see supabase/migrations/00000000000041_phase11_evaluation_summary_fn
    * .sql. Computes the same average-overall-score + per-category-average
@@ -1185,6 +1200,9 @@ export function createFakeSupabase() {
       }
       if (fnName === 'dashboard_disposition_breakdown') {
         return dashboardDispositionBreakdown(args as any);
+      }
+      if (fnName === 'campaign_lead_status_counts') {
+        return campaignLeadStatusCounts(args as any);
       }
       return { data: null, error: { message: `Unknown RPC function in fake client: ${fnName}` } };
     },
