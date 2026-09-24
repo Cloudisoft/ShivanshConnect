@@ -7,10 +7,18 @@
  * routes/knowledgeBases.ts). Phase 4 is the first phase that needs to
  * durably write bytes it later serves back (generated voice-preview
  * audio, and cloning reference-sample uploads), so this interface exists
- * now. Real S3-compatible object storage per master spec section 22 is
- * still out of scope for this phase - only ONE concrete implementation
- * exists here (see localDisk.ts), and it is documented as a local-disk
- * stand-in, not production-grade durable storage.
+ * now.
+ *
+ * Bug fix: call recordings, exports, and voice-clone samples were never
+ * actually durable in production - the only implementation running there
+ * was LocalDiskStorageAdapter (see that file's own header comment, which
+ * says so plainly), and every one of this platform's redeploys wipes the
+ * container's local disk clean. A recording downloaded before any given
+ * deploy was gone the moment the next one landed - which, in practice,
+ * meant recordings appeared to "never work" despite ingestion succeeding.
+ * supabaseStorage.ts is the real, durable implementation now used in any
+ * non-test environment (see index.ts's getStorageAdapter()) - local disk
+ * remains only for the test suite, which must stay fully offline.
  */
 
 export class StorageNotConfiguredError extends Error {
@@ -31,8 +39,20 @@ export interface PutObjectResult {
   url: string;
 }
 
+export class StorageObjectNotFoundError extends Error {
+  constructor(key: string) {
+    super(`Storage object not found: ${key}`);
+    this.name = 'StorageObjectNotFoundError';
+  }
+}
+
 export interface StorageAdapter {
   readonly name: string;
   readonly isConfigured: boolean;
   putObject(key: string, data: Buffer, contentType: string): Promise<PutObjectResult>;
+  /** Throws StorageObjectNotFoundError when the key doesn't exist. */
+  getObject(key: string): Promise<Buffer>;
+  /** Never throws for a key that's already gone - deleting a missing
+   * object is a no-op, not an error. */
+  deleteObject(key: string): Promise<void>;
 }

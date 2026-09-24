@@ -1,16 +1,21 @@
 import type { FastifyInstance } from 'fastify';
-import { readFile } from 'node:fs/promises';
-import { getStorageAdapter, LocalDiskStorageAdapter } from '../lib/storage/index.js';
+import { getStorageAdapter, StorageObjectNotFoundError } from '../lib/storage/index.js';
 
 /**
- * Serves locally-stored voice-preview audio back to the browser. Mounted
- * at the app root (like /health), NOT under /api/v1, and deliberately
+ * Serves locally-stored voice-preview audio back to the browser. Only
+ * ever actually reached in the test suite (local-disk adapter) - in
+ * production, SupabaseStorageAdapter's putObject() returns a real signed
+ * URL directly, so the frontend/external voice providers fetch bytes
+ * from Supabase Storage itself and never hit this route at all. Kept
+ * generic over the configured adapter (rather than local-disk-specific)
+ * so it still works correctly if that ever changes. Mounted at the app
+ * root (like /health), NOT under /api/v1, and deliberately
  * unauthenticated: an <audio> element cannot attach an Authorization
  * header, and the content behind these keys is just generated TTS sample
  * audio, not tenant-sensitive data. Access control is "possession of the
- * server-generated random key" (see LocalDiskStorageAdapter's header
- * comment) - the same trust model Phase 3 already accepted for its
- * in-memory `storage_path` locators, just now actually serving bytes.
+ * server-generated random key" - the same trust model Phase 3 already
+ * accepted for its in-memory `storage_path` locators, just now actually
+ * serving bytes.
  */
 export async function voiceStorageRoutes(app: FastifyInstance): Promise<void> {
   app.get('/voice-previews/:key', async (req, reply) => {
@@ -21,20 +26,18 @@ export async function voiceStorageRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ success: false, error: { code: 'INVALID_KEY', message: 'Invalid key.' } });
     }
 
-    const adapter = getStorageAdapter();
-    if (!(adapter instanceof LocalDiskStorageAdapter)) {
-      return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Not found.' } });
-    }
-
     try {
-      const filePath = adapter.resolvePath(key);
-      const data = await readFile(filePath);
+      const adapter = getStorageAdapter();
+      const data = await adapter.getObject(key);
       const contentType = key.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg';
       reply.header('Content-Type', contentType);
       reply.header('Cache-Control', 'private, max-age=3600');
       return reply.send(data);
-    } catch {
-      return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'File not found.' } });
+    } catch (err) {
+      if (err instanceof StorageObjectNotFoundError) {
+        return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'File not found.' } });
+      }
+      throw err;
     }
   });
 }

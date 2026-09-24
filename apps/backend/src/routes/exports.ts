@@ -16,14 +16,13 @@
  * export-creating route.
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { readFile } from 'node:fs/promises';
 import { authenticate } from '../middleware/auth.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok, paginationMeta } from '../lib/response.js';
 import { ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from '../lib/errors.js';
 import { uuidSchema } from '../schemas/common.js';
 import { listExportsQuerySchema } from '../schemas/cdr.js';
-import { getStorageAdapter, LocalDiskStorageAdapter } from '../lib/storage/index.js';
+import { getStorageAdapter, StorageObjectNotFoundError } from '../lib/storage/index.js';
 import type { ExportType, ExportWithDownload } from '@shivanshconnect/shared';
 
 function withDownloadUrl(row: Record<string, any>): ExportWithDownload {
@@ -109,11 +108,15 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const adapter = getStorageAdapter();
-    if (!(adapter instanceof LocalDiskStorageAdapter)) {
-      throw new ValidationError('Export storage is not available.');
+    let buffer: Buffer;
+    try {
+      buffer = await adapter.getObject(exportRow.file_storage_path);
+    } catch (err) {
+      if (err instanceof StorageObjectNotFoundError) {
+        throw new NotFoundError('This export is marked ready but its stored bytes could not be found.');
+      }
+      throw err;
     }
-    const filePath = adapter.resolvePath(exportRow.file_storage_path);
-    const buffer = await readFile(filePath);
     const { extension, contentType, namePrefix } = fileShapeFor(exportRow.type as ExportType);
     reply.header('Content-Type', contentType);
     reply.header('Content-Disposition', `attachment; filename="${namePrefix}-export-${id}.${extension}"`);

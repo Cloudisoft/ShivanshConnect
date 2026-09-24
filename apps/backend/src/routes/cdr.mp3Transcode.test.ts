@@ -11,7 +11,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { maybeTranscodeToMp3 } from './cdr.js';
@@ -75,7 +75,7 @@ describe('cdr recording download - real ffmpeg MP3 transcode (Phase 14 polish)',
   });
 
   it.runIf(ffmpegAvailable())('re-encodes a real WAV source to a real, valid MP3 via the actual ffmpeg child process', async () => {
-    const result = await maybeTranscodeToMp3(wavPath, 'wav');
+    const result = await maybeTranscodeToMp3(readFileSync(wavPath), 'wav');
 
     expect(result.contentType).toBe('audio/mpeg');
     expect(result.extension).toBe('mp3');
@@ -101,17 +101,15 @@ describe('cdr recording download - real ffmpeg MP3 transcode (Phase 14 polish)',
   });
 
   it.runIf(!ffmpegAvailable())('falls back to the real source bytes/format honestly when ffmpeg is unavailable', async () => {
-    const result = await maybeTranscodeToMp3(wavPath, 'wav');
+    const result = await maybeTranscodeToMp3(readFileSync(wavPath), 'wav');
     expect(result.contentType).toBe('audio/wav');
     expect(result.extension).toBe('wav');
     expect(result.buffer.equals(buildWavFixture())).toBe(true);
   });
 
   it('an already-mp3 source is served as-is without invoking ffmpeg at all', async () => {
-    const fakeMp3Path = join(tmpDir, 'already.mp3');
     const bytes = Buffer.from('ID3-fake-but-does-not-matter-here');
-    writeFileSync(fakeMp3Path, bytes);
-    const result = await maybeTranscodeToMp3(fakeMp3Path, 'mp3');
+    const result = await maybeTranscodeToMp3(bytes, 'mp3');
     expect(result.contentType).toBe('audio/mpeg');
     expect(result.extension).toBe('mp3');
     expect(result.buffer.equals(bytes)).toBe(true);

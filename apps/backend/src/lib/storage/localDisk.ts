@@ -1,25 +1,16 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, resolve } from 'node:path';
-import type { PutObjectResult, StorageAdapter } from './types.js';
+import { StorageObjectNotFoundError, type PutObjectResult, type StorageAdapter } from './types.js';
 
 /**
- * Local-disk-backed StorageAdapter - the one concrete implementation
- * this phase ships (see types.ts's header comment for why nothing more
- * is built here). Files are written under STORAGE_LOCAL_DIR (default
- * `<repo>/apps/backend/.data/voice-storage`), and served back by the
- * unauthenticated `GET /voice-previews/:key` route
- * (routes/voiceStorage.ts) - keys are always server-generated random
- * UUIDs, so a served file is only reachable by someone who already has
- * the URL the API handed back, never guessable/listable.
+ * Local-disk-backed StorageAdapter, used only by the test suite (see
+ * index.ts's getStorageAdapter() - any non-test environment uses
+ * supabaseStorage.ts instead). Files are written under STORAGE_LOCAL_DIR
+ * (default `<repo>/apps/backend/.data/voice-storage`).
  *
- * This is a real, durable-for-the-container write (not a `/tmp` path
- * that silently vanishes) but it is explicitly NOT production object
- * storage: it does not survive a redeploy to a new container, does not
- * replicate, and has no access control beyond an unguessable key. A
- * later phase is expected to add a real S3-compatible
- * StorageAdapter implementation (master spec section 22) and swap the
- * default without touching any call site, exactly like the LLM/voice
- * provider adapter pattern.
+ * This is explicitly NOT production object storage: it does not survive
+ * a redeploy to a new container and does not replicate - see types.ts's
+ * header comment for why it was replaced as the production default.
  */
 export class LocalDiskStorageAdapter implements StorageAdapter {
   readonly name = 'local-disk';
@@ -52,14 +43,29 @@ export class LocalDiskStorageAdapter implements StorageAdapter {
     return { path: safeKey, url: `/voice-previews/${safeKey}` };
   }
 
-  /** Used only by routes/voiceStorage.ts to resolve a key back to a file
-   * path when serving it. */
-  resolvePath(key: string): string {
+  private resolvePath(key: string): string {
     const safeKey = normalize(key).replace(/^(\.\.[/\\])+/, '');
     const filePath = join(this.baseDir, safeKey);
     if (!filePath.startsWith(this.baseDir)) {
       throw new Error('Invalid storage key.');
     }
     return filePath;
+  }
+
+  async getObject(key: string): Promise<Buffer> {
+    try {
+      return await readFile(this.resolvePath(key));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') throw new StorageObjectNotFoundError(key);
+      throw err;
+    }
+  }
+
+  async deleteObject(key: string): Promise<void> {
+    try {
+      await unlink(this.resolvePath(key));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
+    }
   }
 }
