@@ -70,6 +70,11 @@ export function LeadsPage(): JSX.Element {
 
   const leads = leadsQuery.data?.data ?? [];
   const pagination = leadsQuery.data?.pagination;
+  const leadsError = leadsQuery.isError
+    ? leadsQuery.error instanceof ApiClientError
+      ? leadsQuery.error.message
+      : 'Could not load leads. Please try again.'
+    : null;
 
   function resetSelection() {
     setSelected(new Set());
@@ -322,6 +327,16 @@ export function LeadsPage(): JSX.Element {
           <Alert>{actionError}</Alert>
         </div>
       )}
+      {leadsError && (
+        <div className="mt-3">
+          <Alert>
+            Could not load leads: {leadsError}{' '}
+            <button type="button" className="underline" onClick={() => leadsQuery.refetch()}>
+              Retry
+            </button>
+          </Alert>
+        </div>
+      )}
 
       <div className="mt-4 flex items-center gap-3 text-xs text-ink-500">
         <button type="button" className="underline" onClick={togglePage}>
@@ -335,6 +350,7 @@ export function LeadsPage(): JSX.Element {
       <LeadsTable
         leads={leads}
         loading={leadsQuery.isLoading}
+        hasError={leadsQuery.isError}
         selected={selected}
         onToggleRow={toggleRow}
         onDelete={hasPermission('leads.delete') ? (id) => deleteLead.mutate(id) : undefined}
@@ -376,12 +392,14 @@ const COLUMNS: { key: string; label: string }[] = [
 function LeadsTable({
   leads,
   loading,
+  hasError,
   selected,
   onToggleRow,
   onDelete,
 }: {
   leads: LeadListRow[];
   loading: boolean;
+  hasError?: boolean;
   selected: Set<string>;
   onToggleRow: (id: string) => void;
   onDelete?: (id: string) => void;
@@ -418,10 +436,17 @@ function LeadsTable({
                 </td>
               </tr>
             )}
-            {!loading && leads.length === 0 && (
+            {!loading && !hasError && leads.length === 0 && (
               <tr>
                 <td className="px-4 py-6 text-ink-500" colSpan={COLUMNS.length + 2}>
                   No leads match these filters.
+                </td>
+              </tr>
+            )}
+            {!loading && hasError && (
+              <tr>
+                <td className="px-4 py-6 text-ink-500" colSpan={COLUMNS.length + 2}>
+                  Leads could not be loaded (see the error above).
                 </td>
               </tr>
             )}
