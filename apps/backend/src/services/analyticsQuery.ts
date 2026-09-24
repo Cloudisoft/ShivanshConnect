@@ -199,13 +199,19 @@ function pct(numerator: number, denominator: number): number {
 // ---------------------------------------------------------------------
 
 export async function getLiveRealtimeCounts(supabase: Supabase, orgId: string) {
-  const [{ count: activeCalls }, { count: campaignsRunning }, { count: aiAgentsActive }] = await Promise.all([
+  // Performance: this used to fetch campaigns_running as a separate COUNT
+  // query, then AFTER that resolved, fetch the running campaigns' own ids
+  // in a second round trip just to compute remaining_leads - three
+  // sequential waves for what is really two. The id list alone gives us
+  // the count for free (its own length), so it now runs in the same
+  // initial parallel batch as the other two counts, leaving only the
+  // genuinely-dependent remaining_leads query as a second wave.
+  const [{ count: activeCalls }, { data: runningCampaigns }, { count: aiAgentsActive }] = await Promise.all([
     supabase.from('calls').select('id', { count: 'exact', head: true }).eq('organization_id', orgId).in('status', ACTIVE_CALL_STATUSES),
-    supabase.from('campaigns').select('id', { count: 'exact', head: true }).eq('organization_id', orgId).eq('status', 'running'),
+    supabase.from('campaigns').select('id').eq('organization_id', orgId).eq('status', 'running'),
     supabase.from('ai_agents').select('id', { count: 'exact', head: true }).eq('organization_id', orgId).eq('status', 'active'),
   ]);
 
-  const { data: runningCampaigns } = await supabase.from('campaigns').select('id').eq('organization_id', orgId).eq('status', 'running');
   const runningCampaignIds = (runningCampaigns ?? []).map((c: any) => c.id);
   let remainingLeads = 0;
   if (runningCampaignIds.length > 0) {
@@ -220,7 +226,7 @@ export async function getLiveRealtimeCounts(supabase: Supabase, orgId: string) {
   return {
     active_calls: activeCalls ?? 0,
     remaining_leads: remainingLeads,
-    campaigns_running: campaignsRunning ?? 0,
+    campaigns_running: runningCampaignIds.length,
     ai_agents_active: aiAgentsActive ?? 0,
   };
 }
