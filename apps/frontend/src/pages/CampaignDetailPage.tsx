@@ -573,19 +573,24 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
       </Card>
 
       {canEdit && (
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={handleSaveCampaignFields} disabled={updateCampaign.isPending}>
-            Save calling/voicemail settings
-          </Button>
-          <Button onClick={handleSaveDraftVersion} disabled={createVersion.isPending}>
-            Save as new draft version
-          </Button>
-          {savedDraft && (
-            <Button variant="primary" onClick={() => handlePublish(savedDraft.id)} disabled={publishVersion.isPending}>
-              Publish this draft (snapshots config now)
+        <>
+          <Alert variant="info">
+            Calling window, days, and voicemail settings are saved here, but they only take effect for new calls once you publish a version (below) - saving alone does not change what the dialer is currently using.
+          </Alert>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={handleSaveCampaignFields} disabled={updateCampaign.isPending}>
+              Save calling/voicemail settings
             </Button>
-          )}
-        </div>
+            <Button onClick={handleSaveDraftVersion} disabled={createVersion.isPending}>
+              Save as new draft version
+            </Button>
+            {savedDraft && (
+              <Button variant="primary" onClick={() => handlePublish(savedDraft.id)} disabled={publishVersion.isPending}>
+                Publish this draft (snapshots config now)
+              </Button>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
