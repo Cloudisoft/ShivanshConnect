@@ -47,10 +47,17 @@ const TRANSITIONS: Record<CallStatus, ReadonlySet<CallStatus>> = {
   // - the engine's end-of-call-report still reports it as ended, not
   // failed, and rejecting that transition left real no-answer calls stuck
   // showing 'dialing' forever instead of their actual terminal outcome.
-  dialing: new Set(['ringing', 'answered', 'in_progress', 'completed', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
-  ringing: new Set(['answered', 'in_progress', 'completed', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
-  answered: new Set(['in_progress', 'failed', 'completed', 'dnc']),
-  in_progress: new Set(['transfer_pending', 'completed', 'failed', 'voicemail', 'answering_machine', 'dnc']),
+  // 'transferred' is reachable directly from every pre-terminal state for
+  // the exact same reason: a lost/delayed intermediate webhook (e.g. the
+  // 'in-progress'/'transferring' status-update never arrived, only the
+  // final end-of-call-report did) must never leave a call that actually
+  // transferred stuck showing 'dialing'/'ringing'/'answered' forever - the
+  // real outcome always has to be reachable from wherever the call's
+  // locally-known state happens to be when that report lands.
+  dialing: new Set(['ringing', 'answered', 'in_progress', 'completed', 'transferred', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
+  ringing: new Set(['answered', 'in_progress', 'completed', 'transferred', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
+  answered: new Set(['in_progress', 'failed', 'completed', 'transferred', 'dnc']),
+  in_progress: new Set(['transfer_pending', 'completed', 'transferred', 'failed', 'voicemail', 'answering_machine', 'dnc']),
   voicemail: new Set(['completed', 'failed', 'dnc']),
   answering_machine: new Set(['completed', 'failed', 'dnc']),
   transfer_pending: new Set(['transferring', 'transfer_failed', 'failed', 'dnc']),
