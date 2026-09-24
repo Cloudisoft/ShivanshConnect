@@ -52,6 +52,14 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     const { data, error, count } = await builder;
     if (error) throw error;
 
+    // Temporary diagnostic: an org reported the Leads page showing an
+    // empty table with no error, right after this same GET returned 200
+    // in the Railway logs - meaning the query itself is coming back
+    // empty and we need to see WHY (wrong orgId, zero real rows, a
+    // filter silently applied) rather than guess. Will be removed once
+    // diagnosed - see the matching removal PR.
+    req.log.info({ orgId, query, returnedCount: data?.length ?? 0, totalCount: count }, 'leads.list.debug');
+
     const leads = data ?? [];
     const listIds = Array.from(new Set(leads.map((l: any) => l.lead_list_id).filter(Boolean)));
     let listNames = new Map<string, string>();
