@@ -64,4 +64,11 @@ describe('call state machine', () => {
     expect(isValidCallTransition('dialing', 'completed')).toBe(true);
     expect(isValidCallTransition('ringing', 'completed')).toBe(true);
   });
+
+  it('allows a transferred outcome directly from any pre-terminal state (a lost intermediate webhook must never strand a call showing dialing/ringing/answered/in_progress forever)', () => {
+    expect(isValidCallTransition('dialing', 'transferred')).toBe(true);
+    expect(isValidCallTransition('ringing', 'transferred')).toBe(true);
+    expect(isValidCallTransition('answered', 'transferred')).toBe(true);
+    expect(isValidCallTransition('in_progress', 'transferred')).toBe(true);
+  });
 });
