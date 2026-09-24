@@ -9,6 +9,7 @@ import { AUDIT_ACTIONS, type VapiCredentialSummary } from '@shivanshconnect/shar
 import { decryptCredentials, encryptCredentials, maskSecret, type EncryptedEnvelope } from '../lib/crypto/credentials.js';
 import { createOrchestrationProvider } from '../lib/orchestration/index.js';
 import { VapiProvider } from '../lib/orchestration/vapi.js';
+import { getEnv } from '../env.js';
 
 function decryptApiKey(encrypted: EncryptedEnvelope): string {
   return decryptCredentials<{ api_key: string }>(encrypted).api_key;
@@ -125,9 +126,33 @@ export async function vapiRoutes(app: FastifyInstance): Promise<void> {
     let status: 'connected' | 'error' = 'connected';
     let message = 'Connection verified.';
     let lastError: string | null = null;
+    let webhookUrl: string | null = null;
 
     try {
       await provider.ping();
+
+      // Vapi delivers call-status/end-of-call events to a server URL
+      // configured on the Vapi account itself - it has no way to discover
+      // ours on its own, so every successful connection re-registers it.
+      // Cheap and idempotent (a PATCH), and it means a connection that
+      // "works" always also means "will actually deliver call updates",
+      // rather than depending on someone setting this by hand in Vapi's
+      // dashboard and it silently drifting out of sync.
+      const env = getEnv();
+      if (env.BACKEND_PUBLIC_URL) {
+        webhookUrl = `${env.BACKEND_PUBLIC_URL.replace(/\/+$/, '')}/api/v1/webhooks/vapi`;
+        try {
+          await provider.registerWebhook(webhookUrl);
+        } catch (err) {
+          // The connection itself is still good even if registering the
+          // webhook fails (e.g. a transient Vapi API error) - surface it
+          // as the connection's error instead of silently dropping it.
+          status = 'error';
+          message = `Connected, but failed to register the call-status webhook: ${err instanceof Error ? err.message : 'unknown error'}`;
+          lastError = message;
+          webhookUrl = null;
+        }
+      }
     } catch (err) {
       status = 'error';
       message = err instanceof Error ? err.message : 'Connection failed.';
@@ -136,9 +161,14 @@ export async function vapiRoutes(app: FastifyInstance): Promise<void> {
 
     const { data: updated, error: updateError } = await supabase
       .from('vapi_credentials')
-      .update({ status, last_error: lastError, last_verified_at: status === 'connected' ? new Date().toISOString() : null })
+      .update({
+        status,
+        last_error: lastError,
+        last_verified_at: status === 'connected' ? new Date().toISOString() : null,
+        ...(webhookUrl ? { webhook_url: webhookUrl } : {}),
+      })
       .eq('id', credRow.id)
-      .select('status, last_verified_at, last_error')
+      .select('status, last_verified_at, last_error, webhook_url')
       .single();
     if (updateError) throw updateError;
 

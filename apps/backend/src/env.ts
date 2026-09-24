@@ -11,6 +11,13 @@ const envSchema = z.object({
   // an invalid entry is dropped rather than crashing startup, since a
   // misconfigured extra origin should degrade CORS, not take the API down.
   ADDITIONAL_ALLOWED_ORIGINS: z.string().optional(),
+  // This backend's own public base URL (e.g. https://backend-x.up.railway.app),
+  // used to build the callback URL registered with orchestration providers
+  // (see routes/vapi.ts's test-connection handler). Optional: without it,
+  // webhook self-registration is skipped rather than crashing startup - a
+  // provider connection can still be saved/tested, it just won't receive
+  // call-status callbacks until this is set.
+  BACKEND_PUBLIC_URL: z.string().url().optional(),
   SUPABASE_URL: z.string().url(),
   SUPABASE_ANON_KEY: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
