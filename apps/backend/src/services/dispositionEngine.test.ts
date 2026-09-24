@@ -49,15 +49,25 @@ describe('dispositionEngine.decideDisposition - the deterministic rules engine',
     expect(decision.code).not.toBe('CALL_CONNECTED');
   });
 
-  it('assigns DISCONNECTED for an early/immediate hangup with no meaningful interaction', () => {
+  it('assigns DISCONNECTED only for an explicit technical/no-interaction ended_reason, never as a bare zero-duration default', () => {
     expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'no-answer' })).code).toBe('DISCONNECTED');
     expect(decideDisposition(signals({ status: 'failed', durationSeconds: 0, endedReason: 'pipeline-error' })).code).toBe('DISCONNECTED');
-    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: null })).code).toBe('DISCONNECTED');
+    // Bug fix: a zero-duration call with NO reason at all used to fall
+    // back to DISCONNECTED by default - DISCONNECTED is never a default,
+    // only an explicit technical signal (falls through to the generic
+    // HUNG_UP fallback instead, same as any other unexplained short call).
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: null })).code).toBe('HUNG_UP');
   });
 
-  it('assigns HUNG_UP when the caller explicitly ended the call mid-conversation (short but real connection)', () => {
-    const decision = decideDisposition(signals({ status: 'completed', durationSeconds: 3, endedReason: 'customer-ended-call' }));
-    expect(decision.code).toBe('HUNG_UP');
+  it('assigns HUNG_UP - never DISCONNECTED - whenever the caller actively ended the call, no matter how short', () => {
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 3, endedReason: 'customer-ended-call' })).code).toBe('HUNG_UP');
+    // Bug fix: the caller hanging up in the very first second (duration
+    // 0) used to be misclassified as DISCONNECTED - a bare duration-0
+    // check used to fire before the caller-hangup reason was ever
+    // checked. A call the customer actively ended is a hang-up, full
+    // stop, regardless of how briefly it lasted.
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'customer-ended-call' })).code).toBe('HUNG_UP');
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'caller-hung-up' })).code).toBe('HUNG_UP');
   });
 
   it('falls back to HUNG_UP for a short completed call with no other explicit signal', () => {
