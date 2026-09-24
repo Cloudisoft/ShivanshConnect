@@ -187,6 +187,24 @@ export class VapiProvider implements CallOrchestrationProvider {
 
     if (config.voice) {
       payload.voice = { provider: config.voice.providerKey, voiceId: config.voice.providerVoiceId };
+      // Real, documented Vapi voice field: without an explicit `model`,
+      // Vapi falls back to each provider's own default TTS model, which is
+      // NOT the fastest one available - Cartesia's default is an older
+      // "sonic" model rather than the low-latency sonic-2 this platform's
+      // own lib/voice/cartesia.ts already uses everywhere else (voice
+      // previews, cloning), and ElevenLabs' default is a quality-optimized
+      // model, not the latency-optimized Flash/Turbo ones. This is the
+      // single biggest lever on the pause between a caller finishing a
+      // sentence and the assistant's reply starting to play - explicitly
+      // requesting the fast model for whichever provider is configured.
+      const fastModelByProvider: Record<string, string> = {
+        cartesia: 'sonic-2',
+        elevenlabs: 'eleven_flash_v2_5',
+      };
+      const fastModel = fastModelByProvider[config.voice.providerKey];
+      if (fastModel) {
+        (payload.voice as Record<string, unknown>).model = fastModel;
+      }
     }
     if (config.maxCallDurationSeconds) {
       payload.maxDurationSeconds = config.maxCallDurationSeconds;
