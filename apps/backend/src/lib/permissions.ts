@@ -19,9 +19,21 @@ export interface UserContext {
  * permission assignments change rarely, so a short in-memory cache
  * eliminates that tax on the (very common) case of the same user making
  * several requests within a few seconds - invalidated explicitly wherever
- * a user's own status/role, or a role's permissions, actually change.
+ * a user's own status/role, or a role's permissions, actually change
+ * (see PATCH /users/:id and PATCH /roles/:id).
+ *
+ * 30s was too short in practice: a user spending more than half a minute
+ * reading one page (e.g. the Dashboard) before navigating to the next
+ * (e.g. Leads) let the cache expire, so that next page's first request
+ * paid the full 3-round-trip tax again - reported as "Leads takes time
+ * after logging in [and looking around a bit]". Explicit invalidation
+ * already covers every case where staleness would actually matter, so
+ * 5 minutes is a safe window: real permission/status changes take effect
+ * immediately regardless of this TTL, this only bounds the worst case
+ * for a change made by a different admin session with no invalidation
+ * path (there isn't one currently).
  */
-const USER_CONTEXT_CACHE_TTL_MS = 30_000;
+const USER_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
 const userContextCache = new Map<string, { ctx: UserContext; expiresAt: number }>();
 
 export function invalidateUserContext(authUserId: string): void {
