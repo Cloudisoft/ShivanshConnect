@@ -56,7 +56,10 @@ describe('VapiProvider', () => {
       maxTokens: 800,
       messages: [{ role: 'system', content: expect.stringContaining('You are a helpful sales agent.') }],
     });
-    expect(body.voice).toEqual({ provider: 'elevenlabs', voiceId: 'voice-123' });
+    // A fast, low-latency TTS model is requested explicitly (Bug: without
+    // this, Vapi falls back to each provider's quality-optimized default
+    // model instead of a latency-optimized one).
+    expect(body.voice).toEqual({ provider: 'elevenlabs', voiceId: 'voice-123', model: 'eleven_flash_v2_5' });
     expect(body.maxDurationSeconds).toBe(600);
     expect(body.forwardingPhoneNumber).toBe('+14845550000');
     // Conversational-quality config (Bug 2): real, currently-documented
