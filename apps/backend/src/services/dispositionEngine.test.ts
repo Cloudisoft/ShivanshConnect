@@ -49,9 +49,18 @@ describe('dispositionEngine.decideDisposition - the deterministic rules engine',
     expect(decision.code).not.toBe('CALL_CONNECTED');
   });
 
-  it('assigns DISCONNECTED only for an explicit technical/no-interaction ended_reason, never as a bare zero-duration default', () => {
-    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'no-answer' })).code).toBe('DISCONNECTED');
+  it('assigns NO_ANSWER for a ring-no-pickup outcome - its own disposition, not DISCONNECTED', () => {
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'no-answer' })).code).toBe('NO_ANSWER');
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'customer-did-not-answer' })).code).toBe('NO_ANSWER');
+  });
+
+  it('assigns NOT_IN_SERVICE for an invalid/disconnected destination number - its own disposition, not DISCONNECTED', () => {
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'invalid-number' })).code).toBe('NOT_IN_SERVICE');
+  });
+
+  it('assigns DISCONNECTED only for an explicit technical-failure ended_reason (never no-answer/not-in-service, never a bare zero-duration default)', () => {
     expect(decideDisposition(signals({ status: 'failed', durationSeconds: 0, endedReason: 'pipeline-error' })).code).toBe('DISCONNECTED');
+    expect(decideDisposition(signals({ status: 'failed', durationSeconds: 0, endedReason: 'busy' })).code).toBe('DISCONNECTED');
     // Bug fix: a zero-duration call with NO reason at all used to fall
     // back to DISCONNECTED by default - DISCONNECTED is never a default,
     // only an explicit technical signal (falls through to the generic

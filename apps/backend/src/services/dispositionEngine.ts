@@ -31,20 +31,25 @@ type Supabase = ReturnType<typeof getSupabaseAdmin>;
  * "no thanks, not interested, click" exchange as a non-connection. */
 export const CONNECTED_DURATION_THRESHOLD_SECONDS = 8;
 
-/** ended_reason values that mean the call never really connected (no
- * meaningful interaction occurred) - the "early/immediate hangup" branch,
- * as opposed to a hang-up mid-conversation. */
-const NO_INTERACTION_ENDED_REASONS = new Set([
-  'no-answer',
-  'customer-did-not-answer',
-  'silence-timed-out',
-  'pipeline-error',
-  'twilio-failed',
-  'assistant-error',
-  'busy',
-  'dial-failed',
-  'invalid-number',
-]);
+/** ended_reason values meaning the phone rang but nobody picked up - its
+ * own distinct disposition (NO_ANSWER), not the generic DISCONNECTED
+ * bucket a real technical failure belongs in. */
+const NO_ANSWER_ENDED_REASONS = new Set(['no-answer', 'customer-did-not-answer']);
+
+/** ended_reason values meaning the destination number itself is invalid/
+ * disconnected - its own distinct disposition (NOT_IN_SERVICE), separate
+ * from a generic technical DISCONNECTED failure or a plain no-answer. */
+const NOT_IN_SERVICE_ENDED_REASONS = new Set(['invalid-number']);
+
+/** ended_reason values that are a genuine technical/provider-side failure
+ * with no meaningful interaction, and aren't specifically a no-answer or
+ * an invalid number - the remaining DISCONNECTED bucket. */
+const OTHER_NO_INTERACTION_ENDED_REASONS = new Set(['silence-timed-out', 'pipeline-error', 'twilio-failed', 'assistant-error', 'busy', 'dial-failed']);
+
+/** Union of every "no meaningful interaction occurred" reason above,
+ * regardless of which specific disposition it maps to - used only to gate
+ * CALL_CONNECTED (branch 4 below), never to pick a disposition itself. */
+const NO_INTERACTION_ENDED_REASONS = new Set([...NO_ANSWER_ENDED_REASONS, ...NOT_IN_SERVICE_ENDED_REASONS, ...OTHER_NO_INTERACTION_ENDED_REASONS]);
 
 /** ended_reason values that indicate the CALLER hung up (as opposed to a
  * provider-side failure) - distinguishes Hung Up from Disconnected. */
@@ -113,27 +118,41 @@ export function decideDisposition(signals: CallOutcomeSignals): DispositionDecis
     return { code: 'CALL_CONNECTED', confidence: 0.9, reason: 'Call connected and a conversation of meaningful duration occurred.' };
   }
 
-  // 5. DISCONNECTED is reserved for a genuine technical/no-interaction
-  // failure (no-answer, busy, dial failed, provider/assistant error,
-  // silence timeout) - never for a call the CALLER actively ended,
-  // regardless of how short it was. A caller who picks up and hangs up
-  // in the first second is still a real hang-up, not a disconnect.
-  if (noInteraction) {
-    return { code: 'DISCONNECTED', confidence: 0.8, reason: signals.endedReason ? `Provider reported an early disconnect (${signals.endedReason}) with no meaningful interaction.` : 'Call ended with no meaningful interaction.' };
+  // 5. The phone simply rang with nobody picking up - its own distinct
+  // outcome, not a "disconnect".
+  if (signals.endedReason != null && NO_ANSWER_ENDED_REASONS.has(signals.endedReason)) {
+    return { code: 'NO_ANSWER', confidence: 0.9, reason: 'The call rang but nobody answered.' };
   }
 
-  // 6. Caller hung up - checked BEFORE any generic "short call" fallback
+  // 6. The destination number itself is invalid/disconnected - distinct
+  // from a generic technical failure or a plain no-answer.
+  if (signals.endedReason != null && NOT_IN_SERVICE_ENDED_REASONS.has(signals.endedReason)) {
+    return { code: 'NOT_IN_SERVICE', confidence: 0.9, reason: 'The destination number is not in service.' };
+  }
+
+  // 7. DISCONNECTED is reserved for a genuine technical/provider-side
+  // failure with no meaningful interaction (busy, dial failed, an
+  // assistant/pipeline error, a silence timeout) - never for a call the
+  // CALLER actively ended, regardless of how short it was. A caller who
+  // picks up and hangs up in the first second is still a real hang-up,
+  // not a disconnect, and is never lumped in with no-answer/not-in-service
+  // above either.
+  if (noInteraction) {
+    return { code: 'DISCONNECTED', confidence: 0.8, reason: signals.endedReason ? `Provider reported a technical failure (${signals.endedReason}) with no meaningful interaction.` : 'Call ended with no meaningful interaction.' };
+  }
+
+  // 8. Caller hung up - checked BEFORE any generic "short call" fallback
   // so an explicit customer-ended-call reason always wins over duration
   // alone, no matter how brief the call was.
   if (signals.endedReason != null && CALLER_HANGUP_ENDED_REASONS.has(signals.endedReason)) {
     return { code: 'HUNG_UP', confidence: 0.85, reason: 'Caller ended the call before a full conversation concluded.' };
   }
 
-  // 7. Fallback: a call with no explicit technical-failure or
+  // 9. Fallback: a call with no explicit technical-failure or
   // caller-hangup reason, and no clean "connected" signal, reads as a
-  // hang-up rather than a disconnect by default - DISCONNECTED is never
-  // the default outcome, only ever an explicit technical signal (branch
-  // 5 above).
+  // hang-up rather than a disconnect by default - DISCONNECTED/NO_ANSWER/
+  // NOT_IN_SERVICE are never the default outcome, only ever an explicit
+  // signal (branches 5-7 above).
   return { code: 'HUNG_UP', confidence: 0.6, reason: 'Call ended quickly without a clear connected outcome.' };
 }
 

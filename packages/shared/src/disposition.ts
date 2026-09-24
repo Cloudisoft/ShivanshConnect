@@ -21,6 +21,8 @@ export const SYSTEM_DISPOSITION_CODES = [
   'HUNG_UP',
   'TRANSFERRED',
   'CALL_DISCONNECTED_IN_TRANSFER',
+  'NO_ANSWER',
+  'NOT_IN_SERVICE',
 ] as const;
 export type SystemDispositionCode = (typeof SYSTEM_DISPOSITION_CODES)[number];
 
@@ -34,6 +36,8 @@ export const SYSTEM_DISPOSITION_SEED: ReadonlyArray<{ code: SystemDispositionCod
   { code: 'HUNG_UP', name: 'Hung Up' },
   { code: 'TRANSFERRED', name: 'Transferred' },
   { code: 'CALL_DISCONNECTED_IN_TRANSFER', name: 'Call Disconnected in Transfer' },
+  { code: 'NO_ANSWER', name: 'No Answer' },
+  { code: 'NOT_IN_SERVICE', name: 'Not in Service' },
 ];
 
 export interface Disposition {
