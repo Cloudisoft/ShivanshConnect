@@ -984,6 +984,42 @@ export function createFakeSupabase() {
   }
 
   /**
+   * Minimal stand-ins for supabase.rpc('sms_campaign_message_status_counts_bulk', ...)
+   * and ('email_campaign_message_status_counts_bulk', ...) - see
+   * 00000000000055_messaging_counts_bulk_fns.sql. Plain GROUP BY against
+   * the in-memory tables.
+   */
+  function smsCampaignMessageStatusCountsBulk(args: { p_campaign_ids: string[] }): { data: Row[]; error: null } {
+    const ids = new Set(args.p_campaign_ids);
+    const counts = new Map<string, number>();
+    for (const row of tables.sms_messages) {
+      if (!ids.has(row.sms_campaign_id as string)) continue;
+      const key = `${row.sms_campaign_id}::${row.status}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const data = Array.from(counts.entries()).map(([key, count]) => {
+      const [sms_campaign_id, status] = key.split('::');
+      return { sms_campaign_id, status, count };
+    });
+    return { data, error: null };
+  }
+
+  function emailCampaignMessageStatusCountsBulk(args: { p_campaign_ids: string[] }): { data: Row[]; error: null } {
+    const ids = new Set(args.p_campaign_ids);
+    const counts = new Map<string, number>();
+    for (const row of tables.email_messages) {
+      if (!ids.has(row.email_campaign_id as string)) continue;
+      const key = `${row.email_campaign_id}::${row.status}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const data = Array.from(counts.entries()).map(([key, count]) => {
+      const [email_campaign_id, status] = key.split('::');
+      return { email_campaign_id, status, count };
+    });
+    return { data, error: null };
+  }
+
+  /**
    * Minimal stand-in for supabase.rpc('lead_list_member_counts_bulk', ...)
    * - see 00000000000054_lead_list_member_counts_bulk_fn.sql. Plain GROUP
    * BY against the in-memory table.
@@ -1263,6 +1299,12 @@ export function createFakeSupabase() {
       }
       if (fnName === 'lead_list_member_counts_bulk') {
         return leadListMemberCountsBulk(args as any);
+      }
+      if (fnName === 'sms_campaign_message_status_counts_bulk') {
+        return smsCampaignMessageStatusCountsBulk(args as any);
+      }
+      if (fnName === 'email_campaign_message_status_counts_bulk') {
+        return emailCampaignMessageStatusCountsBulk(args as any);
       }
       return { data: null, error: { message: `Unknown RPC function in fake client: ${fnName}` } };
     },

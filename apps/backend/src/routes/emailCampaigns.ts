@@ -20,6 +20,18 @@ async function getOwnedEmailCampaign(supabase: Supabase, id: string, orgId: stri
   return data;
 }
 
+function buildMessagingCounts(counts: Record<string, number>): MessagingCounts {
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  return {
+    queued: counts.queued ?? 0,
+    sent: counts.sent ?? 0,
+    delivered: counts.delivered ?? 0,
+    failed: counts.failed ?? 0,
+    replied: counts.replied ?? 0,
+    total,
+  };
+}
+
 async function computeCounts(supabase: Supabase, campaignId: string): Promise<MessagingCounts> {
   const statuses = ['queued', 'sent', 'delivered', 'failed', 'replied'] as const;
   const counts: Record<string, number> = {};
@@ -29,8 +41,31 @@ async function computeCounts(supabase: Supabase, campaignId: string): Promise<Me
       counts[status] = count ?? 0;
     }),
   );
-  const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  return { queued: counts.queued, sent: counts.sent, delivered: counts.delivered, failed: counts.failed, replied: counts.replied, total };
+  return buildMessagingCounts(counts);
+}
+
+// Performance fix: GET / (the Messaging page's Email list) used to call
+// computeCounts() once PER campaign row - 5 round trips each. This bulk
+// variant (migration 00000000000055_messaging_counts_bulk_fns.sql)
+// fetches every campaign's counts in exactly 1 round trip total for the
+// whole page, no matter how many campaigns are on it.
+async function computeCountsBulk(supabase: Supabase, campaignIds: string[]): Promise<Map<string, MessagingCounts>> {
+  const result = new Map<string, MessagingCounts>();
+  if (campaignIds.length === 0) return result;
+
+  const { data: rows, error } = await supabase.rpc('email_campaign_message_status_counts_bulk', { p_campaign_ids: campaignIds });
+  if (error) throw error;
+
+  const byCampaign = new Map<string, Record<string, number>>();
+  for (const row of (rows ?? []) as { email_campaign_id: string; status: string; count: number }[]) {
+    const bucket = byCampaign.get(row.email_campaign_id) ?? {};
+    bucket[row.status] = Number(row.count);
+    byCampaign.set(row.email_campaign_id, bucket);
+  }
+  for (const id of campaignIds) {
+    result.set(id, buildMessagingCounts(byCampaign.get(id) ?? {}));
+  }
+  return result;
 }
 
 export async function emailCampaignRoutes(app: FastifyInstance): Promise<void> {
@@ -48,7 +83,9 @@ export async function emailCampaignRoutes(app: FastifyInstance): Promise<void> {
     builder = builder.order('created_at', { ascending: false }).range(from, to);
     const { data, error, count } = await builder;
     if (error) throw error;
-    const withCounts = await Promise.all((data ?? []).map(async (c: any) => ({ ...c, counts: await computeCounts(supabase, c.id) })));
+    const rows = data ?? [];
+    const countsByCampaign = await computeCountsBulk(supabase, rows.map((c: any) => c.id));
+    const withCounts = rows.map((c: any) => ({ ...c, counts: countsByCampaign.get(c.id) ?? buildMessagingCounts({}) }));
     return ok(withCounts, { pagination: paginationMeta(query.page, query.page_size, count ?? 0) });
   });
 
