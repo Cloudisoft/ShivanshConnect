@@ -25,7 +25,6 @@
  */
 import type { FastifyInstance } from 'fastify';
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok, paginationMeta } from '../lib/response.js';
@@ -34,7 +33,7 @@ import { uuidSchema } from '../schemas/common.js';
 import { createExportSchema, listCdrQuerySchema, searchTranscriptQuerySchema } from '../schemas/cdr.js';
 import { buildCdrRows, fetchCdrCallsPage, type CdrFilters } from '../services/cdrQuery.js';
 import { queueCdrExport } from '../services/cdrExport.js';
-import { getStorageAdapter, LocalDiskStorageAdapter } from '../lib/storage/index.js';
+import { getStorageAdapter, StorageObjectNotFoundError } from '../lib/storage/index.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
 
@@ -62,14 +61,18 @@ function extractFilters(query: Record<string, unknown>): CdrFilters {
  * served as-is rather than faking a conversion, and the response's
  * Content-Type reflects the real source format - that fallback path is
  * unchanged from Phase 9. */
-export async function maybeTranscodeToMp3(sourcePath: string, sourceFormat: string): Promise<{ buffer: Buffer; contentType: string; extension: string }> {
+export async function maybeTranscodeToMp3(sourceBuffer: Buffer, sourceFormat: string): Promise<{ buffer: Buffer; contentType: string; extension: string }> {
   if (sourceFormat === 'mp3') {
-    return { buffer: await readFile(sourcePath), contentType: 'audio/mpeg', extension: 'mp3' };
+    return { buffer: sourceBuffer, contentType: 'audio/mpeg', extension: 'mp3' };
   }
 
   try {
     const buffer = await new Promise<Buffer>((resolve, reject) => {
-      const proc = spawn('ffmpeg', ['-y', '-i', sourcePath, '-f', 'mp3', '-'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      // Reads the source from stdin rather than a file path - the source
+      // bytes now come from the storage adapter (local disk in tests,
+      // Supabase Storage in production), not necessarily a real path on
+      // this machine's filesystem.
+      const proc = spawn('ffmpeg', ['-y', '-i', 'pipe:0', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
       const chunks: Buffer[] = [];
       proc.stdout.on('data', (c) => chunks.push(c));
       proc.on('error', reject);
@@ -77,13 +80,19 @@ export async function maybeTranscodeToMp3(sourcePath: string, sourceFormat: stri
         if (code === 0 && chunks.length > 0) resolve(Buffer.concat(chunks));
         else reject(new Error(`ffmpeg exited with code ${code}`));
       });
+      proc.stdin.on('error', () => {
+        // A write to a already-dead/erroring ffmpeg process throws EPIPE
+        // here - the 'error'/'close' handlers above already reject this
+        // promise for that same failure, so this only prevents an
+        // unhandled 'error' event from crashing the process.
+      });
+      proc.stdin.end(sourceBuffer);
     });
     return { buffer, contentType: 'audio/mpeg', extension: 'mp3' };
   } catch {
     // ffmpeg not installed (ENOENT) or failed - serve the real source
     // bytes/format rather than fabricating an mp3.
-    const buffer = await readFile(sourcePath);
-    return { buffer, contentType: sourceFormat === 'wav' ? 'audio/wav' : 'audio/mpeg', extension: sourceFormat };
+    return { buffer: sourceBuffer, contentType: sourceFormat === 'wav' ? 'audio/wav' : 'audio/mpeg', extension: sourceFormat };
   }
 }
 
@@ -206,11 +215,16 @@ export async function cdrRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const adapter = getStorageAdapter();
-    if (!(adapter instanceof LocalDiskStorageAdapter)) {
-      throw new ValidationError('Recording storage is not available.');
+    let sourceBuffer: Buffer;
+    try {
+      sourceBuffer = await adapter.getObject(recording.storage_path);
+    } catch (err) {
+      if (err instanceof StorageObjectNotFoundError) {
+        throw new NotFoundError('This recording is marked ready but its stored bytes could not be found.');
+      }
+      throw err;
     }
-    const sourcePath = adapter.resolvePath(recording.storage_path);
-    const { buffer, contentType, extension } = await maybeTranscodeToMp3(sourcePath, recording.format ?? 'mp3');
+    const { buffer, contentType, extension } = await maybeTranscodeToMp3(sourceBuffer, recording.format ?? 'mp3');
 
     reply.header('Content-Type', contentType);
     reply.header('Content-Disposition', `attachment; filename="call-${callId}.${extension}"`);

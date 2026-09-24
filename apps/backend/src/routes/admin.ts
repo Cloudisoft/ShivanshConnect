@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok } from '../lib/response.js';
-import { getStorageAdapter, LocalDiskStorageAdapter } from '../lib/storage/index.js';
+import { getStorageAdapter } from '../lib/storage/index.js';
 import { getLastReconciliationTickAt } from '../services/callReconciliation.js';
 
 /**
@@ -90,24 +90,15 @@ export async function adminHealthRoutes(app: FastifyInstance): Promise<void> {
         const key = `healthcheck/${randomUUID()}.txt`;
         const payload = Buffer.from(`shivanshconnect-health-check-${nowIso}`);
         await storage.putObject(key, payload, 'text/plain');
-        if (storage instanceof LocalDiskStorageAdapter) {
-          const { readFile, unlink } = await import('node:fs/promises');
-          const filePath = storage.resolvePath(key);
-          const readBack = await readFile(filePath);
-          const roundTripOk = readBack.equals(payload);
-          await unlink(filePath);
-          components.push({
-            component: 'storage',
-            status: roundTripOk ? 'connected' : 'error',
-            detail: roundTripOk ? `${storage.name}: real write+read+delete round trip succeeded.` : `${storage.name}: read-back content did not match what was written.`,
-            lastCheckedAt: nowIso,
-          });
-        } else {
-          // A future non-local-disk StorageAdapter has no generic
-          // read/delete in the shared interface yet (see types.ts) - the
-          // write itself succeeding is still a real, honest signal.
-          components.push({ component: 'storage', status: 'connected', detail: `${storage.name}: write succeeded (read/delete round trip not yet implemented for this adapter).`, lastCheckedAt: nowIso });
-        }
+        const readBack = await storage.getObject(key);
+        const roundTripOk = readBack.equals(payload);
+        await storage.deleteObject(key);
+        components.push({
+          component: 'storage',
+          status: roundTripOk ? 'connected' : 'error',
+          detail: roundTripOk ? `${storage.name}: real write+read+delete round trip succeeded.` : `${storage.name}: read-back content did not match what was written.`,
+          lastCheckedAt: nowIso,
+        });
       }
     } catch (err) {
       components.push({ component: 'storage', status: 'error', detail: err instanceof Error ? err.message : 'Unknown storage error.', lastCheckedAt: nowIso });
