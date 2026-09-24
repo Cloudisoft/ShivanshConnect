@@ -58,6 +58,23 @@ import {
 
 const VAPI_API_BASE = 'https://api.vapi.ai';
 
+/** Appended to every assistant's system prompt (toVapiAssistantPayload
+ * below) regardless of what an individual agent's own configured prompt
+ * says - a durable, platform-wide fix rather than something each agent's
+ * author has to remember to write themselves. Covers the recurring,
+ * concrete complaints this addresses: sounding like a script being read
+ * rather than a real conversation, talking over what the caller just
+ * said instead of responding to it, and mishandling a gatekeeper/IVR
+ * system that asks for a name before connecting to an actual person. */
+const BASELINE_CONVERSATION_INSTRUCTIONS = `Conversation style (always follow these, in addition to everything above):
+- Speak naturally, like a real person on the phone - contractions, brief pauses, natural phrasing. Never sound like you are reading a script verbatim.
+- Practice active listening: briefly acknowledge or react to what the caller just said before moving on to your next point. Never ignore a question or comment the caller made in order to continue a scripted line.
+- Be warm, patient, and polite even if the caller is short, confused, or pushes back. Never sound rushed or robotic.
+- Keep your turns concise - a sentence or two at a time, not a monologue - and pause to let the caller respond.
+- If you reach an automated system, IVR, or a gatekeeper (e.g. a receptionist or assistant) that asks you to state your name or the purpose of your call before connecting you to someone, answer clearly and naturally, then wait - do not repeat yourself or hang up early. It can take a few seconds to be connected.
+- Pay attention to whether you are talking to a real person or an automated system/hold message. Do not have a full conversation with a recording, and do not treat a real human's response as if it were a menu prompt.
+- Once a real person is on the line, engage with them naturally as the actual conversation - do not restart your introduction from scratch if you already gave it to a gatekeeper.`;
+
 interface VapiArtifactMessage {
   role?: string; // 'assistant' | 'bot' | 'user' | 'customer' | ...
   message?: string;
@@ -163,7 +180,16 @@ export class VapiProvider implements CallOrchestrationProvider {
       config.personality.personality_traits.length ? `Personality traits: ${config.personality.personality_traits.join(', ')}.` : null,
       config.personality.behavior_traits.length ? `Behavior: ${config.personality.behavior_traits.join(', ')}.` : null,
     ].filter(Boolean);
-    const systemContent = [config.systemPrompt, ...traitLines].join('\n\n');
+    // Baseline conversational instructions appended to every assistant's
+    // system prompt, regardless of what any individual agent's own prompt
+    // says - applies automatically to every existing agent the next time
+    // its version is republished, and to every future one, rather than
+    // needing to be pasted into each agent's prompt by hand. Real,
+    // recurring problems this addresses: sounding scripted/robotic rather
+    // than like a natural conversation, not acknowledging what the caller
+    // actually just said before moving on, and mishandling a gatekeeper/
+    // IVR system that asks for a name before connecting to a real person.
+    const systemContent = [config.systemPrompt, ...traitLines, BASELINE_CONVERSATION_INSTRUCTIONS].join('\n\n');
 
     const payload: Record<string, unknown> = {
       name: config.name,
