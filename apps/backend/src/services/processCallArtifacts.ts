@@ -176,6 +176,35 @@ function inferFormat(url: string, contentType: string | null): 'mp3' | 'wav' {
   return 'mp3';
 }
 
+/** How long to wait before each retry attempt when the provider's
+ * recording URL isn't fetchable yet - this runs moments after the call's
+ * terminal webhook arrives, but the provider is often still finalizing/
+ * uploading the recording file at that exact instant, so an immediate
+ * fetch commonly 400s/404s even though the recording genuinely exists and
+ * becomes fetchable seconds later. Three attempts, ~3s/6s/12s apart, is
+ * generous enough to clear that window without meaningfully delaying
+ * ingestion for the (much more common) case where it's already ready. */
+const RECORDING_FETCH_RETRY_DELAYS_MS = [3000, 6000, 12000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchRecordingWithRetry(url: string): Promise<{ res: Response } | { error: string }> {
+  let lastError: string | null = null;
+  for (let attempt = 0; attempt <= RECORDING_FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) await sleep(RECORDING_FETCH_RETRY_DELAYS_MS[attempt - 1]);
+    try {
+      const res = await fetch(url);
+      if (res.ok) return { res };
+      lastError = `The provider's recording URL returned ${res.status}.`;
+    } catch (err) {
+      lastError = `Failed to reach the provider's recording URL: ${err instanceof Error ? err.message : 'unknown error'}.`;
+    }
+  }
+  return { error: lastError ?? "The provider's recording URL could not be fetched." };
+}
+
 async function ingestRecording(supabase: Supabase, call: Record<string, any>, artifacts: CallArtifacts): Promise<void> {
   if (!artifacts.recordingUrl) {
     await upsertRecordingFailed(supabase, call, 'No recording is available for this call.');
@@ -189,17 +218,12 @@ async function ingestRecording(supabase: Supabase, call: Record<string, any>, ar
     failure_reason: null,
   });
 
-  let res: Response;
-  try {
-    res = await fetch(artifacts.recordingUrl);
-  } catch (err) {
-    await upsertRecordingFailed(supabase, call, `Failed to reach the provider's recording URL: ${err instanceof Error ? err.message : 'unknown error'}.`);
+  const attempt = await fetchRecordingWithRetry(artifacts.recordingUrl);
+  if ('error' in attempt) {
+    await upsertRecordingFailed(supabase, call, attempt.error);
     return;
   }
-  if (!res.ok) {
-    await upsertRecordingFailed(supabase, call, `The provider's recording URL returned ${res.status}.`);
-    return;
-  }
+  const res = attempt.res;
 
   const buffer = Buffer.from(await res.arrayBuffer());
   if (buffer.length === 0) {
