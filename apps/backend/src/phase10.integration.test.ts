@@ -275,5 +275,19 @@ describe('Phase 10: Live Monitor supervisor actions', () => {
     expect(res.json().data.ended).toBe(true);
     const auditRow = fake.tables.audit_logs.find((a: any) => a.entity_id === call.id && a.action === 'call.ended_by_supervisor');
     expect(auditRow).toBeTruthy();
+
+    // Bug fix: this used to trust the engine's own end-of-call-report
+    // webhook exclusively to mark the call terminal, which left it
+    // permanently stuck showing "live" in Live Monitor whenever that
+    // webhook was lost or delayed - the supervisor's own explicit end
+    // action is now authoritative and applies locally right away.
+    const updatedCall = fake.tables.calls.find((c: any) => c.id === call.id)!;
+    expect(updatedCall.status).toBe('completed');
+    expect(updatedCall.ended_reason).toBe('supervisor_ended');
+
+    // A late-arriving real webhook (or a second manual end click) is a
+    // harmless no-op against an already-terminal call, never re-applied.
+    const secondEnd = await app.inject({ method: 'POST', url: `/api/v1/calls/${call.id}/end`, headers: { authorization: `Bearer ${supervisor.token}` } });
+    expect(secondEnd.statusCode).toBe(200);
   });
 });
