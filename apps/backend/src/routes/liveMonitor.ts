@@ -293,6 +293,21 @@ export async function liveMonitorActionRoutes(app: FastifyInstance): Promise<voi
       if (!(err instanceof OrchestrationProviderError)) throw err;
     }
 
+    // Don't leave this entirely to the engine's own webhook - a lost or
+    // delayed delivery would otherwise strand this call showing "live"
+    // forever, with the supervisor having no way to clear it even though
+    // they explicitly asked for it to end (this route previously trusted
+    // the webhook exclusively). The supervisor's own action is authoritative
+    // here: transition to 'completed' locally right away. If the real
+    // end-of-call-report webhook still arrives afterward, it's a no-op
+    // against this now-terminal status - never double-applied. A call
+    // already terminal (or one whose current status has no direct path to
+    // 'completed') just leaves this as the harmless no-op it already is.
+    await transitionCallState(supabase, call.id, 'completed', {
+      ended_at: new Date().toISOString(),
+      ended_reason: 'supervisor_ended',
+    });
+
     await writeAuditLog({
       organizationId: orgId,
       userId: req.user!.id,
@@ -303,6 +318,6 @@ export async function liveMonitorActionRoutes(app: FastifyInstance): Promise<voi
       ipAddress: req.ip,
     });
 
-    return ok({ ended: true }, { message: 'Call end requested. The final status will be confirmed by the engine\'s own webhook.' });
+    return ok({ ended: true }, { message: 'Call ended.' });
   });
 }
