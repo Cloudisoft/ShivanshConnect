@@ -21,18 +21,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const supabase = getSupabaseAdmin();
     const ctx = req.user!;
 
-    const { data: org, error: orgError } = await supabase
-      .from('organizations')
-      .select('id, name, slug, timezone, status, created_at, updated_at')
-      .eq('id', ctx.organizationId)
-      .single();
+    // Called on every page load (the frontend's session bootstrap) - these
+    // two lookups are fully independent, so they run in parallel rather
+    // than paying two sequential round trips before the page can render.
+    const [{ data: org, error: orgError }, { data: userRow, error: userError }] = await Promise.all([
+      supabase.from('organizations').select('id, name, slug, timezone, status, created_at, updated_at').eq('id', ctx.organizationId).single(),
+      supabase.from('users').select('id, organization_id, email, full_name, avatar_url, status, created_at, updated_at').eq('id', ctx.id).single(),
+    ]);
     if (orgError || !org) throw new NotFoundError('Organization not found.');
-
-    const { data: userRow, error: userError } = await supabase
-      .from('users')
-      .select('id, organization_id, email, full_name, avatar_url, status, created_at, updated_at')
-      .eq('id', ctx.id)
-      .single();
     if (userError || !userRow) throw new NotFoundError('User not found.');
 
     return ok({
