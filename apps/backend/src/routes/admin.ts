@@ -97,7 +97,7 @@ export async function adminHealthRoutes(app: FastifyInstance): Promise<void> {
           component: 'storage',
           status: roundTripOk ? 'connected' : 'error',
           detail: roundTripOk
-            ? `${storage.name}: real write+read+delete round trip succeeded. [debug NODE_ENV=${JSON.stringify(process.env.NODE_ENV)}]`
+            ? `${storage.name}: real write+read+delete round trip succeeded.`
             : `${storage.name}: read-back content did not match what was written.`,
           lastCheckedAt: nowIso,
         });
