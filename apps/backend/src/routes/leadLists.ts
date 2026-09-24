@@ -45,13 +45,17 @@ export async function leadListRoutes(app: FastifyInstance): Promise<void> {
     const listIds = (lists ?? []).map((l: any) => l.id);
     const counts = new Map<string, number>();
     if (listIds.length > 0) {
-      const { data: members, error: memberError } = await supabase
-        .from('lead_list_members')
-        .select('lead_list_id')
-        .in('lead_list_id', listIds);
+      // Performance: a grouped-count RPC (migration
+      // 00000000000054_lead_list_member_counts_bulk_fn.sql) instead of
+      // downloading every membership row for every list on the page just
+      // to count them in JS - a list with thousands of members used to
+      // pull thousands of rows over the wire on every single page load.
+      const { data: memberCounts, error: memberError } = await supabase.rpc('lead_list_member_counts_bulk', {
+        p_lead_list_ids: listIds,
+      });
       if (memberError) throw memberError;
-      for (const m of members ?? []) {
-        counts.set(m.lead_list_id, (counts.get(m.lead_list_id) ?? 0) + 1);
+      for (const row of (memberCounts ?? []) as { lead_list_id: string; count: number }[]) {
+        counts.set(row.lead_list_id, Number(row.count));
       }
     }
 

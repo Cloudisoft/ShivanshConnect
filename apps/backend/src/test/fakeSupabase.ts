@@ -983,6 +983,21 @@ export function createFakeSupabase() {
     return { data, error: null };
   }
 
+  /**
+   * Minimal stand-in for supabase.rpc('lead_list_member_counts_bulk', ...)
+   * - see 00000000000054_lead_list_member_counts_bulk_fn.sql. Plain GROUP
+   * BY against the in-memory table.
+   */
+  function leadListMemberCountsBulk(args: { p_lead_list_ids: string[] }): { data: Row[]; error: null } {
+    const ids = new Set(args.p_lead_list_ids);
+    const counts = new Map<string, number>();
+    for (const row of tables.lead_list_members) {
+      if (!ids.has(row.lead_list_id as string)) continue;
+      counts.set(row.lead_list_id as string, (counts.get(row.lead_list_id as string) ?? 0) + 1);
+    }
+    return { data: Array.from(counts.entries()).map(([lead_list_id, count]) => ({ lead_list_id, count })), error: null };
+  }
+
   function campaignActiveCallCountsBulk(args: { p_campaign_ids: string[] }): { data: Row[]; error: null } {
     const ids = new Set(args.p_campaign_ids);
     const activeStatuses = new Set([
@@ -1245,6 +1260,9 @@ export function createFakeSupabase() {
       }
       if (fnName === 'campaign_active_call_counts_bulk') {
         return campaignActiveCallCountsBulk(args as any);
+      }
+      if (fnName === 'lead_list_member_counts_bulk') {
+        return leadListMemberCountsBulk(args as any);
       }
       return { data: null, error: { message: `Unknown RPC function in fake client: ${fnName}` } };
     },
