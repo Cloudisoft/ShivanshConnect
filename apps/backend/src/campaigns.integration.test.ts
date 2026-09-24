@@ -238,10 +238,11 @@ describe('Phase 7: campaign engine end-to-end', () => {
     // terminalizes the campaign_leads row rather than looping forever -
     // final_disposition is now Phase 8's assigned disposition CODE (the
     // single source of truth call_dispositions also holds), not the raw
-    // ended_reason string: a 0-second "completed" call with no
-    // interaction is deterministically DISCONNECTED.
+    // ended_reason string: a 0-second "completed" call to an invalid
+    // number is deterministically NOT_IN_SERVICE (its own distinct
+    // disposition, separate from a generic technical DISCONNECTED).
     expect(updatedC.status).toBe('completed');
-    expect(updatedC.final_disposition).toBe('DISCONNECTED');
+    expect(updatedC.final_disposition).toBe('NOT_IN_SERVICE');
 
     // The retry-pending lead is NOT re-claimed by a tick right now (its
     // cooldown hasn't elapsed) even though capacity is free again.

@@ -285,6 +285,8 @@ export function createFakeSupabase() {
       ['HUNG_UP', 'Hung Up'],
       ['TRANSFERRED', 'Transferred'],
       ['CALL_DISCONNECTED_IN_TRANSFER', 'Call Disconnected in Transfer'],
+      ['NO_ANSWER', 'No Answer'],
+      ['NOT_IN_SERVICE', 'Not in Service'],
     ];
     for (const [code, name] of catalog) {
       tables.dispositions.push({ id: randomUUID(), organization_id: null, code, name, is_system: true, created_at: new Date().toISOString() });
