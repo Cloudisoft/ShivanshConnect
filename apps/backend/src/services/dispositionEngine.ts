@@ -43,6 +43,7 @@ const NO_INTERACTION_ENDED_REASONS = new Set([
   'assistant-error',
   'busy',
   'dial-failed',
+  'invalid-number',
 ]);
 
 /** ended_reason values that indicate the CALLER hung up (as opposed to a
@@ -112,21 +113,27 @@ export function decideDisposition(signals: CallOutcomeSignals): DispositionDecis
     return { code: 'CALL_CONNECTED', confidence: 0.9, reason: 'Call connected and a conversation of meaningful duration occurred.' };
   }
 
-  // 5. Early/immediate hangup with no meaningful interaction.
-  if (noInteraction || (signals.durationSeconds ?? 0) === 0) {
+  // 5. DISCONNECTED is reserved for a genuine technical/no-interaction
+  // failure (no-answer, busy, dial failed, provider/assistant error,
+  // silence timeout) - never for a call the CALLER actively ended,
+  // regardless of how short it was. A caller who picks up and hangs up
+  // in the first second is still a real hang-up, not a disconnect.
+  if (noInteraction) {
     return { code: 'DISCONNECTED', confidence: 0.8, reason: signals.endedReason ? `Provider reported an early disconnect (${signals.endedReason}) with no meaningful interaction.` : 'Call ended with no meaningful interaction.' };
   }
 
-  // 6. Caller hung up mid-call / short connected call with no clean
-  // "connected" signal.
+  // 6. Caller hung up - checked BEFORE any generic "short call" fallback
+  // so an explicit customer-ended-call reason always wins over duration
+  // alone, no matter how brief the call was.
   if (signals.endedReason != null && CALLER_HANGUP_ENDED_REASONS.has(signals.endedReason)) {
     return { code: 'HUNG_UP', confidence: 0.85, reason: 'Caller ended the call before a full conversation concluded.' };
   }
 
-  // 7. Fallback: a completed call that didn't clear the connected
-  // threshold and has no other explicit signal reads as a hang-up rather
-  // than a clean disconnect - it did ring/connect (duration > 0) but
-  // ended quickly.
+  // 7. Fallback: a call with no explicit technical-failure or
+  // caller-hangup reason, and no clean "connected" signal, reads as a
+  // hang-up rather than a disconnect by default - DISCONNECTED is never
+  // the default outcome, only ever an explicit technical signal (branch
+  // 5 above).
   return { code: 'HUNG_UP', confidence: 0.6, reason: 'Call ended quickly without a clear connected outcome.' };
 }
 
