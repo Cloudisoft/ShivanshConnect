@@ -59,7 +59,10 @@ export function LeadsPage(): JSX.Element {
 
   const leadsQuery = useLeads(query);
   const listQuery = useLeadList(leadListId);
-  const listsQuery = useLeadLists(1, 200);
+  // page_size is capped at 100 by the backend's shared pagination schema
+  // (apps/backend/src/schemas/common.ts) - 200 here silently 422'd on
+  // every single load of this page.
+  const listsQuery = useLeadLists(1, 100);
   const deleteLead = useDeleteLead();
   const bulkAction = useLeadBulkAction();
   const queueExport = useQueueLeadsExport();
