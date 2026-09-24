@@ -28,13 +28,33 @@ async function getOwnedCampaign(supabase: Supabase, id: string, orgId: string) {
   return campaign;
 }
 
+function buildCampaignCounts(statusCounts: Record<string, number>, activeCalls: number) {
+  let total = 0;
+  for (const v of Object.values(statusCounts)) total += v;
+  return {
+    total,
+    pending: statusCounts.pending ?? 0,
+    queued: statusCounts.queued ?? 0,
+    dialing: statusCounts.dialing ?? 0,
+    in_progress: statusCounts.in_progress ?? 0,
+    connected: statusCounts.connected ?? 0,
+    completed: statusCounts.completed ?? 0,
+    failed: statusCounts.failed ?? 0,
+    retry_pending: statusCounts.retry_pending ?? 0,
+    skipped: statusCounts.skipped ?? 0,
+    dnc: statusCounts.dnc ?? 0,
+    active_calls: activeCalls,
+  };
+}
+
 // Performance: this used to be 12 separate COUNT queries (one per
 // CAMPAIGN_LEAD_STATUSES entry) plus 2 more sequential ones (total,
-// active_calls) - 14 round trips just to render one campaign card, and
-// GET /campaigns pays that cost once per campaign in the list. Now a
+// active_calls) - 14 round trips just to render one campaign card. Now a
 // single grouped-count RPC (see migration
 // 00000000000051_campaign_lead_status_counts_fn.sql) plus the one
-// active-calls count, run in parallel - 2 round trips total.
+// active-calls count, run in parallel - 2 round trips total. Used by
+// GET /campaigns/:id (a single campaign) - the list route below uses the
+// bulk variant instead, so it never pays this per-row.
 async function computeCampaignCounts(supabase: Supabase, campaignId: string) {
   const [{ data: statusCounts, error: statusError }, { count: activeCalls, error: activeError }] = await Promise.all([
     supabase.rpc('campaign_lead_status_counts', { p_campaign_id: campaignId }),
@@ -48,25 +68,48 @@ async function computeCampaignCounts(supabase: Supabase, campaignId: string) {
   if (activeError) throw activeError;
 
   const counts: Record<string, number> = {};
-  let total = 0;
   for (const row of (statusCounts ?? []) as { status: string; count: number }[]) {
     counts[row.status] = Number(row.count);
-    total += Number(row.count);
   }
-  return {
-    total,
-    pending: counts.pending ?? 0,
-    queued: counts.queued ?? 0,
-    dialing: counts.dialing ?? 0,
-    in_progress: counts.in_progress ?? 0,
-    connected: counts.connected ?? 0,
-    completed: counts.completed ?? 0,
-    failed: counts.failed ?? 0,
-    retry_pending: counts.retry_pending ?? 0,
-    skipped: counts.skipped ?? 0,
-    dnc: counts.dnc ?? 0,
-    active_calls: activeCalls ?? 0,
-  };
+  return buildCampaignCounts(counts, activeCalls ?? 0);
+}
+
+// Performance fix (this page's actual slowness): GET /campaigns still
+// called computeCampaignCounts() once PER campaign row - 2 round trips
+// each, so a page of 20 campaigns fired 40 concurrent DB round trips just
+// to render the list. This bulk variant (migration
+// 00000000000053_campaign_counts_bulk_fns.sql) fetches every campaign's
+// counts in exactly 2 round trips total for the whole page, no matter how
+// many campaigns are on it.
+async function computeCampaignCountsBulk(
+  supabase: Supabase,
+  campaignIds: string[],
+): Promise<Map<string, ReturnType<typeof buildCampaignCounts>>> {
+  const result = new Map<string, ReturnType<typeof buildCampaignCounts>>();
+  if (campaignIds.length === 0) return result;
+
+  const [{ data: statusRows, error: statusError }, { data: activeRows, error: activeError }] = await Promise.all([
+    supabase.rpc('campaign_lead_status_counts_bulk', { p_campaign_ids: campaignIds }),
+    supabase.rpc('campaign_active_call_counts_bulk', { p_campaign_ids: campaignIds }),
+  ]);
+  if (statusError) throw statusError;
+  if (activeError) throw activeError;
+
+  const statusByCampaign = new Map<string, Record<string, number>>();
+  for (const row of (statusRows ?? []) as { campaign_id: string; status: string; count: number }[]) {
+    const bucket = statusByCampaign.get(row.campaign_id) ?? {};
+    bucket[row.status] = Number(row.count);
+    statusByCampaign.set(row.campaign_id, bucket);
+  }
+  const activeByCampaign = new Map<string, number>();
+  for (const row of (activeRows ?? []) as { campaign_id: string; count: number }[]) {
+    activeByCampaign.set(row.campaign_id, Number(row.count));
+  }
+
+  for (const id of campaignIds) {
+    result.set(id, buildCampaignCounts(statusByCampaign.get(id) ?? {}, activeByCampaign.get(id) ?? 0));
+  }
+  return result;
 }
 
 export async function campaignRoutes(app: FastifyInstance): Promise<void> {
@@ -87,7 +130,9 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     const { data, error, count } = await builder;
     if (error) throw error;
 
-    const withCounts = await Promise.all((data ?? []).map(async (c: any) => ({ ...c, counts: await computeCampaignCounts(supabase, c.id) })));
+    const rows = data ?? [];
+    const countsByCampaign = await computeCampaignCountsBulk(supabase, rows.map((c: any) => c.id));
+    const withCounts = rows.map((c: any) => ({ ...c, counts: countsByCampaign.get(c.id) ?? buildCampaignCounts({}, 0) }));
     return ok(withCounts, { pagination: paginationMeta(query.page, query.page_size, count ?? 0) });
   });
 

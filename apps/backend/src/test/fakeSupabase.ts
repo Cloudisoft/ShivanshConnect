@@ -963,6 +963,40 @@ export function createFakeSupabase() {
   }
 
   /**
+   * Minimal stand-in for supabase.rpc('campaign_lead_status_counts_bulk',
+   * ...) and ('campaign_active_call_counts_bulk', ...) - see
+   * 00000000000053_campaign_counts_bulk_fns.sql. Same GROUP BY logic as
+   * their single-campaign counterparts, just grouped by campaign_id too.
+   */
+  function campaignLeadStatusCountsBulk(args: { p_campaign_ids: string[] }): { data: Row[]; error: null } {
+    const ids = new Set(args.p_campaign_ids);
+    const counts = new Map<string, number>();
+    for (const row of tables.campaign_leads) {
+      if (!ids.has(row.campaign_id as string)) continue;
+      const key = `${row.campaign_id}::${row.status}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const data = Array.from(counts.entries()).map(([key, count]) => {
+      const [campaign_id, status] = key.split('::');
+      return { campaign_id, status, count };
+    });
+    return { data, error: null };
+  }
+
+  function campaignActiveCallCountsBulk(args: { p_campaign_ids: string[] }): { data: Row[]; error: null } {
+    const ids = new Set(args.p_campaign_ids);
+    const activeStatuses = new Set([
+      'queued', 'dialing', 'ringing', 'answered', 'in_progress', 'voicemail', 'answering_machine', 'transfer_pending', 'transferring',
+    ]);
+    const counts = new Map<string, number>();
+    for (const row of tables.calls) {
+      if (!ids.has(row.campaign_id as string) || !activeStatuses.has(row.status as string)) continue;
+      counts.set(row.campaign_id as string, (counts.get(row.campaign_id as string) ?? 0) + 1);
+    }
+    return { data: Array.from(counts.entries()).map(([campaign_id, count]) => ({ campaign_id, count })), error: null };
+  }
+
+  /**
    * Minimal stand-in for supabase.rpc('agent_evaluation_summary', ...) -
    * see supabase/migrations/00000000000041_phase11_evaluation_summary_fn
    * .sql. Computes the same average-overall-score + per-category-average
@@ -1205,6 +1239,12 @@ export function createFakeSupabase() {
       }
       if (fnName === 'campaign_lead_status_counts') {
         return campaignLeadStatusCounts(args as any);
+      }
+      if (fnName === 'campaign_lead_status_counts_bulk') {
+        return campaignLeadStatusCountsBulk(args as any);
+      }
+      if (fnName === 'campaign_active_call_counts_bulk') {
+        return campaignActiveCallCountsBulk(args as any);
       }
       return { data: null, error: { message: `Unknown RPC function in fake client: ${fnName}` } };
     },
