@@ -13,9 +13,17 @@
  *      (marks the lead 'dnc', never eligible for retry - retryEngine's
  *      hard DNC-never-retry rule covers it from here on regardless of any
  *      later manual re-add to a campaign).
+ *   4. Actually end the live call with the provider - recognizing the
+ *      request only ever updated our own local state, the AI would keep
+ *      right on talking (and the caller stays on a call they explicitly
+ *      asked to end) until it wrapped up the conversation naturally on
+ *      its own. A caller who says "stop calling me" should be hung up on
+ *      immediately, not talked at for another turn or two.
  */
 import { transitionCallState } from '../lib/callStateMachine.js';
 import { flagExistingLeadsAsDnc } from '../lib/leadHelpers.js';
+import { resolveProviderForCall } from '../lib/orchestration/resolveProvider.js';
+import { OrchestrationProviderError } from '../lib/orchestration/types.js';
 import type { getSupabaseAdmin } from '../lib/supabase.js';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
@@ -63,6 +71,20 @@ export async function handleDncRequest(
   const flaggedCount = await flagExistingLeadsAsDnc(supabase as any, orgId, phone, reason ?? 'Caller requested to be placed on the Do Not Call list during a call.');
 
   const result = await transitionCallState(supabase, call.id, 'dnc', { ended_reason: 'caller_requested_dnc', ended_at: new Date().toISOString() });
+
+  const providerCallId = call.engine === 'vapi' ? call.vapi_call_id : call.pipecat_call_id;
+  if (providerCallId) {
+    try {
+      const provider = await resolveProviderForCall(supabase, call);
+      await provider.endCall(providerCallId);
+    } catch (err) {
+      // The DNC record/disposition above already committed regardless -
+      // a provider hangup failure (already ended, transient network
+      // error, etc.) must never undo that. Log and move on; a call the
+      // provider already considers over is a harmless no-op here too.
+      if (!(err instanceof OrchestrationProviderError)) throw err;
+    }
+  }
 
   return { dncEntryId, leadFlagged: flaggedCount > 0, transitionApplied: result.applied };
 }

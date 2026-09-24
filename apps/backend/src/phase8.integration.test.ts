@@ -35,6 +35,7 @@ vi.mock('./lib/supabase.js', () => ({
 let vapiCallCounter = 0;
 let vapiAssistantCounter = 0;
 let vapiPhoneNumberCounter = 0;
+let vapiHangupCalls: string[] = [];
 
 describe('Phase 8: disposition engine, retry engine, callbacks, DNC tool-calls', () => {
   let app: Awaited<ReturnType<typeof import('./index.js').buildApp>>;
@@ -58,6 +59,10 @@ describe('Phase 8: disposition engine, retry engine, callbacks, DNC tool-calls',
       }
       if (url.startsWith('https://api.vapi.ai/assistant?') && method === 'GET') {
         return { ok: true, status: 200, json: async () => [] } as unknown as Response;
+      }
+      if (url.startsWith('https://api.vapi.ai/call/') && url.endsWith('/hangup') && method === 'POST') {
+        vapiHangupCalls.push(url);
+        return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
       }
       throw new Error(`Unexpected fetch call in test: ${method} ${url}`);
     });
@@ -207,6 +212,12 @@ describe('Phase 8: disposition engine, retry engine, callbacks, DNC tool-calls',
     const dncEntry = fake.tables.dnc_entries.find((e) => e.organization_id === leadRow.organization_id && e.phone_normalized === leadRow.phone_normalized);
     expect(dncEntry).toBeTruthy();
     expect(dncEntry!.source).toBe('caller_request');
+
+    // Bug fix: recognizing a DNC request used to only update local state -
+    // the live call itself kept going until it wrapped up naturally. A
+    // caller who explicitly asked to be hung up on must actually be hung
+    // up on, not talked at for another turn.
+    expect(vapiHangupCalls).toEqual([`https://api.vapi.ai/call/${call.vapi_call_id}/hangup`]);
 
     const updatedCall = fake.tables.calls.find((c) => c.id === call.id)!;
     expect(updatedCall.status).toBe('dnc');
