@@ -73,7 +73,12 @@ describe('callReconciliation', () => {
         throw new Error('unused');
       },
       async getCall() {
-        return { status: 'ended', raw: { status: 'ended', endedReason: 'customer-ended-call', endedAt: new Date().toISOString(), cost: 0.42 } };
+        const endedAt = new Date();
+        const startedAt = new Date(endedAt.getTime() - 47 * 1000);
+        return {
+          status: 'ended',
+          raw: { status: 'ended', endedReason: 'customer-ended-call', startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), cost: 0.42 },
+        };
       },
       async endCall() {},
       async transferCall() {},
@@ -93,6 +98,13 @@ describe('callReconciliation', () => {
     expect(call.status).toBe('completed');
     expect(call.ended_reason).toBe('customer-ended-call');
     expect(call.cost).toBe(0.42);
+    // Bug fix: this used to leave duration_seconds null on every
+    // reconciliation-repaired call, which the disposition engine reads as
+    // "no meaningful interaction" and misclassifies as DISCONNECTED/
+    // HUNG_UP even for a real, successfully connected call - derived here
+    // from the provider's own startedAt/endedAt, same as this fixture's
+    // real 47-second gap between them.
+    expect(call.duration_seconds).toBe(47);
   });
 
   it('leaves a call the provider still reports as active completely alone', async () => {

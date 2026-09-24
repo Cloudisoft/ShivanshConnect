@@ -27,7 +27,10 @@ const PROCESSING_STATUSES = ['pending', 'parsing', 'validating', 'committing'];
  * none do, rather than duplicating list-creation as a stripped-down
  * inline form. */
 function ChooseListStep({ onChosen, onClose }: { onChosen: (leadListId: string) => void; onClose: () => void }): JSX.Element {
-  const listsQuery = useLeadLists(1, 200);
+  // page_size is capped at 100 by the backend's shared pagination schema
+  // (apps/backend/src/schemas/common.ts) - 200 here silently 422'd on
+  // every single open of this modal.
+  const listsQuery = useLeadLists(1, 100);
   const [selectedId, setSelectedId] = useState('');
 
   const lists = listsQuery.data?.data ?? [];

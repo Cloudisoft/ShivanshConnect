@@ -53,11 +53,25 @@ function vapiTerminalTransition(raw: Record<string, unknown>): { status: CallSta
   if (raw.status !== 'ended') return null;
   const endedReason = typeof raw.endedReason === 'string' ? raw.endedReason : null;
   const status: CallStatus = endedReason === 'assistant-forwarded-call' ? 'transferred' : 'completed';
+  // Bug fix: this used to omit duration_seconds entirely (unlike
+  // routes/webhooks.ts's own end-of-call-report handler, which always
+  // sets it from Vapi's durationSeconds field) - every call repaired by
+  // this reconciliation path instead of a real webhook was left with a
+  // null duration, which the disposition engine (services/
+  // dispositionEngine.ts) reads as "no meaningful interaction", silently
+  // misclassifying real, successfully connected calls as
+  // DISCONNECTED/HUNG_UP. Vapi's getCall() doesn't expose durationSeconds
+  // directly, but does give real startedAt/endedAt timestamps - derived
+  // the same way any duration would be from a start/end pair.
+  const startedAt = typeof raw.startedAt === 'string' ? Date.parse(raw.startedAt) : NaN;
+  const endedAt = typeof raw.endedAt === 'string' ? Date.parse(raw.endedAt) : NaN;
+  const durationSeconds = Number.isFinite(startedAt) && Number.isFinite(endedAt) && endedAt >= startedAt ? Math.round((endedAt - startedAt) / 1000) : null;
   return {
     status,
     context: {
       ended_at: typeof raw.endedAt === 'string' ? raw.endedAt : new Date().toISOString(),
       ended_reason: endedReason,
+      duration_seconds: durationSeconds,
       cost: typeof raw.cost === 'number' ? raw.cost : null,
     },
   };
