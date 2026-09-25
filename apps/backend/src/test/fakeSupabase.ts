@@ -48,6 +48,7 @@ interface Tables {
   phone_number_providers: Row[];
   phone_number_provider_credentials: Row[];
   phone_numbers: Row[];
+  campaign_phone_numbers: Row[];
   vapi_credentials: Row[];
   calls: Row[];
   call_events: Row[];
@@ -117,6 +118,7 @@ export function createFakeSupabase() {
     phone_number_providers: [],
     phone_number_provider_credentials: [],
     phone_numbers: [],
+    campaign_phone_numbers: [],
     vapi_credentials: [],
     calls: [],
     call_events: [],
@@ -355,6 +357,11 @@ export function createFakeSupabase() {
     if (table === 'lead_list_members' && selectStr.includes('lead_lists(')) {
       const list = tables.lead_lists.find((l) => l.id === row.lead_list_id);
       out.lead_lists = list ? { id: list.id, name: list.name } : null;
+    }
+
+    if (table === 'campaign_phone_numbers' && selectStr.includes('phone_numbers(')) {
+      const phoneNumber = tables.phone_numbers.find((p) => p.id === row.phone_number_id);
+      out.phone_numbers = phoneNumber ? { ...phoneNumber } : null;
     }
 
     if (table === 'users' && selectStr.includes('user_roles(')) {

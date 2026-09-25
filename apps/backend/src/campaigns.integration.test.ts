@@ -178,6 +178,35 @@ describe('Phase 7: campaign engine end-to-end', () => {
     const setTransferRes = await app.inject({ method: 'PATCH', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` }, payload: { transfer_number_e164: '+14845550099' } });
     expect(setTransferRes.statusCode).toBe(200);
 
+    // Phone number pool: a second number (a different provider - BYON
+    // again here, but mixing Twilio/Telnyx works identically since each
+    // call resolves its own provider independently) added to the
+    // campaign's dialing pool via PUT .../phone-numbers, rotating across
+    // both instead of always dialing from the single original number.
+    const secondNumberRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/phone-numbers/import',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        provider_key: 'byon',
+        phone_number: `+1484556${Math.floor(1000 + Math.random() * 8999)}`,
+        capabilities: { voice_inbound: true, voice_outbound: true, sms: false },
+        sip_trunk_metadata: { host: 'sip2.example.com', username: 'trunk-user-2', password: 'trunk-secret-2' },
+      },
+    });
+    expect(secondNumberRes.statusCode).toBe(200);
+    const secondNumber = secondNumberRes.json().data;
+
+    const setPoolRes = await app.inject({
+      method: 'PUT',
+      url: `/api/v1/campaigns/${campaign.id}/phone-numbers`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { phone_number_ids: [phoneNumber.id, secondNumber.id] },
+    });
+    expect(setPoolRes.statusCode).toBe(200);
+    const poolCheckRes = await app.inject({ method: 'GET', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(poolCheckRes.json().data.phone_numbers.map((p: any) => p.id).sort()).toEqual([phoneNumber.id, secondNumber.id].sort());
+
     const preflightReady = await app.inject({ method: 'GET', url: `/api/v1/campaigns/${campaign.id}/preflight`, headers: { authorization: `Bearer ${token}` } });
     expect(preflightReady.json().data.ready).toBe(true);
     expect(preflightReady.json().data.errors).toEqual([]);
@@ -198,6 +227,20 @@ describe('Phase 7: campaign engine end-to-end', () => {
       expect(cl.last_call_id).toBeTruthy();
       expect(cl.attempt_count).toBe(1);
     }
+
+    // The 3 calls this tick just dialed rotated through the 2-number
+    // pool in dial order: number 1, number 2, number 1 again - never all
+    // 3 from the same number. Array (insertion) order, not a timestamp
+    // sort, since the fake table's created_at resolution isn't fine
+    // enough to guarantee distinct values across calls dialed within the
+    // same synchronous tick.
+    const dialedCalls = fake.tables.calls.filter((c) => c.campaign_id === campaign.id);
+    expect(dialedCalls).toHaveLength(3);
+    const usedPhoneNumberIds = dialedCalls.map((c) => c.phone_number_id);
+    expect(new Set(usedPhoneNumberIds).size).toBe(2);
+    expect(usedPhoneNumberIds[0]).toBe(phoneNumber.id);
+    expect(usedPhoneNumberIds[1]).toBe(secondNumber.id);
+    expect(usedPhoneNumberIds[2]).toBe(phoneNumber.id);
 
     // A second tick, with those 3 calls still active, dispatches 0 more
     // (capacity is already fully used).

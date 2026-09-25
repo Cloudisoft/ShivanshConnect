@@ -60,6 +60,17 @@ const dispositionRulesOverrideSchema = z.object({
   retry_delay_minutes: z.number().int().min(1).max(10080).optional(),
 });
 
+// Replaces the whole pool in one call (matches how the frontend's
+// multi-select submits its full current selection) - simpler and safer
+// than separate add/remove endpoints for a checkbox-list UI, and the
+// dispatcher's round-robin state is keyed by campaign_id, not by which
+// specific numbers are in the pool, so a full replace never disrupts it
+// beyond the normal effect of the set actually changing.
+export const setCampaignPhoneNumbersSchema = z.object({
+  phone_number_ids: z.array(uuidSchema).max(50),
+});
+export type SetCampaignPhoneNumbersInput = z.infer<typeof setCampaignPhoneNumbersSchema>;
+
 export const createCampaignVersionSchema = z.object({
   prompt: z.string().trim().max(20000).default(''),
   ai_agent_id: uuidSchema.optional().nullable(),

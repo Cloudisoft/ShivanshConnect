@@ -11,6 +11,7 @@ import {
   listCampaignsQuerySchema,
   removeLeadsSchema,
   rotateLeadsSchema,
+  setCampaignPhoneNumbersSchema,
   updateCampaignSchema,
   updateConcurrencySchema,
 } from '../schemas/campaigns.js';
@@ -167,15 +168,96 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     // it) - a draft saved via POST /:id/versions was never returned here
     // at all, so reopening the Configuration tab after saving a draft
     // showed empty/stale fields instead of what was actually saved.
-    const [counts, currentVersionResult, draftVersionResult] = await Promise.all([
+    const [counts, currentVersionResult, draftVersionResult, phoneNumbersResult] = await Promise.all([
       computeCampaignCounts(supabase, id),
       campaign.current_version_id
         ? supabase.from('campaign_versions').select('*').eq('id', campaign.current_version_id).maybeSingle()
         : Promise.resolve({ data: null }),
       supabase.from('campaign_versions').select('*').eq('campaign_id', id).eq('status', 'draft').order('version_number', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('campaign_phone_numbers').select('phone_numbers(*)').eq('campaign_id', id),
     ]);
+    let phoneNumbers = ((phoneNumbersResult.data ?? []) as any[]).map((row) => row.phone_numbers).filter(Boolean);
+    if (phoneNumbers.length === 0 && campaign.phone_number_id) {
+      // Same legacy fallback the dispatcher itself uses (a campaign
+      // created via the old single-number flow, or whose pool row was
+      // never backfilled) - shows the UI's checkbox list what's actually
+      // configured and will actually be dialed from, rather than an
+      // empty list that contradicts a real, working single-number setup.
+      const { data: legacy } = await supabase.from('phone_numbers').select('*').eq('id', campaign.phone_number_id).maybeSingle();
+      if (legacy) phoneNumbers = [legacy];
+    }
 
-    return ok({ ...campaign, counts, current_version: currentVersionResult.data ?? null, draft_version: draftVersionResult.data ?? null });
+    return ok({ ...campaign, counts, current_version: currentVersionResult.data ?? null, draft_version: draftVersionResult.data ?? null, phone_numbers: phoneNumbers });
+  });
+
+  // GET /api/v1/campaigns/:id/phone-numbers - the campaign's dialing pool
+  // (any mix of providers - a number's own provider_key is resolved
+  // independently per call, so mixing Twilio/Telnyx numbers in the same
+  // pool has never actually been a problem, only the lack of a
+  // multi-select UI to build one was).
+  app.get('/:id/phone-numbers', { preHandler: requirePermission('campaigns.view') }, async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    await getOwnedCampaign(supabase, id, orgId);
+
+    const { data, error } = await supabase.from('campaign_phone_numbers').select('phone_numbers(*)').eq('campaign_id', id);
+    if (error) throw error;
+    return ok(((data ?? []) as any[]).map((row) => row.phone_numbers).filter(Boolean));
+  });
+
+  // PUT /api/v1/campaigns/:id/phone-numbers - replaces the campaign's
+  // whole dialing pool with exactly this set (see the schema's own
+  // comment for why a full replace rather than add/remove).
+  app.put('/:id/phone-numbers', { preHandler: requirePermission('campaigns.edit') }, async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const body = setCampaignPhoneNumbersSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    const campaign = await getOwnedCampaign(supabase, id, orgId);
+
+    if (body.phone_number_ids.length > 0) {
+      const { data: owned, error: ownedError } = await supabase
+        .from('phone_numbers')
+        .select('id')
+        .eq('organization_id', orgId)
+        .in('id', body.phone_number_ids);
+      if (ownedError) throw ownedError;
+      const ownedIds = new Set((owned ?? []).map((n: any) => n.id));
+      const missing = body.phone_number_ids.filter((pid) => !ownedIds.has(pid));
+      if (missing.length > 0) {
+        throw new ValidationError('One or more selected phone numbers do not belong to your organization.');
+      }
+    }
+
+    const { error: deleteError } = await supabase.from('campaign_phone_numbers').delete().eq('campaign_id', id);
+    if (deleteError) throw deleteError;
+    if (body.phone_number_ids.length > 0) {
+      const { error: insertError } = await supabase
+        .from('campaign_phone_numbers')
+        .insert(body.phone_number_ids.map((phoneNumberId) => ({ campaign_id: id, phone_number_id: phoneNumberId, organization_id: orgId })));
+      if (insertError) throw insertError;
+    }
+    // Legacy single-number column kept in sync for any code path that
+    // still reads it directly (e.g. an org that never adds a second
+    // number never needs the pool at all) - set to the first selected
+    // number, or cleared when the pool is emptied.
+    await supabase.from('campaigns').update({ phone_number_id: body.phone_number_ids[0] ?? null }).eq('id', id);
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.CAMPAIGN_UPDATED,
+      entityType: 'campaign',
+      entityId: id,
+      oldValue: { phone_number_id: campaign.phone_number_id },
+      newValue: { phone_number_ids: body.phone_number_ids },
+      ipAddress: req.ip,
+    });
+
+    return ok({ phone_number_ids: body.phone_number_ids }, { message: 'Campaign phone numbers updated.' });
   });
 
   // PATCH /api/v1/campaigns/:id

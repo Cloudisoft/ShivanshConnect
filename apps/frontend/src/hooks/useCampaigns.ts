@@ -1,9 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Campaign, CampaignCounts, CampaignVersion, DialingSettings, PreflightResult } from '@shivanshconnect/shared';
+import type { Campaign, CampaignCounts, CampaignVersion, DialingSettings, PhoneNumber, PreflightResult } from '@shivanshconnect/shared';
 import { api } from '../lib/apiClient';
 
 export type CampaignWithCounts = Campaign & { counts: CampaignCounts };
-export type CampaignDetail = Campaign & { counts: CampaignCounts; current_version: CampaignVersion | null; draft_version: CampaignVersion | null };
+export type CampaignDetail = Campaign & {
+  counts: CampaignCounts;
+  current_version: CampaignVersion | null;
+  draft_version: CampaignVersion | null;
+  phone_numbers: PhoneNumber[];
+};
 
 export function useCampaigns(page = 1, pageSize = 50, status?: string) {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
@@ -40,6 +45,19 @@ export function useUpdateCampaign() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, ...input }: { id: string } & Record<string, unknown>) => api.patch<Campaign>(`/campaigns/${id}`, input),
+    onSuccess: (_d, v) => invalidate(queryClient, v.id),
+  });
+}
+
+// Replaces the campaign's whole phone number dialing pool - saves
+// immediately (like the campaign's own direct fields), no publish
+// needed, since the dispatcher reads the live pool every tick rather
+// than a published-version snapshot.
+export function useSetCampaignPhoneNumbers() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, phoneNumberIds }: { id: string; phoneNumberIds: string[] }) =>
+      api.put<{ phone_number_ids: string[] }>(`/campaigns/${id}/phone-numbers`, { phone_number_ids: phoneNumberIds }),
     onSuccess: (_d, v) => invalidate(queryClient, v.id),
   });
 }
