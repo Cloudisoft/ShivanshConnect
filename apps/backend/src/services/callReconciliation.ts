@@ -40,13 +40,6 @@ const RECONCILIATION_TICK_MS = Number.parseInt(process.env.CALL_RECONCILIATION_I
  * ringing/in-progress call is never mistakenly probed as if something had
  * gone wrong. */
 const STUCK_CALL_TIMEOUT_MS = Number.parseInt(process.env.CALL_RECONCILIATION_STUCK_TIMEOUT_MS ?? '', 10) || 10 * 60 * 1000;
-/** The force-fail cutoff (see forceFailHardStuckCall()'s doc comment) -
- * deliberately far past STUCK_CALL_TIMEOUT_MS so the provider-confirmed
- * path gets many ticks' worth of chances first (at the default 5-minute
- * tick interval, roughly 7-8 more attempts) before anything is ever
- * force-failed without the provider's confirmation. No real outbound call
- * legitimately runs this long. */
-const HARD_STUCK_CALL_TIMEOUT_MS = Number.parseInt(process.env.CALL_RECONCILIATION_HARD_STUCK_TIMEOUT_MS ?? '', 10) || 45 * 60 * 1000;
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let tickInFlight = false;
@@ -107,43 +100,12 @@ export interface ReconcileResult {
   skipped: number;
 }
 
-/** Forces one call straight to 'failed' when it's been non-terminal for
- * far longer than any real call plausibly runs, REGARDLESS of what the
- * provider reports (or whether it could be reached at all) - the one
- * exception to this module's own "never guess" rule (see header comment),
- * deliberately reserved for this one case: a real production incident
- * where 5+ calls sat stuck in Dialing/In Progress for 17+ minutes,
- * permanently occupying their campaign's concurrency slots and silently
- * blocking every new dial ("calls have stopped working even though the
- * campaign is active") - Vapi itself was still reporting them active (or
- * unreachable) on every reconciliation pass, so the provider-confirmed
- * path alone could never clear them, and nothing else in this codebase
- * ever frees a concurrency slot except a terminal call status. Gated by
- * HARD_STUCK_CALL_TIMEOUT_MS below - deliberately much longer than
- * STUCK_CALL_TIMEOUT_MS so the polite, provider-confirmed path above gets
- * many ticks' worth of chances first. */
-async function forceFailHardStuckCall(supabase: Supabase, callId: string): Promise<boolean> {
-  const applied = await transitionCallState(supabase, callId, 'failed', {
-    ended_at: new Date().toISOString(),
-    ended_reason: 'reconciliation_hard_timeout',
-  });
-  return applied.applied;
-}
-
 /** Reconciles every stuck call for ONE organization. Never throws - a
  * per-call or per-provider failure (e.g. the org's Vapi credentials were
  * since removed, or the provider is briefly unreachable) is logged and
  * that call is left untouched, so one broken org/call never stalls
- * reconciliation for every other one. `hardStuckBefore` (omit to disable)
- * is the force-fail cutoff from forceFailHardStuckCall() above - a call
- * older than this that the provider-confirmed path didn't repair is
- * force-failed instead of left stuck forever. */
-export async function reconcileOrganizationCalls(
-  supabase: Supabase,
-  organizationId: string,
-  stuckBefore: string,
-  hardStuckBefore?: string,
-): Promise<ReconcileResult> {
+ * reconciliation for every other one. */
+export async function reconcileOrganizationCalls(supabase: Supabase, organizationId: string, stuckBefore: string): Promise<ReconcileResult> {
   const result: ReconcileResult = { checked: 0, repaired: 0, stillActive: 0, skipped: 0 };
 
   const { data: stuckCalls } = await supabase
@@ -172,79 +134,48 @@ export async function reconcileOrganizationCalls(
   }
 
   for (const call of rows) {
-    // Tracks exactly which counter THIS call was counted under below, so
-    // the hard-timeout fallback can correctly move it to `repaired`
-    // instead of blindly decrementing a shared counter that could belong
-    // to a different call entirely.
-    let countedAs: 'repaired' | 'stillActive' | 'skipped' = 'skipped';
     try {
       if (call.engine === 'vapi') {
         if (!call.vapi_call_id || !vapiApiKey) {
           result.skipped += 1;
-        } else {
-          const provider = createOrchestrationProvider('vapi', { api_key: vapiApiKey });
-          const { raw } = await provider.getCall(call.vapi_call_id);
-          const transition = vapiTerminalTransition(raw);
-          if (!transition) {
-            result.stillActive += 1;
-            countedAs = 'stillActive';
-          } else {
-            const applied = await transitionCallState(supabase, call.id, transition.status, transition.context);
-            if (applied.applied) {
-              result.repaired += 1;
-              countedAs = 'repaired';
-            } else {
-              result.skipped += 1;
-            }
-          }
+          continue;
         }
+        const provider = createOrchestrationProvider('vapi', { api_key: vapiApiKey });
+        const { raw } = await provider.getCall(call.vapi_call_id);
+        const transition = vapiTerminalTransition(raw);
+        if (!transition) {
+          result.stillActive += 1;
+          continue;
+        }
+        const applied = await transitionCallState(supabase, call.id, transition.status, transition.context);
+        if (applied.applied) result.repaired += 1;
+        else result.skipped += 1;
       } else if (call.engine === 'pipecat') {
         if (!call.pipecat_call_id) {
           result.skipped += 1;
-        } else {
-          const provider = createOrchestrationProvider('pipecat');
-          const { raw } = await provider.getCall(call.pipecat_call_id);
-          const transition = pipecatTerminalTransition(raw);
-          if (!transition) {
-            result.stillActive += 1;
-            countedAs = 'stillActive';
-          } else {
-            const applied = await transitionCallState(supabase, call.id, transition.status, transition.context);
-            if (applied.applied) {
-              result.repaired += 1;
-              countedAs = 'repaired';
-            } else {
-              result.skipped += 1;
-            }
-          }
+          continue;
         }
+        const provider = createOrchestrationProvider('pipecat');
+        const { raw } = await provider.getCall(call.pipecat_call_id);
+        const transition = pipecatTerminalTransition(raw);
+        if (!transition) {
+          result.stillActive += 1;
+          continue;
+        }
+        const applied = await transitionCallState(supabase, call.id, transition.status, transition.context);
+        if (applied.applied) result.repaired += 1;
+        else result.skipped += 1;
       } else {
         result.skipped += 1;
       }
     } catch (err) {
       // A provider that's unreachable, unconfigured, or errors on this
-      // one call must never corrupt local state via a WRONG guess - but
-      // see the hard-timeout fallback below, which still applies here.
+      // one call must never corrupt local state - skip and let the next
+      // tick try again.
       result.skipped += 1;
       if (!(err instanceof OrchestrationProviderNotConfiguredError) && !(err instanceof OrchestrationProviderError)) {
         // eslint-disable-next-line no-console
         console.error('callReconciliation: getCall() failed for call', call.id, err);
-      }
-    }
-
-    if (countedAs !== 'repaired' && hardStuckBefore && call.created_at <= hardStuckBefore) {
-      try {
-        const forced = await forceFailHardStuckCall(supabase, call.id);
-        if (forced) {
-          if (countedAs === 'stillActive') result.stillActive -= 1;
-          else result.skipped -= 1;
-          result.repaired += 1;
-          // eslint-disable-next-line no-console
-          console.error('callReconciliation: force-failed a hard-stuck call after exceeding the hard timeout', call.id, { engine: call.engine, created_at: call.created_at });
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('callReconciliation: force-fail itself failed for call', call.id, err);
       }
     }
   }
@@ -257,14 +188,13 @@ export async function reconcileOrganizationCalls(
 export async function runReconciliationTick(): Promise<void> {
   const supabase = getSupabaseAdmin();
   const stuckBefore = new Date(Date.now() - STUCK_CALL_TIMEOUT_MS).toISOString();
-  const hardStuckBefore = new Date(Date.now() - HARD_STUCK_CALL_TIMEOUT_MS).toISOString();
 
   const { data: stuckOrgRows } = await supabase.from('calls').select('organization_id').in('status', ACTIVE_CALL_STATUSES).lte('created_at', stuckBefore).limit(1000);
   const organizationIds = [...new Set((stuckOrgRows ?? []).map((r: any) => r.organization_id as string))];
 
   for (const organizationId of organizationIds) {
     try {
-      await reconcileOrganizationCalls(supabase, organizationId, stuckBefore, hardStuckBefore);
+      await reconcileOrganizationCalls(supabase, organizationId, stuckBefore);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('callReconciliation: tick failed for organization', organizationId, err);
