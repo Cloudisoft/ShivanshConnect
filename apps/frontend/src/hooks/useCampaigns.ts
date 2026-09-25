@@ -16,6 +16,13 @@ export function useCampaigns(page = 1, pageSize = 50, status?: string) {
   return useQuery({
     queryKey: ['campaigns', page, pageSize, status ?? ''],
     queryFn: () => api.getPage<CampaignWithCounts[]>(`/campaigns?${params.toString()}`),
+    placeholderData: (prev) => prev,
+    // The list page shows each campaign's live progress counts (Called/
+    // Remaining/Connected/Failed/Concurrency) but never refetched at all -
+    // they only ever changed on a manual page reload, reported as
+    // "campaign stats should update in real time". Same 5s cadence as the
+    // campaign detail page's own counts below.
+    refetchInterval: 5000,
   });
 }
 
