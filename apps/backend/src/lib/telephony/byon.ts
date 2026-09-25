@@ -2,6 +2,7 @@ import { isValidNormalizedPhone, normalizePhoneNumber } from '../phone.js';
 import {
   type AvailableNumber,
   type ImportNumberInput,
+  type ProviderBalance,
   type TelephonyNumberInfo,
   type TelephonyNumberProviderAdapter,
   type TelephonyNumberStatus,
@@ -93,5 +94,13 @@ export class BYONProvider implements TelephonyNumberProviderAdapter {
 
   async purchaseNumber(): Promise<TelephonyNumberInfo> {
     throw new TelephonyProviderNotSupportedError(this.name, 'purchaseNumber');
+  }
+
+  // BYON has no billing account of its own - a declared number is billed
+  // by whatever carrier the org actually uses outside this platform, not
+  // through any account this adapter has visibility into. null (not an
+  // error) since "no balance to show" is the honest, expected state here.
+  async getBalance(): Promise<ProviderBalance | null> {
+    return null;
   }
 }

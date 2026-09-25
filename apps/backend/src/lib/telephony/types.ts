@@ -42,6 +42,14 @@ export interface TelephonyNumberInfo {
 
 export type TelephonyNumberStatus = 'active' | 'inactive';
 
+/** A real, provider-reported account balance - never estimated or
+ * derived from usage. `amount` is in `currency`'s major unit (e.g.
+ * dollars, not cents) exactly as the provider's own API reports it. */
+export interface ProviderBalance {
+  amount: number;
+  currency: string;
+}
+
 /** What a provider inventory search accepts. `country` is a 2-letter ISO
  * code (e.g. "US"); `areaCode`/`contains` narrow the search the same way
  * Twilio's/Telnyx's own search UIs do. */
@@ -147,4 +155,11 @@ export interface TelephonyNumberProviderAdapter {
    * inventory - a real, billable action against the org's own connected
    * account. Not supported for BYON. */
   purchaseNumber(e164: string): Promise<TelephonyNumberInfo>;
+  /** The org's real current account balance, straight from the
+   * provider's own billing API - never estimated. BYON has no billing
+   * account of its own (see class doc) and always returns null; a
+   * Twilio/Telnyx call that genuinely fails throws TelephonyProviderError
+   * like every other method here, never silently returns null to mask a
+   * real failure. */
+  getBalance(): Promise<ProviderBalance | null>;
 }

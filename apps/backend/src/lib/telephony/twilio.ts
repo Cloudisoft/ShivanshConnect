@@ -3,6 +3,7 @@ import {
   type AvailableNumberSearchParams,
   type ImportNumberInput,
   type PhoneNumberCapabilities,
+  type ProviderBalance,
   type TelephonyNumberInfo,
   type TelephonyNumberProviderAdapter,
   type TelephonyNumberStatus,
@@ -281,5 +282,31 @@ export class TwilioProvider implements TelephonyNumberProviderAdapter {
       throw new TelephonyProviderError(`Twilio number purchase failed (${res.status}): ${body.slice(0, 500)}`);
     }
     return toNumberInfo((await res.json()) as TwilioIncomingPhoneNumber);
+  }
+
+  /** Real, documented Twilio endpoint: GET /Accounts/{Sid}/Balance.json -
+   * account_sid/balance/currency, the account's actual current balance
+   * (a string, since it can carry decimals Twilio doesn't want rounded
+   * by JSON number parsing). */
+  async getBalance(): Promise<ProviderBalance> {
+    const { accountSid, authToken } = this.requireCredentials();
+    let res: Response;
+    try {
+      res = await fetch(`${TWILIO_API_BASE}/Accounts/${encodeURIComponent(accountSid)}/Balance.json`, {
+        headers: this.authHeader(accountSid, authToken),
+      });
+    } catch (err) {
+      throw new TelephonyProviderError('Failed to reach the Twilio API.', err);
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new TelephonyProviderError(`Twilio balance request failed (${res.status}): ${body.slice(0, 500)}`);
+    }
+    const json = (await res.json()) as { balance: string; currency: string };
+    const amount = Number.parseFloat(json.balance);
+    if (!Number.isFinite(amount)) {
+      throw new TelephonyProviderError(`Twilio returned a non-numeric balance: "${json.balance}".`);
+    }
+    return { amount, currency: json.currency };
   }
 }

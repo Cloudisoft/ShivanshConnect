@@ -3,11 +3,42 @@ import type { TelephonyProviderSummary } from '@shivanshconnect/shared';
 import { useAuth } from '../../hooks/useAuth';
 import {
   useSaveTelephonyProviderCredentials,
+  useTelephonyProviderBalance,
   useTelephonyProviders,
   useTestTelephonyProviderConnection,
 } from '../../hooks/useTelephonyProviders';
 import { Alert, Badge, Button, Card, Input, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
+
+function formatBalance(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+}
+
+/** Real-time balance, straight from the provider's own billing API -
+ * only fetched once this provider is actually connected (a balance call
+ * against unconfigured/broken credentials would just repeat the same
+ * error the connection status card already shows). */
+function BalanceLine({ provider }: { provider: TelephonyProviderSummary }): JSX.Element | null {
+  const enabled = provider.status === 'connected';
+  const balanceQuery = useTelephonyProviderBalance(provider.key, enabled);
+
+  if (!enabled) return null;
+  if (balanceQuery.isLoading) return <p className="mt-2 text-xs text-ink-500">Loading balance...</p>;
+  if (balanceQuery.isError) {
+    return <p className="mt-2 text-xs text-red-600">Could not load balance: {balanceQuery.error instanceof ApiClientError ? balanceQuery.error.message : 'unknown error'}</p>;
+  }
+  const balance = balanceQuery.data?.balance;
+  if (!balance) return null;
+  return (
+    <p className="mt-2 text-sm font-semibold text-ink-900">
+      Balance: <span className="font-mono">{formatBalance(balance.amount, balance.currency)}</span>
+    </p>
+  );
+}
 
 function TwilioTelnyxCard({ provider }: { provider: TelephonyProviderSummary }): JSX.Element {
   const { hasPermission } = useAuth();
@@ -63,6 +94,7 @@ function TwilioTelnyxCard({ provider }: { provider: TelephonyProviderSummary }):
       {provider.masked_credential && <p className="mt-1 text-xs text-ink-500">Current: {provider.masked_credential}</p>}
       {provider.last_error && <p className="mt-1 text-xs text-red-600">{provider.last_error}</p>}
       {provider.last_synced_at && <p className="mt-1 text-xs text-ink-500">Last synced: {new Date(provider.last_synced_at).toLocaleString()}</p>}
+      <BalanceLine provider={provider} />
 
       {canManage && (
         <div className="mt-4 space-y-2">

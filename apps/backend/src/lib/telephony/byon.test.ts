@@ -60,4 +60,9 @@ describe('BYONProvider', () => {
     expect(await provider.validateNumber('+14845551234')).toBe(true);
     expect(await provider.validateNumber('12345')).toBe(false);
   });
+
+  it('getBalance() returns null - BYON has no billing account of its own', async () => {
+    const provider = new BYONProvider();
+    expect(await provider.getBalance()).toBeNull();
+  });
 });

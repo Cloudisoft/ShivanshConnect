@@ -3,6 +3,7 @@ import {
   type AvailableNumberSearchParams,
   type ImportNumberInput,
   type PhoneNumberCapabilities,
+  type ProviderBalance,
   type TelephonyNumberInfo,
   type TelephonyNumberProviderAdapter,
   type TelephonyNumberStatus,
@@ -255,5 +256,29 @@ export class TelnyxProvider implements TelephonyNumberProviderAdapter {
       friendlyName: null,
       capabilities: { voiceInbound: true, voiceOutbound: true, sms: false },
     };
+  }
+
+  /** Real, documented Telnyx endpoint: GET /v2/balance -
+   * { data: { balance, currency, ... } }, the account's actual current
+   * balance (a string amount, same reasoning as Twilio's - never rounded
+   * through JSON number parsing). */
+  async getBalance(): Promise<ProviderBalance> {
+    const apiKey = this.requireKey();
+    let res: Response;
+    try {
+      res = await fetch(`${TELNYX_API_BASE}/balance`, { headers: this.headers(apiKey) });
+    } catch (err) {
+      throw new TelephonyProviderError('Failed to reach the Telnyx API.', err);
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new TelephonyProviderError(`Telnyx balance request failed (${res.status}): ${body.slice(0, 500)}`);
+    }
+    const json = (await res.json()) as { data: { balance: string; currency: string } };
+    const amount = Number.parseFloat(json.data.balance);
+    if (!Number.isFinite(amount)) {
+      throw new TelephonyProviderError(`Telnyx returned a non-numeric balance: "${json.data.balance}".`);
+    }
+    return { amount, currency: json.data.currency };
   }
 }
