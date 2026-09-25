@@ -94,7 +94,7 @@ export function CallDetailDrawer({ callId, onClose }: { callId: string; onClose:
                     <div key={s.id} className="flex gap-3">
                       <span className="w-12 shrink-0 font-mono text-xs text-ink-400">{formatMs(s.start_ms)}</span>
                       <span className={`w-14 shrink-0 text-xs font-semibold ${s.speaker === 'ai' ? 'text-ink-700' : 'text-blue-700'}`}>
-                        {s.speaker === 'ai' ? 'AI' : 'Caller'}
+                        {s.speaker === 'ai' ? (detail.voice_name ?? 'AI') : 'Caller'}
                       </span>
                       <span className="text-ink-800">{s.text}</span>
                     </div>
