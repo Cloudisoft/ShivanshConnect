@@ -280,8 +280,30 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
     setCallingDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day].sort()));
   }
 
+  // True whenever a field that ONLY "Save as new draft version" actually
+  // persists has been changed - this is exactly the trap that lost a
+  // voice change silently: a user edits Voice, clicks "Save calling/
+  // voicemail settings" (updateCampaign, which never touches these
+  // fields at all), sees no error, and the change is gone the moment
+  // they navigate away and the form re-syncs from the still-unchanged
+  // published/draft version.
+  const hasUnsavedDraftOnlyChanges =
+    prompt !== (v?.prompt ?? '') ||
+    agentId !== (v?.ai_agent_id ?? '') ||
+    voiceId !== (v?.voice_id ?? '') ||
+    scriptId !== (v?.script_id ?? '') ||
+    JSON.stringify([...kbIds].sort()) !== JSON.stringify([...(v?.knowledge_base_ids ?? [])].sort());
+
   async function handleSaveCampaignFields() {
     setError(null);
+    if (hasUnsavedDraftOnlyChanges) {
+      const proceed = window.confirm(
+        "You've also changed Agent, Voice, Script and/or Knowledge base above - this button does NOT save those. " +
+          'Click Cancel and use "Save as new draft version" (then Publish) instead, or click OK to save only the ' +
+          'calling/voicemail fields and leave the others as they were.',
+      );
+      if (!proceed) return;
+    }
     try {
       await updateCampaign.mutateAsync({
         id: campaign.id,
@@ -584,6 +606,12 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
 
       {canEdit && (
         <>
+          {hasUnsavedDraftOnlyChanges && (
+            <Alert>
+              You've changed Agent, Voice, Script, and/or Knowledge base above. Click <strong>&quot;Save as new draft version&quot;</strong>{' '}
+              below (then Publish) to keep that change - &quot;Save calling/voicemail settings&quot; will NOT save it.
+            </Alert>
+          )}
           <Alert variant="info">
             Calling window, days, and voicemail settings are saved here, but they only take effect for new calls once you publish a version (below) - saving alone does not change what the dialer is currently using.
           </Alert>
