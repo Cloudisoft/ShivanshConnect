@@ -129,6 +129,40 @@ export async function buildAssistantConfig(
  * mutating the shared assistant record other leads will also be dialed
  * through.
  */
+/**
+ * Resolves the ACTUAL voice this call will use - the campaign's selected
+ * voice (voiceOverride) when one is set, otherwise the agent version's
+ * own default voice - as a real { id, name } pair. This is the single
+ * place that decides "which voice", reused by the calls.insert() below
+ * (so CDR/Live Monitor can show the voice actually used for THIS call,
+ * not just re-derive the agent version's default and get it wrong for
+ * any campaign that overrides it - exactly the "Live Monitor still
+ * shows Tina instead of Mitchell" bug) and by resolveCallPersonalization
+ * (for {{agent_name}}), rather than each re-querying separately.
+ */
+async function resolveActualVoice(
+  supabase: Supabase,
+  orgId: string,
+  version: Record<string, any>,
+  voiceOverride: { providerKey: string; providerVoiceId: string } | null,
+): Promise<{ id: string | null; name: string | null }> {
+  if (voiceOverride) {
+    const { data } = await supabase
+      .from('voices')
+      .select('id, name')
+      .eq('organization_id', orgId)
+      .eq('provider_key', voiceOverride.providerKey)
+      .eq('provider_voice_id', voiceOverride.providerVoiceId)
+      .maybeSingle();
+    return { id: data?.id ?? null, name: data?.name ?? null };
+  }
+  if (version.voice_id) {
+    const { data } = await supabase.from('voices').select('id, name').eq('id', version.voice_id).maybeSingle();
+    return { id: data?.id ?? null, name: data?.name ?? null };
+  }
+  return { id: null, name: null };
+}
+
 async function resolveCallPersonalization(
   supabase: Supabase,
   orgId: string,
@@ -136,47 +170,25 @@ async function resolveCallPersonalization(
   version: Record<string, any>,
   leadId: string | null,
   campaignId: string | null,
-  voiceOverride: { providerKey: string; providerVoiceId: string } | null,
+  actualVoiceName: string | null,
 ): Promise<{ firstMessage: string; systemPrompt: string }> {
-  const leadPromise = leadId
-    ? supabase
+  const { data: lead } = leadId
+    ? await supabase
         .from('leads')
         .select('first_name, last_name, phone_normalized, email, custom_fields')
         .eq('id', leadId)
         .eq('organization_id', orgId)
         .maybeSingle()
-    : Promise.resolve({ data: null });
+    : { data: null };
 
-  // {{agent_name}} resolves to the VOICE's own name - the campaign's
-  // selected voice (voiceOverride) when one is set, otherwise the
-  // agent version's own default voice - never the AI agent's own
-  // configured name (ai_agents.name, a separate/internal label). The
-  // voice IS the persona the caller actually hears introduce itself, so
-  // it's the real source of truth for "who is this AI on the phone",
-  // matching the platform's own pre-existing no-lead-name fallback
-  // greeting below, which already used the voice's name for exactly
-  // this reason.
-  let voiceNamePromise: Promise<string | null>;
-  if (voiceOverride) {
-    voiceNamePromise = Promise.resolve(
-      supabase
-        .from('voices')
-        .select('name')
-        .eq('organization_id', orgId)
-        .eq('provider_key', voiceOverride.providerKey)
-        .eq('provider_voice_id', voiceOverride.providerVoiceId)
-        .maybeSingle(),
-    ).then((r) => r.data?.name ?? null);
-  } else if (version.voice_id) {
-    voiceNamePromise = Promise.resolve(supabase.from('voices').select('name').eq('id', version.voice_id).maybeSingle()).then(
-      (r) => r.data?.name ?? null,
-    );
-  } else {
-    voiceNamePromise = Promise.resolve(null);
-  }
-
-  const [{ data: lead }, voiceNameResolved] = await Promise.all([leadPromise, voiceNamePromise]);
-  const voiceName = voiceNameResolved ?? 'your assistant';
+  // {{agent_name}} resolves to the VOICE's own name - never the AI
+  // agent's own configured name (ai_agents.name, a separate/internal
+  // label). The voice IS the persona the caller actually hears introduce
+  // itself, so it's the real source of truth for "who is this AI on the
+  // phone", matching the platform's own pre-existing no-lead-name
+  // fallback greeting below, which already used the voice's name for
+  // exactly this reason.
+  const voiceName = actualVoiceName ?? 'your assistant';
 
   const context: PromptVariableContext = {
     first_name: lead?.first_name || undefined,
@@ -313,6 +325,7 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
   const { organizationId: orgId, engine, agent, version, phoneNumber, customerNumber, leadId, campaignId, createdBy } = params;
 
   const transferDestination = resolveTransferDestination(version, params.transferDestinationOverride);
+  const actualVoice = await resolveActualVoice(supabase, orgId, version, params.voiceOverride ?? null);
   const { firstMessage: firstMessageOverride, systemPrompt: systemPromptOverride } = await resolveCallPersonalization(
     supabase,
     orgId,
@@ -320,7 +333,7 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
     version,
     leadId,
     campaignId,
-    params.voiceOverride ?? null,
+    actualVoice.name,
   );
 
   const { data: call, error: insertError } = await supabase
@@ -333,6 +346,12 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
       campaign_id: campaignId,
       lead_id: leadId,
       phone_number_id: phoneNumber.id,
+      // The voice actually used for this call - a campaign override
+      // when one is set, never just re-derived later from the agent
+      // version's own default (which CDR/Live Monitor used to do, and
+      // got wrong for exactly this reason whenever a campaign's voice
+      // differed from the agent's).
+      voice_id: actualVoice.id,
       direction: 'outbound',
       customer_number: customerNumber,
       status: 'queued',

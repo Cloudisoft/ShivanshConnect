@@ -132,4 +132,26 @@ describe('cdrQuery.fetchCdrCallsPage / buildCdrRows', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].call_id).toBe(otherCall.id);
   });
+
+  it("shows the call's OWN voice (a campaign override) rather than always re-deriving the agent version's default", async () => {
+    const { supabase, tables, orgId, call1 } = seed();
+    // call1's agent version defaults to voice 'Aria' (seeded above) - a
+    // campaign override picked a different voice for this specific call.
+    const overrideVoiceId = randomUUID();
+    tables.voices.push({ id: overrideVoiceId, organization_id: orgId, name: 'Mitchell', provider_key: 'cartesia', provider_voice_id: 'v2' });
+    const callWithOverride = { ...call1, id: randomUUID(), voice_id: overrideVoiceId };
+    tables.calls.push(callWithOverride);
+
+    const rows = await buildCdrRows(supabase as any, orgId, [callWithOverride]);
+    expect(rows[0].voice_name).toBe('Mitchell');
+    expect(rows[0].voice_id).toBe(overrideVoiceId);
+  });
+
+  it("falls back to the agent version's default voice for an older call with no voice_id of its own recorded", async () => {
+    const { supabase, orgId, call1 } = seed();
+    // call1 (seeded above) has no voice_id of its own - simulates a call
+    // placed before the voice_id column existed.
+    const rows = await buildCdrRows(supabase as any, orgId, [call1]);
+    expect(rows[0].voice_name).toBe('Aria');
+  });
 });
