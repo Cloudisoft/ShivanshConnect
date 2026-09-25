@@ -98,15 +98,19 @@ function vapiWebhookUrl(): string | null {
  * author has to remember to write themselves. Covers the recurring,
  * concrete complaints this addresses: sounding like a script being read
  * rather than a real conversation, talking over what the caller just
- * said instead of responding to it, and mishandling a gatekeeper/IVR
- * system that asks for a name before connecting to an actual person. */
+ * said instead of responding to it, wasting turns having an "unnecessary
+ * conversation" with an automated IVR menu instead of navigating it
+ * tersely, and failing to recognize a voicemail greeting on its own as a
+ * fallback when Vapi's own voicemailDetection doesn't fire. */
 const BASELINE_CONVERSATION_INSTRUCTIONS = `Conversation style (always follow these, in addition to everything above):
 - Speak naturally, like a real person on the phone - contractions, brief pauses, natural phrasing. Never sound like you are reading a script verbatim.
 - Practice active listening: briefly acknowledge or react to what the caller just said before moving on to your next point. Never ignore a question or comment the caller made in order to continue a scripted line.
 - Be warm, patient, and polite even if the caller is short, confused, or pushes back. Never sound rushed or robotic.
 - Keep your turns concise - a sentence or two at a time, not a monologue - and pause to let the caller respond.
-- If you reach an automated system, IVR, or a gatekeeper (e.g. a receptionist or assistant) that asks you to state your name or the purpose of your call before connecting you to someone, answer clearly and naturally, then wait - do not repeat yourself or hang up early. It can take a few seconds to be connected.
-- Pay attention to whether you are talking to a real person or an automated system/hold message. Do not have a full conversation with a recording, and do not treat a real human's response as if it were a menu prompt.
+- If you reach an automated menu (IVR) that lists numbered/keyword options ("for sales, say 1 or press 1"; "for support, say support"), respond with ONLY the single option that gets you to a real person or the right department - never explain who you are or why you're calling to a menu, and never keep talking after selecting an option. Wait silently for the menu to respond.
+- If you reach a gatekeeper (a receptionist or human assistant screening the call) who asks who you are or why you're calling before connecting you, answer clearly and naturally in one short sentence, then wait - do not repeat yourself or hang up early. It can take a few seconds to be connected.
+- Recognize a voicemail/answering machine greeting on your own, even if you are not explicitly told this call went to voicemail: it is a single uninterrupted recorded message (e.g. "You've reached ___, please leave a message after the tone") with no menu options and no response to anything you say. The moment you recognize this, stop trying to have a conversation with it - do not repeat your greeting, ask questions, or wait for a reply that will never come. If a voicemail message is configured for this call, deliver it once, concisely, after the beep, then stop talking. If none is configured, simply stop talking.
+- Never mistake an IVR menu or a voicemail greeting for a real person, and never mistake a real person's actual reply for a menu prompt - these three cases sound different (a menu lists options and pauses for input; voicemail is one long uninterrupted recording; a real person responds specifically to what you just said) and call for entirely different behavior as described above.
 - Once a real person is on the line, engage with them naturally as the actual conversation - do not restart your introduction from scratch if you already gave it to a gatekeeper.`;
 
 interface VapiArtifactMessage {
@@ -329,8 +333,26 @@ export class VapiProvider implements CallOrchestrationProvider {
     // through to the actual provider payload for the first time - until
     // this fix they were stored in the DB and snapshotted onto the
     // campaign version but never once reached the Vapi assistant.
+    //
+    // Uses the 'openai' detection provider with type: 'transcript' rather
+    // than the plain 'vapi' (audio-pattern-only) default: audio-only
+    // detection is exactly what produces this feature's most common real
+    // complaint - a long recorded IVR menu prompt gets misread as a live
+    // person (or a real voicemail greeting isn't recognized at all), and
+    // the assistant ends up "conversing" with a recording instead of
+    // either leaving a message or navigating the menu tersely. OpenAI's
+    // transcript-based detector instead reads what's actually being said
+    // ("please leave a message after the tone" vs "press 1 for sales") to
+    // tell voicemail, IVR, and a live human apart - a real accuracy
+    // improvement, not a tuning tweak. backoffPlan/beepMaxAwaitSeconds use
+    // Vapi's own documented recommended defaults for this provider.
     if (config.voicemailDetection?.enabled) {
-      payload.voicemailDetection = { provider: 'vapi' };
+      payload.voicemailDetection = {
+        provider: 'openai',
+        type: 'transcript',
+        backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 3, maxRetries: 6 },
+        beepMaxAwaitSeconds: 15,
+      };
       // Vapi's real behavior: when voicemailDetection fires, it
       // automatically plays `voicemailMessage` if one is set - there is
       // no separate documented "hang up instead of leaving a message"

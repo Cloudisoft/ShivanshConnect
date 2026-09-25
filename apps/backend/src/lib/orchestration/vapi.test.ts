@@ -103,7 +103,12 @@ describe('VapiProvider', () => {
     });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.voicemailDetection).toEqual({ provider: 'vapi' });
+    expect(body.voicemailDetection).toEqual({
+      provider: 'openai',
+      type: 'transcript',
+      backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 3, maxRetries: 6 },
+      beepMaxAwaitSeconds: 15,
+    });
     expect(body.voicemailMessage).toBe('Please call us back at 555-0100.');
     expect(body.backgroundDenoisingEnabled).toBe(true);
   });
@@ -120,7 +125,12 @@ describe('VapiProvider', () => {
     });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.voicemailDetection).toEqual({ provider: 'vapi' });
+    expect(body.voicemailDetection).toEqual({
+      provider: 'openai',
+      type: 'transcript',
+      backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 3, maxRetries: 6 },
+      beepMaxAwaitSeconds: 15,
+    });
     expect(body.voicemailMessage).toBeUndefined();
     expect(body.backgroundDenoisingEnabled).toBe(false);
   });
