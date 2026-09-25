@@ -427,6 +427,59 @@ describe('Phase 7: campaign engine end-to-end', () => {
     const campaignDetail = await app.inject({ method: 'GET', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` } });
     expect(campaignDetail.json().data.current_version.ai_agent_version_id).toBe(snapshottedAgentVersionId);
     expect(campaignDetail.json().data.current_version.ai_agent_version_id).not.toBe(newAgentVersion.id);
+
+    // Same org/agent, reused - not a fresh signup(), to stay under the
+    // auth rate limit this file's many signups already sit close to.
+    //
+    // Now the exact real trap this safeguard exists to catch: switch the
+    // agent's model again (a new DRAFT version) but never publish the
+    // agent - publishing a NEW campaign version must block, since
+    // snapshotting now would silently lock in the OLDER republished
+    // agent version above, not this draft.
+    const draftVersionRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/agents/${agent.id}/versions`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { system_prompt: 'Switched model, never published.', greeting_template: 'Hi!' },
+    });
+    expect(draftVersionRes.statusCode).toBe(201);
+    const draftAgentVersion = draftVersionRes.json().data;
+    expect(draftAgentVersion.status).toBe('draft');
+
+    const version2Res = await app.inject({
+      method: 'POST',
+      url: `/api/v1/campaigns/${campaign.id}/versions`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        prompt: 'An updated pitch after the agent model switch.',
+        ai_agent_id: agent.id,
+        calling_rules: { calling_window_start: '00:00', calling_window_end: '23:59', calling_days: [1, 2, 3, 4, 5, 6, 7] },
+      },
+    });
+    expect(version2Res.statusCode).toBe(200);
+    const version2 = version2Res.json().data;
+    const blockedRes = await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/versions/${version2.id}/publish`, headers: { authorization: `Bearer ${token}` } });
+    expect(blockedRes.statusCode).toBe(422);
+    expect(blockedRes.json().error.details.code).toBe('STALE_AGENT_DRAFT');
+    expect(blockedRes.json().error.details.agentDraftVersionId).toBe(draftAgentVersion.id);
+
+    // The campaign's published version must still be the earlier one from
+    // above - the block must be a hard stop, not a silent partial publish.
+    const detailAfterBlock = await app.inject({ method: 'GET', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(detailAfterBlock.json().data.current_version.id).toBe(version.id);
+
+    // Explicitly acknowledging proceeds anyway, snapshotting the agent's
+    // currently-published (republished-above) version, never the
+    // unpublished draft.
+    const acknowledgedRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/campaigns/${campaign.id}/versions/${version2.id}/publish`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { acknowledge_stale_agent_draft: true },
+    });
+    expect(acknowledgedRes.statusCode).toBe(200);
+    expect(acknowledgedRes.json().data.version.ai_agent_version_id).toBe(newAgentVersion.id);
+    expect(acknowledgedRes.json().data.version.ai_agent_version_id).not.toBe(draftAgentVersion.id);
   });
 
   it('returns an unpublished draft version on GET /campaigns/:id, not just the last published one', async () => {

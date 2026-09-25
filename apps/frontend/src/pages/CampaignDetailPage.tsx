@@ -358,6 +358,29 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
       await publishVersion.mutateAsync({ id: campaign.id, versionId });
       setSavedDraft(null);
     } catch (err) {
+      // Real trap this exists to catch: the linked AI agent has an
+      // unpublished draft (e.g. a model switched in Configuration but never
+      // published) - publishing the campaign now would snapshot the OLD
+      // agent config, not the draft change. Backend blocks with this code;
+      // offer to proceed anyway rather than just failing silently confusing.
+      const details = (err as { details?: { code?: string; agentDraftVersionNumber?: number } } | undefined)?.details;
+      if (details?.code === 'STALE_AGENT_DRAFT') {
+        const proceed = window.confirm(
+          `The AI agent linked to this campaign has an unpublished draft (v${details.agentDraftVersionNumber}) with changes ` +
+            "that were never published - for example a model switch. Publishing this campaign now will lock in the agent's " +
+            'OLDER published config, not that draft. Go to the agent and click Publish there first (recommended), or click OK ' +
+            'to publish this campaign anyway with the older agent config.',
+        );
+        if (proceed) {
+          try {
+            await publishVersion.mutateAsync({ id: campaign.id, versionId, acknowledgeStaleAgentDraft: true });
+            setSavedDraft(null);
+          } catch (err2) {
+            setError(describeApiError(err2, 'Failed to publish version.'));
+          }
+        }
+        return;
+      }
       setError(describeApiError(err, 'Failed to publish version.'));
     }
   }

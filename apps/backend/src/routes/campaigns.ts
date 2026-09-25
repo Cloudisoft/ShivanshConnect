@@ -9,6 +9,7 @@ import {
   createCampaignSchema,
   createCampaignVersionSchema,
   listCampaignsQuerySchema,
+  publishCampaignVersionSchema,
   removeLeadsSchema,
   rotateLeadsSchema,
   setCampaignPhoneNumbersSchema,
@@ -464,6 +465,8 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     const orgId = req.user!.organizationId;
     const campaign = await getOwnedCampaign(supabase, id, orgId);
 
+    const body = publishCampaignVersionSchema.parse(req.body ?? {});
+
     const { data: version, error: versionError } = await supabase.from('campaign_versions').select('*').eq('id', versionId).maybeSingle();
     if (versionError) throw versionError;
     if (!version || version.campaign_id !== id) throw new NotFoundError('Campaign version not found.');
@@ -476,6 +479,36 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
         throw new ValidationError('The selected AI agent has no published version - publish the agent first.');
       }
       agentVersionId = agent.current_version_id;
+
+      // This publish only snapshots the agent's CURRENTLY PUBLISHED version
+      // (agentVersionId above) - it never re-resolves later. If the agent
+      // also has a newer draft that was never published, that snapshot
+      // would silently lock in stale config (exactly what happened when a
+      // model was switched in the agent's Configuration tab but the agent
+      // itself was never published before the campaign was). Block unless
+      // the caller explicitly acknowledges after being shown this.
+      const { data: publishedVersionRow } = await supabase
+        .from('ai_agent_versions')
+        .select('version_number')
+        .eq('id', agentVersionId)
+        .maybeSingle();
+      const { data: newerDraft } = await supabase
+        .from('ai_agent_versions')
+        .select('id, version_number')
+        .eq('agent_id', version.ai_agent_id)
+        .eq('status', 'draft')
+        .gt('version_number', publishedVersionRow?.version_number ?? 0)
+        .order('version_number', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (newerDraft && !body.acknowledge_stale_agent_draft) {
+        throw new ValidationError(
+          `The selected AI agent has an unpublished draft (v${newerDraft.version_number}) newer than its published version. ` +
+            'Publishing this campaign now will snapshot the OLD agent config, not your draft changes. ' +
+            'Publish the agent first, or confirm to proceed anyway with the older published version.',
+          { code: 'STALE_AGENT_DRAFT', agentId: version.ai_agent_id, agentDraftVersionId: newerDraft.id, agentDraftVersionNumber: newerDraft.version_number },
+        );
+      }
     }
 
     // Archive whatever was previously published for this campaign (never

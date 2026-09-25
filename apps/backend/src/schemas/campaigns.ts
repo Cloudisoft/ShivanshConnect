@@ -83,6 +83,15 @@ export const createCampaignVersionSchema = z.object({
 });
 export type CreateCampaignVersionInput = z.infer<typeof createCampaignVersionSchema>;
 
+export const publishCampaignVersionSchema = z.object({
+  // Campaign publish only snapshots the agent's CURRENTLY PUBLISHED version -
+  // if the agent has a newer, unpublished draft the snapshot would silently
+  // lock in stale config. The route blocks on that unless the caller passes
+  // this after showing the user a confirm dialog explaining exactly that.
+  acknowledge_stale_agent_draft: z.boolean().default(false),
+});
+export type PublishCampaignVersionInput = z.infer<typeof publishCampaignVersionSchema>;
+
 export const attachLeadsSchema = z
   .object({
     lead_ids: z.array(uuidSchema).max(20000).optional(),
