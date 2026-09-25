@@ -195,4 +195,28 @@ describe('TwilioProvider', () => {
     const provider = new TwilioProvider('AC123', 'secret-token');
     await expect(provider.purchaseNumber('+14845551234')).rejects.toBeInstanceOf(TelephonyProviderError);
   });
+
+  it('getBalance() calls GET /Accounts/{sid}/Balance.json and parses the real balance/currency', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ account_sid: 'AC123', balance: '42.50', currency: 'USD' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new TwilioProvider('AC123', 'secret-token');
+    const balance = await provider.getBalance();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.twilio.com/2010-04-01/Accounts/AC123/Balance.json',
+      expect.objectContaining({ headers: { Authorization: `Basic ${Buffer.from('AC123:secret-token').toString('base64')}` } }),
+    );
+    expect(balance).toEqual({ amount: 42.5, currency: 'USD' });
+  });
+
+  it('getBalance() throws TelephonyProviderNotConfiguredError without credentials, never fabricates a balance', async () => {
+    const provider = new TwilioProvider(undefined, undefined);
+    await expect(provider.getBalance()).rejects.toBeInstanceOf(TelephonyProviderNotConfiguredError);
+  });
+
+  it('getBalance() throws TelephonyProviderError on a rejected request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401, text: async () => 'Authenticate' });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new TwilioProvider('AC123', 'secret-token');
+    await expect(provider.getBalance()).rejects.toBeInstanceOf(TelephonyProviderError);
+  });
 });

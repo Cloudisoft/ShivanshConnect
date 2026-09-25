@@ -31,3 +31,23 @@ export function useTestTelephonyProviderConnection() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['telephony-providers'] }),
   });
 }
+
+export interface ProviderBalance {
+  amount: number;
+  currency: string;
+}
+
+/** Only enabled for a provider that's actually connected - a balance
+ * request against no/broken credentials would just surface the same
+ * "not configured" error the connection status already shows. */
+export function useTelephonyProviderBalance(key: TelephonyProviderKey, enabled: boolean) {
+  return useQuery({
+    queryKey: ['telephony-provider-balance', key],
+    queryFn: () => api.get<{ balance: ProviderBalance | null }>(`/phone-number-providers/${key}/balance`),
+    enabled,
+    // Real account balance - not something to leave stale in the
+    // background for a page the user opened specifically to check it.
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+}

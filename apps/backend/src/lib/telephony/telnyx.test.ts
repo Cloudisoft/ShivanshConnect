@@ -146,4 +146,25 @@ describe('TelnyxProvider', () => {
     const provider = new TelnyxProvider('KEY123');
     await expect(provider.purchaseNumber('+14845551234')).rejects.toBeInstanceOf(TelephonyProviderError);
   });
+
+  it('getBalance() calls GET /v2/balance and parses the real balance/currency', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ data: { balance: '17.35', currency: 'USD' } }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new TelnyxProvider('KEY123');
+    const balance = await provider.getBalance();
+    expect(fetchMock).toHaveBeenCalledWith('https://api.telnyx.com/v2/balance', { headers: { Authorization: 'Bearer KEY123' } });
+    expect(balance).toEqual({ amount: 17.35, currency: 'USD' });
+  });
+
+  it('getBalance() throws TelephonyProviderNotConfiguredError without an API key, never fabricates a balance', async () => {
+    const provider = new TelnyxProvider(undefined);
+    await expect(provider.getBalance()).rejects.toBeInstanceOf(TelephonyProviderNotConfiguredError);
+  });
+
+  it('getBalance() throws TelephonyProviderError on a rejected request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401, text: async () => 'Unauthorized' });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new TelnyxProvider('KEY123');
+    await expect(provider.getBalance()).rejects.toBeInstanceOf(TelephonyProviderError);
+  });
 });

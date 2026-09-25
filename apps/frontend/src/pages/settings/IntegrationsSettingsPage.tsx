@@ -191,6 +191,15 @@ function VapiCard(): JSX.Element {
       </p>
       {creds?.masked_credential && <p className="mt-1 text-xs text-ink-500">Current key: {creds.masked_credential}</p>}
       {creds?.last_error && <p className="mt-1 text-xs text-red-600">{creds.last_error}</p>}
+      {creds?.status === 'connected' && (
+        <p className="mt-2 text-xs text-ink-500">
+          Vapi has no API for checking your account's credit balance - it's dashboard-only. Check it directly at{' '}
+          <a href="https://dashboard.vapi.ai/billing" target="_blank" rel="noreferrer" className="underline">
+            dashboard.vapi.ai/billing
+          </a>
+          .
+        </p>
+      )}
 
       {canManage && (
         <div className="mt-4 space-y-2">

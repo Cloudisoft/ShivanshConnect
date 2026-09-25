@@ -213,6 +213,39 @@ export async function phoneNumberProviderRoutes(app: FastifyInstance): Promise<v
 
     return ok({ success: status === 'connected', ...updated }, { message });
   });
+
+  // GET /api/v1/phone-number-providers/:key/balance - the org's real,
+  // live account balance from the provider's own billing API. BYON
+  // returns null (it has no billing account of its own); a genuine
+  // Twilio/Telnyx API failure surfaces as a real error, never a silently
+  // faked/zeroed balance.
+  app.get('/:key/balance', async (req) => {
+    const { key } = req.params as { key: string };
+    const providerKey = telephonyProviderKeySchema.parse(key);
+    if (providerKey === 'byon') {
+      return ok({ balance: null });
+    }
+
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const { data: credRow, error } = await supabase
+      .from('phone_number_provider_credentials')
+      .select('encrypted_credentials')
+      .eq('organization_id', orgId)
+      .eq('provider_key', providerKey)
+      .maybeSingle();
+    if (error) throw error;
+    if (!credRow) {
+      throw new NotFoundError(`No credentials are stored for ${TELEPHONY_PROVIDER_LABELS[providerKey]} yet.`);
+    }
+
+    const credentials = toAdapterCredentials(providerKey, credRow.encrypted_credentials as EncryptedEnvelope);
+    const adapter = createTelephonyProviderAdapter(providerKey, credentials);
+    const balance = await adapter.getBalance();
+
+    return ok({ balance });
+  });
 }
 
 export { toAdapterCredentials };
