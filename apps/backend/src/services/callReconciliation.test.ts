@@ -181,4 +181,65 @@ describe('callReconciliation', () => {
     const statuses = [callId1, callId2].map((id) => fake.tables.calls.find((c) => c.id === id)!.status).sort();
     expect(statuses).toEqual(['completed', 'in_progress'].sort());
   });
+
+  it('force-fails a call the provider still reports active once it exceeds the hard timeout - real production incident: 5 calls stuck Dialing/In Progress for 17+ minutes permanently blocked their campaign\'s concurrency', async () => {
+    const callId = stuckCall({ created_at: new Date(Date.now() - 50 * 60 * 1000).toISOString() }); // 50 minutes ago
+    __setOrchestrationProviderForTests('vapi', {
+      async createAssistant() {
+        throw new Error('unused');
+      },
+      async createCall() {
+        throw new Error('unused');
+      },
+      async getCall() {
+        return { status: 'in-progress', raw: { status: 'in-progress' } }; // Vapi still insists it's active
+      },
+      async endCall() {},
+      async transferCall() {},
+      async importPhoneNumber() {
+        throw new Error('unused');
+      },
+    } as any);
+
+    const stuckBefore = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const hardStuckBefore = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+    const result = await reconcileOrganizationCalls(fake.supabase as any, orgId, stuckBefore, hardStuckBefore);
+
+    expect(result.checked).toBe(1);
+    expect(result.repaired).toBe(1); // force-failed, counted as repaired - the slot is freed either way
+    expect(result.stillActive).toBe(0);
+
+    const call = fake.tables.calls.find((c) => c.id === callId)!;
+    expect(call.status).toBe('failed');
+    expect(call.ended_reason).toBe('reconciliation_hard_timeout');
+  });
+
+  it('never force-fails a call still under the hard timeout even if the provider reports it active (the polite path gets many more chances first)', async () => {
+    const callId = stuckCall(); // 20 minutes ago - past stuckBefore but well under a 45-minute hard timeout
+    __setOrchestrationProviderForTests('vapi', {
+      async createAssistant() {
+        throw new Error('unused');
+      },
+      async createCall() {
+        throw new Error('unused');
+      },
+      async getCall() {
+        return { status: 'in-progress', raw: { status: 'in-progress' } };
+      },
+      async endCall() {},
+      async transferCall() {},
+      async importPhoneNumber() {
+        throw new Error('unused');
+      },
+    } as any);
+
+    const stuckBefore = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const hardStuckBefore = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+    const result = await reconcileOrganizationCalls(fake.supabase as any, orgId, stuckBefore, hardStuckBefore);
+
+    expect(result.repaired).toBe(0);
+    expect(result.stillActive).toBe(1);
+    const call = fake.tables.calls.find((c) => c.id === callId)!;
+    expect(call.status).toBe('in_progress');
+  });
 });
