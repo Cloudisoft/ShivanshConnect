@@ -172,6 +172,7 @@ export const PROMPT_VARIABLES = [
   'last_name',
   'phone',
   'email',
+  'agent_name',
   'custom_field',
 ] as const;
 export type PromptVariable = (typeof PROMPT_VARIABLES)[number];

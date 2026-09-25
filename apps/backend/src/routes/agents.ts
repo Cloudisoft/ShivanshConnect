@@ -620,9 +620,13 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
-    const lead = body.lead ?? {};
-    const renderedSystemPrompt = renderTemplate(version.system_prompt, lead);
-    const renderedGreeting = version.greeting_template ? renderTemplate(version.greeting_template, lead) : '';
+    // agent_name is never part of the client-supplied sample lead payload
+    // (it isn't lead data) - inject it here so a preview shows the SAME
+    // {{agent_name}} resolution a real call gets, rather than leaving it
+    // as literal text only in preview.
+    const previewContext = { ...(body.lead ?? {}), agent_name: agent.name };
+    const renderedSystemPrompt = renderTemplate(version.system_prompt, previewContext);
+    const renderedGreeting = version.greeting_template ? renderTemplate(version.greeting_template, previewContext) : '';
 
     const messages = [
       { role: 'system' as const, content: renderedSystemPrompt || 'You are a helpful AI voice agent.' },

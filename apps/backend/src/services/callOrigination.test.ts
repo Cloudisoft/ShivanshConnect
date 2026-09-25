@@ -132,6 +132,32 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     expect(params.systemPromptOverride).toBe('You are a helpful sales agent. Reach out to priya@acme.example if needed.');
   });
 
+  it('{{agent_name}} in a named lead\'s system prompt/greeting renders to the agent\'s real name, not literal text', async () => {
+    const { createCall } = fakeVapiProvider();
+    fake.tables.ai_agent_versions[0].system_prompt = 'You are {{agent_name}}, a helpful sales agent.';
+    fake.tables.ai_agent_versions[0].greeting_template = "Hi, this is {{agent_name}} - am I speaking with {{first_name}}?";
+    fake.tables.ai_agent_versions[0].vapi_assistant_id = 'asst_existing';
+    const leadId = randomUUID();
+    fake.tables.leads.push({ id: leadId, organization_id: orgId, first_name: 'Priya', phone_normalized: '+14845552222', custom_fields: {} });
+
+    await originateCall({
+      organizationId: orgId,
+      engine: 'vapi',
+      agent: { id: agentId },
+      version: fake.tables.ai_agent_versions[0],
+      phoneNumber: fake.tables.phone_numbers[0],
+      customerNumber: '+14845552222',
+      leadId,
+      campaignId: null,
+      createdBy: null,
+    });
+
+    const params = createCall.mock.calls[0][0];
+    // agentId's row (set up in beforeEach) has name: 'Sales Agent'.
+    expect(params.systemPromptOverride).toBe('You are Sales Agent, a helpful sales agent.');
+    expect(params.firstMessageOverride).toBe('Hi, this is Sales Agent - am I speaking with Priya?');
+  });
+
   it('an unnamed lead gets the generic fallback greeting with the real voice + campaign name, not the named template', async () => {
     const { createCall } = fakeVapiProvider();
     const leadId = randomUUID();
