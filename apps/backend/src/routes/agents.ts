@@ -489,6 +489,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     // originateCall()'s campaignId/voiceOverride branch), so this is
     // purely a head start for a plain manual call against this agent.
     let vapiAssistantId: string | null = null;
+    let vapiSyncError: string | null = null;
     try {
       const provider = await getOrgVapiProvider(supabase, orgId);
       if (provider && updatedVersion) {
@@ -499,13 +500,37 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         vapiAssistantId = result.providerAssistantId;
         await supabase.from('ai_agent_versions').update({ vapi_assistant_id: vapiAssistantId }).eq('id', versionId);
       }
-    } catch {
-      // best-effort - the version is still published either way
+    } catch (err) {
+      // Best-effort - the version is still published either way (a
+      // campaign call still builds its own per-call assistant
+      // regardless). But this used to swallow the error completely, with
+      // no trace anywhere - a real case of this (e.g. Vapi rejecting an
+      // unrecognized model id, or an expired API key) looked identical to
+      // success: "Version published", model silently never reaching
+      // Vapi. Now logged and surfaced so it's visible instead of a silent
+      // no-op.
+      vapiSyncError = err instanceof Error ? err.message : 'Unknown error';
+      req.log.error({ err, versionId, agentId: id }, 'Failed to sync published agent version to Vapi');
     }
 
     return ok(
-      { ...updatedVersion, vapi_assistant_id: vapiAssistantId ?? updatedVersion?.vapi_assistant_id ?? null },
-      { message: vapiAssistantId ? 'Version published and synced with Vapi.' : 'Version published.' },
+      {
+        ...updatedVersion,
+        vapi_assistant_id: vapiAssistantId ?? updatedVersion?.vapi_assistant_id ?? null,
+        // Not a DB column - the publish itself always succeeds regardless
+        // of Vapi sync (see the try/catch above), so this is the only way
+        // the frontend can tell a sync failure happened rather than
+        // reporting a clean "published" when the config never reached
+        // Vapi.
+        vapi_sync_error: vapiSyncError,
+      },
+      {
+        message: vapiAssistantId
+          ? 'Version published and synced with Vapi.'
+          : vapiSyncError
+            ? `Version published, but syncing it to Vapi failed: ${vapiSyncError}. Calls using this agent may still use the old config until this is resolved.`
+            : 'Version published.',
+      },
     );
   });
 

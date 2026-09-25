@@ -354,8 +354,18 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
       } else {
         await updateVersion.mutateAsync({ versionId, ...toPayload(form) });
       }
-      await publishVersion.mutateAsync(versionId);
+      const published = await publishVersion.mutateAsync(versionId);
       setConfirmPublish(false);
+      // The version itself is published either way - but if syncing this
+      // config to the actual Vapi assistant failed (e.g. an unrecognized
+      // model id, or an expired Vapi key), calls keep using the OLD
+      // config until this is fixed. Surface it instead of a silent
+      // "Published" that looks identical to a real sync.
+      if (published.vapi_sync_error) {
+        setError(
+          `This version is published, but syncing it to Vapi failed: ${published.vapi_sync_error}. Calls using this agent may still use the previous config until this is resolved.`,
+        );
+      }
     } catch (err) {
       setError(err instanceof ApiClientError ? describeApiError(err, 'Could not publish this version.') : 'Could not publish this version.');
     }
