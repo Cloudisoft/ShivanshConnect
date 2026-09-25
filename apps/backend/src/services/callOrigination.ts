@@ -138,22 +138,25 @@ async function resolveCallPersonalization(
   campaignId: string | null,
   voiceOverride: { providerKey: string; providerVoiceId: string } | null,
 ): Promise<{ firstMessage: string; systemPrompt: string }> {
-  let lead: Record<string, any> | null = null;
-  if (leadId) {
-    const { data } = await supabase
-      .from('leads')
-      .select('first_name, last_name, phone_normalized, email, custom_fields')
-      .eq('id', leadId)
-      .eq('organization_id', orgId)
-      .maybeSingle();
-    lead = data ?? null;
-  }
+  const [{ data: lead }, { data: agentRow }] = await Promise.all([
+    leadId
+      ? supabase
+          .from('leads')
+          .select('first_name, last_name, phone_normalized, email, custom_fields')
+          .eq('id', leadId)
+          .eq('organization_id', orgId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    supabase.from('ai_agents').select('name').eq('id', agent.id).eq('organization_id', orgId).maybeSingle(),
+  ]);
+  const agentName = agentRow?.name ?? undefined;
 
   const context: PromptVariableContext = {
     first_name: lead?.first_name || undefined,
     last_name: lead?.last_name || undefined,
     phone: lead?.phone_normalized || undefined,
     email: lead?.email || undefined,
+    agent_name: agentName,
     custom_field: (lead?.custom_fields as Record<string, string> | undefined) ?? undefined,
   };
 
@@ -196,8 +199,7 @@ async function resolveCallPersonalization(
     orgOrCampaignName = data?.name ?? null;
   }
   if (!orgOrCampaignName) {
-    const { data } = await supabase.from('ai_agents').select('name').eq('id', agent.id).eq('organization_id', orgId).maybeSingle();
-    orgOrCampaignName = data?.name ?? null;
+    orgOrCampaignName = agentName ?? null;
   }
 
   const firstMessage = `Hi, my name is ${voiceName} from ${orgOrCampaignName ?? 'our team'}. How are you doing today?`;

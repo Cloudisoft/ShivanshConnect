@@ -5,6 +5,7 @@ import {
   BACKGROUND_NOISE_OPTIONS,
   CAMPAIGN_STATUS_LABELS,
   LEAD_COOLDOWN_PRESETS,
+  PROMPT_VARIABLES,
   type CampaignStatus,
 } from '@shivanshconnect/shared';
 import { useAuth } from '../hooks/useAuth';
@@ -31,7 +32,7 @@ import { useScripts } from '../hooks/useScripts';
 import { useLeadLists } from '../hooks/useLeadLists';
 import { Alert, Badge, Button, Card, Input, Label } from '../components/ui';
 import { PreLaunchModal } from '../components/campaigns/PreLaunchModal';
-import { api, ApiClientError } from '../lib/apiClient';
+import { api, describeApiError } from '../lib/apiClient';
 import { handlePlaceholderPaste } from '../lib/placeholderPaste';
 
 const TABS = ['Overview', 'Configuration', 'Leads', 'Settings'] as const;
@@ -212,8 +213,6 @@ function StatTile({ label, value }: { label: string; value: number }): JSX.Eleme
   );
 }
 
-const PROMPT_VARIABLES = ['first_name', 'last_name', 'phone', 'city', 'state'];
-
 function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Element {
   const { hasPermission } = useAuth();
   const canEdit = hasPermission('campaigns.edit') && campaign.status !== 'running';
@@ -320,7 +319,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
         timezone,
       });
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Failed to save campaign fields.');
+      setError(describeApiError(err, 'Failed to save campaign fields.'));
     }
   }
 
@@ -339,7 +338,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
       });
       setSavedDraft({ id: version.id });
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Failed to save draft version.');
+      setError(describeApiError(err, 'Failed to save draft version.'));
     }
   }
 
@@ -349,7 +348,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
       await publishVersion.mutateAsync({ id: campaign.id, versionId });
       setSavedDraft(null);
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Failed to publish version.');
+      setError(describeApiError(err, 'Failed to publish version.'));
     }
   }
 
@@ -657,7 +656,7 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
       await attachLeads.mutateAsync({ id: campaignId, lead_list_id: selectedListId });
       setSelectedListId('');
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Failed to attach lead list.');
+      setError(describeApiError(err, 'Failed to attach lead list.'));
     }
   }
 
@@ -677,7 +676,7 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
     try {
       await removeLeads.mutateAsync({ id: campaignId, lead_ids: [leadId] });
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Failed to remove this lead.');
+      setError(describeApiError(err, 'Failed to remove this lead.'));
     }
   }
 
@@ -839,7 +838,7 @@ function SettingsTab({ campaignId }: { campaignId: string }): JSX.Element {
       await api.post(`/campaigns/${campaignId}/settings`, { key, value });
       setSaved(true);
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : 'Failed to save setting.');
+      setError(describeApiError(err, 'Failed to save setting.'));
     }
   }
 
