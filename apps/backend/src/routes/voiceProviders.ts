@@ -220,6 +220,38 @@ export async function voiceProviderRoutes(app: FastifyInstance): Promise<void> {
 
     return ok({ success: status === 'connected', ...updated }, { message });
   });
+
+  // GET /api/v1/voice-providers/:key/usage - real character-quota usage
+  // from the provider's own billing API. Only ElevenLabs implements
+  // getUsage() (a real, documented endpoint) - every other provider
+  // returns usage: null rather than fabricating a number or a fake
+  // "not supported" error.
+  app.get('/:key/usage', async (req) => {
+    const { key } = req.params as { key: string };
+    const providerKey = voiceProviderKeySchema.parse(key);
+
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const { data: credRow, error } = await supabase
+      .from('voice_provider_credentials')
+      .select('encrypted_credentials')
+      .eq('organization_id', orgId)
+      .eq('provider_key', providerKey)
+      .maybeSingle();
+    if (error) throw error;
+    if (!credRow) {
+      throw new NotFoundError(`No credentials are stored for ${VOICE_PROVIDER_LABELS[providerKey]} yet.`);
+    }
+
+    const credentials = toAdapterCredentials(providerKey, credRow.encrypted_credentials as EncryptedEnvelope);
+    const adapter = createVoiceProviderAdapter(providerKey, credentials);
+    if (!adapter.getUsage) {
+      return ok({ usage: null });
+    }
+    const usage = await adapter.getUsage();
+    return ok({ usage });
+  });
 }
 
 export { toAdapterCredentials };

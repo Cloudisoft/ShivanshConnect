@@ -4,6 +4,7 @@ import {
   type PreviewAudioResult,
   type VoiceInfo,
   type VoiceProviderAdapter,
+  type VoiceProviderUsage,
   VoiceProviderError,
   VoiceProviderNotConfiguredError,
 } from './types.js';
@@ -182,5 +183,24 @@ export class ElevenLabsProvider implements VoiceProviderAdapter {
       const body = await res.text().catch(() => '');
       throw new VoiceProviderError(`ElevenLabs delete-voice request failed (${res.status}): ${body.slice(0, 500)}`);
     }
+  }
+
+  /** Real, documented ElevenLabs endpoint: GET /v1/user/subscription -
+   * character_count/character_limit for the current billing period.
+   * ElevenLabs' "credits" are a character quota, not a dollar balance. */
+  async getUsage(): Promise<VoiceProviderUsage> {
+    const apiKey = this.requireKey();
+    let res: Response;
+    try {
+      res = await fetch(`${ELEVENLABS_API_BASE}/user/subscription`, { headers: this.headers(apiKey) });
+    } catch (err) {
+      throw new VoiceProviderError('Failed to reach the ElevenLabs API.', err);
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new VoiceProviderError(`ElevenLabs subscription request failed (${res.status}): ${body.slice(0, 500)}`);
+    }
+    const json = (await res.json()) as { character_count: number; character_limit: number };
+    return { charactersUsed: json.character_count, characterLimit: json.character_limit };
   }
 }
