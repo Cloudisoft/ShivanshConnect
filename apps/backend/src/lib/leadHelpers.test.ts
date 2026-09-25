@@ -76,6 +76,20 @@ describe('findDncMatches', () => {
     expect(matches.size).toBe(0);
     expect(mocks.from).not.toHaveBeenCalled();
   });
+
+  it('never sends more than 200 phones per .in() query - a real production incident: an unbatched large paste-numbers add built a request URL over PostgREST\'s ~16KB header limit and failed outright', async () => {
+    const inSpy = vi.fn((_col: string, values: string[]) => {
+      expect(values.length).toBeLessThanOrEqual(200);
+      return { data: [], error: null };
+    });
+    mocks.from.mockImplementation(() => ({ select: () => ({ in: inSpy }) }));
+
+    const manyPhones = Array.from({ length: 450 }, (_, i) => `+1484555${String(i).padStart(4, '0')}`);
+    await findDncMatches({ from: mocks.from } as any, 'org1', manyPhones);
+
+    // 450 phones at 200/batch = 3 batches (200 + 200 + 50).
+    expect(inSpy).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('findExistingLeadPhones', () => {
