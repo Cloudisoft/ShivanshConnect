@@ -107,6 +107,34 @@ export function vapiRoleToSpeaker(role: string | undefined): 'ai' | 'caller' | n
   return null;
 }
 
+/** Our internal voice provider_key values (packages/shared/src/voice.ts's
+ * VOICE_PROVIDER_KEYS) don't all match Vapi's own `voice.provider` enum
+ * string-for-string - ElevenLabs is the clearest mismatch (our
+ * 'elevenlabs' vs Vapi's real 'eleven11labs'-family value '11labs'),
+ * which is exactly what sending providerKey straight through as Vapi's
+ * `voice.provider` produced: a hard 400 rejecting the whole assistant
+ * creation ("voice.provider must be one of the following values: vapi,
+ * 11labs, azure, cartesia, ..."). Cartesia's key happens to already
+ * match Vapi's enum, so it silently worked; ElevenLabs never could.
+ * OmniVoice/VoxCPM (VOICE_PROVIDER_CATALOG's requiresExternalHosting:
+ * true) are self-hosted TTS servers Vapi has no native provider for at
+ * all - making those work would need Vapi's separate "custom-voice"
+ * integration (a server URL Vapi calls to synthesize audio, not a
+ * voiceId), which isn't implemented, so they fail fast here with an
+ * actionable message instead of reproducing this same opaque 400. */
+const VAPI_VOICE_PROVIDER_MAP: Record<string, string> = {
+  elevenlabs: '11labs',
+  cartesia: 'cartesia',
+};
+
+function mapToVapiVoiceProvider(providerKey: string): string {
+  const mapped = VAPI_VOICE_PROVIDER_MAP[providerKey];
+  if (mapped) return mapped;
+  throw new OrchestrationProviderError(
+    `Voices from "${providerKey}" can't be used for Vapi calls yet - Vapi has no native provider for it and this platform doesn't implement its custom-voice integration. Please select an ElevenLabs or Cartesia voice instead.`,
+  );
+}
+
 function toSegments(messages: VapiArtifactMessage[] | undefined): TranscriptSegmentRaw[] | null {
   if (!messages || messages.length === 0) return null;
   const segments: TranscriptSegmentRaw[] = [];
@@ -212,7 +240,7 @@ export class VapiProvider implements CallOrchestrationProvider {
     };
 
     if (config.voice) {
-      payload.voice = { provider: config.voice.providerKey, voiceId: config.voice.providerVoiceId };
+      payload.voice = { provider: mapToVapiVoiceProvider(config.voice.providerKey), voiceId: config.voice.providerVoiceId };
       // Real, documented Vapi voice field: without an explicit `model`,
       // Vapi falls back to each provider's own default TTS model, which is
       // NOT the fastest one available - Cartesia's default is an older
