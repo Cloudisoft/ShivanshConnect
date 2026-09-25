@@ -143,6 +143,25 @@ export async function vapiRoutes(app: FastifyInstance): Promise<void> {
         req.log.info({ err: err instanceof Error ? err.message : err }, 'DIAGNOSTIC: Vapi GET /org failed');
       }
 
+      // TEMPORARY diagnostic, second key - a real Vapi API error (401 on
+      // GET /org) reported "Invalid Key. Hot tip, you may be using the
+      // private key instead of the public key, or vice versa" against the
+      // stored credential above. VAPI_DEBUG_ORG_KEY, when set, is a SEPARATE
+      // key tested only against this one read-only endpoint - never stored
+      // anywhere (not in the DB, not in this repo), only ever read from the
+      // environment at request time, and removed from Railway's env vars as
+      // soon as this diagnostic has done its job.
+      const debugKey = process.env.VAPI_DEBUG_ORG_KEY;
+      if (debugKey) {
+        try {
+          const debugProvider = new VapiProvider(debugKey);
+          const orgInfo = await debugProvider.debugGetOrg();
+          req.log.info({ orgInfo }, 'DIAGNOSTIC: Vapi GET /org response (VAPI_DEBUG_ORG_KEY)');
+        } catch (err) {
+          req.log.info({ err: err instanceof Error ? err.message : err }, 'DIAGNOSTIC: Vapi GET /org failed (VAPI_DEBUG_ORG_KEY)');
+        }
+      }
+
       // Vapi delivers call-status/end-of-call/transcript events to a
       // server URL set per-assistant (there is no account-wide webhook
       // API - see lib/orchestration/vapi.ts's header comment) - it has no
