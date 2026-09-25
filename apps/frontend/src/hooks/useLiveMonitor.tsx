@@ -40,10 +40,12 @@ interface LiveMonitorState {
 
 /** Call-lifecycle event types (excludes SNAPSHOT/HEARTBEAT and
  * TRANSCRIPT_UPDATED, which fires many times per call and never changes a
- * CDR row or a campaign's counts) that mean "a CDR row or a campaign's
- * live counts just changed on the server" - worth pushing an instant
- * refetch for rather than waiting on CDR's/Campaigns' own 5s polls. */
-const CDR_CAMPAIGN_RELEVANT_EVENTS = new Set([
+ * CDR row, a campaign's counts, or the Dashboard's KPIs) that mean "a CDR
+ * row / a campaign's live counts / the Dashboard's aggregate metrics just
+ * changed on the server" - worth pushing an instant refetch for rather
+ * than waiting on each page's own poll (CDR/Campaigns 5s, Dashboard
+ * 30-60s). */
+const REALTIME_INVALIDATION_EVENTS = new Set([
   'CALL_STARTED',
   'CALL_CONNECTED',
   'CALL_TRANSFER_CONNECTED',
@@ -115,13 +117,13 @@ function useLiveMonitorConnection(): LiveMonitorState {
         }
         if (payload.type === 'HEARTBEAT') return;
 
-        if (payload.type !== 'SNAPSHOT' && CDR_CAMPAIGN_RELEVANT_EVENTS.has(payload.type)) {
-          // Push, not poll: instead of CDR/Campaigns finding out up to 5s
-          // later on their own interval, refetch the moment the call
-          // actually changed - "CDR/campaign stats should update in real
-          // time" rather than looking frozen until the next poll tick.
+        if (payload.type !== 'SNAPSHOT' && REALTIME_INVALIDATION_EVENTS.has(payload.type)) {
+          // Push, not poll: instead of CDR/Campaigns/Dashboard finding out
+          // seconds (or, for Dashboard, up to a minute) later on their own
+          // interval, refetch the moment the call actually changed.
           queryClient.invalidateQueries({ queryKey: ['cdr'] });
           queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+          queryClient.invalidateQueries({ queryKey: ['dashboard'] });
         }
 
         setState((prev) => {
