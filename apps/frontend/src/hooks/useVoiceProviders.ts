@@ -30,3 +30,22 @@ export function useTestVoiceProviderConnection() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['voice-providers'] }),
   });
 }
+
+export interface VoiceProviderUsage {
+  charactersUsed: number;
+  characterLimit: number;
+}
+
+/** Only ElevenLabs has a real getUsage() implementation server-side -
+ * every other provider's route honestly returns usage: null. Only
+ * enabled once the provider is actually connected, same reasoning as
+ * telephony's useTelephonyProviderBalance. */
+export function useVoiceProviderUsage(key: VoiceProviderKey, enabled: boolean) {
+  return useQuery({
+    queryKey: ['voice-provider-usage', key],
+    queryFn: () => api.get<{ usage: VoiceProviderUsage | null }>(`/voice-providers/${key}/usage`),
+    enabled,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+}

@@ -2,9 +2,38 @@ import { useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import type { VoiceProviderSummary } from '@shivanshconnect/shared';
 import { useAuth } from '../../hooks/useAuth';
-import { useSaveVoiceProviderCredentials, useTestVoiceProviderConnection, useVoiceProviders } from '../../hooks/useVoiceProviders';
+import {
+  useSaveVoiceProviderCredentials,
+  useTestVoiceProviderConnection,
+  useVoiceProviders,
+  useVoiceProviderUsage,
+} from '../../hooks/useVoiceProviders';
 import { Alert, Badge, Button, Card, Input, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
+
+/** Real character-quota usage (only ElevenLabs has a documented API for
+ * this - see hooks/useVoiceProviders.ts). Renders nothing for a provider
+ * whose route honestly reports usage: null rather than showing a fake
+ * "0 / 0" or hiding the fact that no data exists. */
+function UsageLine({ provider }: { provider: VoiceProviderSummary }): JSX.Element | null {
+  const enabled = provider.status === 'connected';
+  const usageQuery = useVoiceProviderUsage(provider.key, enabled);
+
+  if (!enabled) return null;
+  if (usageQuery.isLoading) return <p className="mt-2 text-xs text-ink-500">Loading usage...</p>;
+  if (usageQuery.isError) {
+    return <p className="mt-2 text-xs text-red-600">Could not load usage: {usageQuery.error instanceof ApiClientError ? usageQuery.error.message : 'unknown error'}</p>;
+  }
+  const usage = usageQuery.data?.usage;
+  if (!usage) return null;
+  const remaining = Math.max(0, usage.characterLimit - usage.charactersUsed);
+  return (
+    <p className="mt-2 text-sm font-semibold text-ink-900">
+      Characters remaining: <span className="font-mono">{remaining.toLocaleString()}</span>{' '}
+      <span className="font-normal text-ink-500">({usage.charactersUsed.toLocaleString()} / {usage.characterLimit.toLocaleString()} used)</span>
+    </p>
+  );
+}
 
 const SELF_HOSTED_DOCS: Record<string, string> = {
   omnivoice:
@@ -69,6 +98,7 @@ function ProviderCard({ provider }: { provider: VoiceProviderSummary }): JSX.Ele
           </div>
           {provider.masked_credential && <p className="mt-1 text-xs text-ink-500">Current: {provider.masked_credential}</p>}
           {provider.last_error && <p className="mt-1 text-xs text-red-600">{provider.last_error}</p>}
+          <UsageLine provider={provider} />
         </div>
       </div>
 

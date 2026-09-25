@@ -65,6 +65,15 @@ export interface CloneVoiceResult {
   status: CloneVoiceStatus;
 }
 
+/** ElevenLabs' real account "credits" are character quota, not currency
+ * (see GET /v1/user/subscription) - a fundamentally different shape from
+ * the dollar-denominated ProviderBalance telephony providers report, so
+ * this is its own type rather than reusing that one. */
+export interface VoiceProviderUsage {
+  charactersUsed: number;
+  characterLimit: number;
+}
+
 /** Thrown when a provider cannot run at all - no credentials/endpoint
  * configured for this org. Routes map this to an honest 422, exactly
  * like LlmNotConfiguredError. */
@@ -113,4 +122,9 @@ export interface VoiceProviderAdapter {
 
   createVoice?(options: CloneVoiceOptions): Promise<CloneVoiceResult>;
   deleteVoice?(id: string): Promise<void>;
+  /** Real character-quota usage, straight from the provider's own
+   * billing API - only implemented where a real, documented endpoint
+   * exists (ElevenLabs). Omitted (not just throwing) on every other
+   * adapter, since most voice providers expose no such concept at all. */
+  getUsage?(): Promise<VoiceProviderUsage>;
 }

@@ -85,4 +85,20 @@ describe('ElevenLabsProvider', () => {
     const provider = new ElevenLabsProvider('bad-key');
     await expect(provider.listVoices()).rejects.toThrow(/ElevenLabs voice list request failed/);
   });
+
+  it('getUsage() calls GET /v1/user/subscription and returns real character quota usage', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ character_count: 12345, character_limit: 100000 }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new ElevenLabsProvider('key-123');
+    const usage = await provider.getUsage!();
+
+    expect(fetchMock).toHaveBeenCalledWith('https://api.elevenlabs.io/v1/user/subscription', { headers: { 'xi-api-key': 'key-123' } });
+    expect(usage).toEqual({ charactersUsed: 12345, characterLimit: 100000 });
+  });
+
+  it('getUsage() throws VoiceProviderNotConfiguredError without an API key, never fabricates usage', async () => {
+    const provider = new ElevenLabsProvider(undefined);
+    await expect(provider.getUsage!()).rejects.toBeInstanceOf(VoiceProviderNotConfiguredError);
+  });
 });
