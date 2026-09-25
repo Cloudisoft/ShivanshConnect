@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { chunkArray } from './arrayChunk.js';
 
 /** Real production incident: a large paste-numbers/import batch built an
  * `.in('phone_normalized', [...])` query whose URL exceeded PostgREST's
@@ -8,12 +9,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * each, plus comma/URL-encoding overhead) keeps this well under that
  * limit with room to spare for the rest of the request's headers. */
 const PHONE_IN_QUERY_BATCH_SIZE = 200;
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
-  return chunks;
-}
 
 /**
  * Is `phoneNormalized` on the DNC list for `organizationId` - either a
@@ -45,7 +40,7 @@ export async function findDncMatches(
   if (phoneNumbers.length === 0) return new Set();
   const matches = new Set<string>();
   const results = await Promise.all(
-    chunk(phoneNumbers, PHONE_IN_QUERY_BATCH_SIZE).map((batch) =>
+    chunkArray(phoneNumbers, PHONE_IN_QUERY_BATCH_SIZE).map((batch) =>
       supabase.from('dnc_entries').select('phone_normalized, organization_id').in('phone_normalized', batch),
     ),
   );
@@ -72,7 +67,7 @@ export async function findExistingLeadPhones(
   if (phoneNumbers.length === 0) return new Set();
   const existing = new Set<string>();
   const results = await Promise.all(
-    chunk(phoneNumbers, PHONE_IN_QUERY_BATCH_SIZE).map((batch) =>
+    chunkArray(phoneNumbers, PHONE_IN_QUERY_BATCH_SIZE).map((batch) =>
       supabase.from('leads').select('phone_normalized').eq('organization_id', organizationId).in('phone_normalized', batch),
     ),
   );

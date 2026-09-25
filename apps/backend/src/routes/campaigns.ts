@@ -19,6 +19,28 @@ import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS, type CampaignCallingRulesSnapshot, type CampaignDispositionRulesSnapshot } from '@shivanshconnect/shared';
 import { runCampaignPreflight } from '../services/campaignPreflight.js';
 import { decideRotation } from '../services/campaignRotate.js';
+import { chunkArray } from '../lib/arrayChunk.js';
+
+/** Keeps every `.in(column, [...])` filter below in safe territory (see
+ * lib/arrayChunk.ts's header comment). */
+const ID_QUERY_BATCH_SIZE = 200;
+
+/** Real Supabase's `.in()` doesn't accept an unbounded array (see
+ * ID_QUERY_BATCH_SIZE) - runs one filtered select per batch in parallel
+ * and concatenates the results. */
+async function selectInBatches<T>(
+  runQuery: (batch: string[]) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  ids: string[],
+): Promise<T[]> {
+  if (ids.length === 0) return [];
+  const results = await Promise.all(chunkArray(ids, ID_QUERY_BATCH_SIZE).map(runQuery));
+  const rows: T[] = [];
+  for (const { data, error } of results) {
+    if (error) throw error;
+    rows.push(...(data ?? []));
+  }
+  return rows;
+}
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
@@ -671,12 +693,25 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
 
     // Only attach leads that actually belong to this org and are not on
     // the DNC list (never queue a suppressed lead in the first place).
-    const { data: validLeads } = await supabase.from('leads').select('id, organization_id, is_dnc').in('id', leadIds);
-    const ownLeadIds = (validLeads ?? []).filter((l: any) => l.organization_id === orgId).map((l: any) => l.id);
+    //
+    // Bug fix: a real production incident - attaching a large lead list
+    // (created via a bulk import) built a single unbatched
+    // .in('id', [...]) filter whose request URL exceeded PostgREST's
+    // ~16KB header limit and failed outright with a bare "Something went
+    // wrong" (HeadersOverflowError). Both lookups below now run in
+    // batches of 200 ids at a time instead of one unbounded query.
+    const validLeads = await selectInBatches<{ id: string; organization_id: string; is_dnc: boolean }>(
+      (batch) => supabase.from('leads').select('id, organization_id, is_dnc').in('id', batch),
+      leadIds,
+    );
+    const ownLeadIds = validLeads.filter((l) => l.organization_id === orgId).map((l) => l.id);
 
-    const { data: existing } = await supabase.from('campaign_leads').select('lead_id').eq('campaign_id', id).in('lead_id', ownLeadIds);
-    const existingIds = new Set((existing ?? []).map((r: any) => r.lead_id));
-    const toInsert = (validLeads ?? [])
+    const existing = await selectInBatches<{ lead_id: string }>(
+      (batch) => supabase.from('campaign_leads').select('lead_id').eq('campaign_id', id).in('lead_id', batch),
+      ownLeadIds,
+    );
+    const existingIds = new Set(existing.map((r) => r.lead_id));
+    const toInsert = validLeads
       .filter((l: any) => l.organization_id === orgId && !existingIds.has(l.id))
       .map((l: any) => ({
         campaign_id: id,
@@ -735,24 +770,19 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     await getOwnedCampaign(supabase, id, orgId);
 
     const ACTIVE_STATUSES = ['dialing', 'ringing', 'connected', 'in_progress', 'transferring'];
-    const { data: matched, error: matchError } = await supabase
-      .from('campaign_leads')
-      .select('id, lead_id, status')
-      .eq('campaign_id', id)
-      .in('lead_id', body.lead_ids);
-    if (matchError) throw matchError;
+    // Same batching fix as POST /:id/leads above - a large bulk selection
+    // built an unbatched .in() filter that could exceed PostgREST's
+    // header limit.
+    const matched = await selectInBatches<{ id: string; lead_id: string; status: string }>(
+      (batch) => supabase.from('campaign_leads').select('id, lead_id, status').eq('campaign_id', id).in('lead_id', batch),
+      body.lead_ids,
+    );
 
-    const removable = (matched ?? []).filter((cl: any) => !ACTIVE_STATUSES.includes(cl.status));
-    const skippedActive = (matched ?? []).length - removable.length;
+    const removable = matched.filter((cl) => !ACTIVE_STATUSES.includes(cl.status));
+    const skippedActive = matched.length - removable.length;
 
-    if (removable.length > 0) {
-      const { error } = await supabase
-        .from('campaign_leads')
-        .delete()
-        .in(
-          'id',
-          removable.map((cl: any) => cl.id),
-        );
+    for (const batch of chunkArray(removable.map((cl) => cl.id), ID_QUERY_BATCH_SIZE)) {
+      const { error } = await supabase.from('campaign_leads').delete().in('id', batch);
       if (error) throw error;
     }
 
