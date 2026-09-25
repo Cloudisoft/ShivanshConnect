@@ -392,89 +392,105 @@ export async function commitImportJob(jobId: string): Promise<CommitSummary> {
   let imported = 0;
   const BATCH_SIZE = 200;
   const rows = validRows ?? [];
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
-    const leadPayload = batch.map((row: any) => {
-      const { mapped, phoneRaw } = mapRow(row.raw_data as Record<string, string>, mapping);
-      const normalized = phoneRaw ? normalizePhoneNumber(phoneRaw) : null;
-      return {
-        organization_id: job.organization_id,
+
+  // Bug fix: this loop used to have no error handling at all - any
+  // failure partway through (leads/lead_list_members/import_job_rows are
+  // each separate requests, not one transaction) left the job stuck at
+  // 'committing' forever, since the commit guard above only ever accepts
+  // 'ready_for_review' - there was no way to even see what had gone
+  // wrong, let alone retry. A batch that already inserted real leads
+  // before a later step in the SAME batch failed is not rolled back
+  // (there is no transaction spanning these calls), so imported_rows is
+  // updated after every batch (not just at the end) to keep an accurate,
+  // visible count of what actually landed even if a later batch fails.
+  try {
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const batch = rows.slice(i, i + BATCH_SIZE);
+      const leadPayload = batch.map((row: any) => {
+        const { mapped, phoneRaw } = mapRow(row.raw_data as Record<string, string>, mapping);
+        const normalized = phoneRaw ? normalizePhoneNumber(phoneRaw) : null;
+        return {
+          organization_id: job.organization_id,
+          lead_list_id: job.lead_list_id,
+          first_name: mapped.first_name ?? '',
+          last_name: mapped.last_name ?? '',
+          phone_original: phoneRaw ?? row.phone_normalized,
+          phone_normalized: row.phone_normalized,
+          country_code: normalized?.valid ? normalized.countryCode : 'US',
+          email: mapped.email ?? null,
+          address: mapped.address ?? null,
+          city: mapped.city ?? null,
+          state: mapped.state ?? null,
+          zip: mapped.zip ?? null,
+          country: mapped.country ?? 'US',
+          custom_fields: mapped.custom_fields ?? {},
+        };
+      });
+
+      const { data: insertedLeads, error: insertError } = await supabase
+        .from('leads')
+        .insert(leadPayload)
+        .select('id, phone_normalized');
+      if (insertError) throw insertError;
+
+      const memberPayload = (insertedLeads ?? []).map((lead: any) => ({
+        lead_id: lead.id,
         lead_list_id: job.lead_list_id,
-        first_name: mapped.first_name ?? '',
-        last_name: mapped.last_name ?? '',
-        phone_original: phoneRaw ?? row.phone_normalized,
-        phone_normalized: row.phone_normalized,
-        country_code: normalized?.valid ? normalized.countryCode : 'US',
-        email: mapped.email ?? null,
-        address: mapped.address ?? null,
-        city: mapped.city ?? null,
-        state: mapped.state ?? null,
-        zip: mapped.zip ?? null,
-        country: mapped.country ?? 'US',
-        custom_fields: mapped.custom_fields ?? {},
-      };
-    });
+        organization_id: job.organization_id,
+      }));
+      if (memberPayload.length > 0) {
+        const { error: memberError } = await supabase.from('lead_list_members').insert(memberPayload);
+        if (memberError) throw memberError;
+      }
 
-    const { data: insertedLeads, error: insertError } = await supabase
-      .from('leads')
-      .insert(leadPayload)
-      .select('id, phone_normalized');
-    if (insertError) throw insertError;
-
-    const memberPayload = (insertedLeads ?? []).map((lead: any) => ({
-      lead_id: lead.id,
-      lead_list_id: job.lead_list_id,
-      organization_id: job.organization_id,
-    }));
-    if (memberPayload.length > 0) {
-      const { error: memberError } = await supabase.from('lead_list_members').insert(memberPayload);
-      if (memberError) throw memberError;
+      // Backfill each row's lead_id in ONE batched upsert rather than one
+      // sequential UPDATE per row - a 1000-lead import previously meant
+      // 1000 sequential round trips just for this step, which was the
+      // real cause of "importing leads takes forever."
+      //
+      // Bug fix: Postgres validates NOT NULL constraints on the candidate
+      // row for `INSERT ... ON CONFLICT DO UPDATE` BEFORE checking
+      // whether a conflict actually occurs - so even though every id
+      // here always already exists (matching a real earlier committed
+      // row), supplying only {id, lead_id} made the implicit insert
+      // branch fail with "null value in column import_job_id violates
+      // not-null constraint" on every commit. Every NOT NULL column now
+      // rides along with its already-correct, unchanged value -
+      // PostgREST only SETs the columns present in the payload on the
+      // actual UPDATE branch, so this never overwrites anything with
+      // different data, it just satisfies the insert branch's own
+      // validation.
+      const rowLeadIdUpdates = batch
+        .map((row: any, j: number) => {
+          const lead = (insertedLeads ?? [])[j];
+          return lead
+            ? {
+                id: row.id,
+                import_job_id: jobId,
+                organization_id: job.organization_id,
+                row_number: row.row_number,
+                raw_data: row.raw_data,
+                result: 'valid' as const,
+                phone_normalized: row.phone_normalized,
+                lead_id: lead.id,
+              }
+            : null;
+        })
+        .filter((u): u is NonNullable<typeof u> => u !== null);
+      if (rowLeadIdUpdates.length > 0) {
+        const { error: rowUpdateError } = await supabase.from('import_job_rows').upsert(rowLeadIdUpdates, { onConflict: 'id' });
+        if (rowUpdateError) throw rowUpdateError;
+      }
+      imported += (insertedLeads ?? []).length;
+      await supabase.from('import_jobs').update({ imported_rows: imported }).eq('id', jobId);
     }
-
-    // Backfill each row's lead_id in ONE batched upsert rather than one
-    // sequential UPDATE per row - a 1000-lead import previously meant
-    // 1000 sequential round trips just for this step, which was the real
-    // cause of "importing leads takes forever."
-    //
-    // Bug fix: Postgres validates NOT NULL constraints on the candidate
-    // row for `INSERT ... ON CONFLICT DO UPDATE` BEFORE checking whether
-    // a conflict actually occurs - so even though every id here always
-    // already exists (matching a real earlier committed row), supplying
-    // only {id, lead_id} made the implicit insert branch fail with "null
-    // value in column import_job_id violates not-null constraint" on
-    // every commit. Every NOT NULL column now rides along with its
-    // already-correct, unchanged value - PostgREST only SETs the columns
-    // present in the payload on the actual UPDATE branch, so this never
-    // overwrites anything with different data, it just satisfies the
-    // insert-branch's own validation.
-    const rowLeadIdUpdates = batch
-      .map((row: any, j: number) => {
-        const lead = (insertedLeads ?? [])[j];
-        return lead
-          ? {
-              id: row.id,
-              import_job_id: jobId,
-              organization_id: job.organization_id,
-              row_number: row.row_number,
-              raw_data: row.raw_data,
-              result: 'valid' as const,
-              phone_normalized: row.phone_normalized,
-              lead_id: lead.id,
-            }
-          : null;
-      })
-      .filter((u): u is NonNullable<typeof u> => u !== null);
-    if (rowLeadIdUpdates.length > 0) {
-      const { error: rowUpdateError } = await supabase.from('import_job_rows').upsert(rowLeadIdUpdates, { onConflict: 'id' });
-      if (rowUpdateError) throw rowUpdateError;
-    }
-    imported += (insertedLeads ?? []).length;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Import commit failed unexpectedly.';
+    await supabase.from('import_jobs').update({ status: 'failed', error_message: message }).eq('id', jobId);
+    throw err;
   }
 
-  await supabase
-    .from('import_jobs')
-    .update({ status: 'completed', imported_rows: imported })
-    .eq('id', jobId);
+  await supabase.from('import_jobs').update({ status: 'completed' }).eq('id', jobId);
 
   return { imported };
 }
