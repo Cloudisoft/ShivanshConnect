@@ -281,15 +281,41 @@ describe('VapiProvider', () => {
     expect(await provider.getRecording('call_abc')).toBe('https://rec');
   });
 
-  it('registerWebhook() PATCHes /org with the server url', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+  it('registerWebhook() lists existing assistants and PATCHes server.url onto each one (Vapi has no account-wide webhook endpoint)', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url === 'https://api.vapi.ai/assistant?limit=1000') {
+        return { ok: true, json: async () => [{ id: 'asst_1' }, { id: 'asst_2' }] };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
     vi.stubGlobal('fetch', fetchMock);
     const provider = new VapiProvider('sk-test');
     await provider.registerWebhook('https://backend.example.com/api/v1/webhooks/vapi');
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('https://api.vapi.ai/org');
-    expect(init.method).toBe('PATCH');
-    expect(JSON.parse(init.body)).toEqual({ server: { url: 'https://backend.example.com/api/v1/webhooks/vapi' } });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const [listUrl, listInit] = fetchMock.mock.calls[0];
+    expect(listUrl).toBe('https://api.vapi.ai/assistant?limit=1000');
+    expect(listInit.method).toBe('GET');
+    const [patch1Url, patch1Init] = fetchMock.mock.calls[1];
+    expect(patch1Url).toBe('https://api.vapi.ai/assistant/asst_1');
+    expect(patch1Init.method).toBe('PATCH');
+    expect(JSON.parse(patch1Init.body)).toEqual({ server: { url: 'https://backend.example.com/api/v1/webhooks/vapi' } });
+    const [patch2Url] = fetchMock.mock.calls[2];
+    expect(patch2Url).toBe('https://api.vapi.ai/assistant/asst_2');
+  });
+
+  it('createAssistant() sets server.url on the payload when BACKEND_PUBLIC_URL is configured', async () => {
+    process.env.BACKEND_PUBLIC_URL = 'https://backend.example.com';
+    try {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'asst_123' }) });
+      vi.stubGlobal('fetch', fetchMock);
+      const provider = new VapiProvider('sk-test');
+      await provider.createAssistant(BASE_CONFIG);
+      const [, init] = fetchMock.mock.calls[0];
+      expect(JSON.parse(init.body).server).toEqual({ url: 'https://backend.example.com/api/v1/webhooks/vapi' });
+    } finally {
+      delete process.env.BACKEND_PUBLIC_URL;
+    }
   });
 
   it('a non-2xx response throws OrchestrationProviderError, never a silent success', async () => {

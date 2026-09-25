@@ -26,9 +26,27 @@
  *   POST   {call.monitor.controlUrl}        - transfer-call / say control
  *                                              messages while the call is
  *                                              live (see transferCall())
- *   PATCH  /org (or /assistant server config) - registers the webhook
+ *   PATCH  /assistant/{id} (server: {url})  - registers the webhook
  *                                              (server) URL Vapi POSTs
- *                                              call events to.
+ *                                              call events to. Vapi has
+ *                                              NO account-wide webhook
+ *                                              API endpoint - PATCH /org
+ *                                              does not exist (confirmed
+ *                                              404 against the real API);
+ *                                              the org-level default can
+ *                                              only be set by hand in the
+ *                                              Vapi dashboard's General
+ *                                              Settings. The only real,
+ *                                              API-reachable mechanism is
+ *                                              a `server.url` set directly
+ *                                              on each assistant, so this
+ *                                              is threaded through every
+ *                                              createAssistant()/
+ *                                              updateAssistant() call (see
+ *                                              toVapiAssistantPayload)
+ *                                              and backfilled onto every
+ *                                              already-existing assistant
+ *                                              by registerWebhook() below.
  *
  * Live monitoring: Vapi exposes `call.monitor.listenUrl` (a WSS PCM audio
  * stream, read-only) and `call.monitor.controlUrl` (an HTTP endpoint that
@@ -57,6 +75,22 @@ import {
 } from './types.js';
 
 const VAPI_API_BASE = 'https://api.vapi.ai';
+
+/** Derives the webhook URL Vapi should POST call events to from
+ * BACKEND_PUBLIC_URL, or null when it's unset (in which case webhook
+ * registration is skipped rather than sending a garbage/local URL to
+ * Vapi - see env.ts's doc comment on BACKEND_PUBLIC_URL). Reads
+ * process.env directly rather than the shared getEnv() - this adapter is
+ * unit-tested in isolation from the rest of the app's required env vars
+ * (SUPABASE_URL etc.), and getEnv()'s schema validation would throw for
+ * those tests; env.ts's own schema still validates BACKEND_PUBLIC_URL as
+ * a real URL at app startup, so a malformed value never reaches here in
+ * production. */
+function vapiWebhookUrl(): string | null {
+  const raw = process.env.BACKEND_PUBLIC_URL;
+  if (!raw) return null;
+  return `${raw.replace(/\/+$/, '')}/api/v1/webhooks/vapi`;
+}
 
 /** Appended to every assistant's system prompt (toVapiAssistantPayload
  * below) regardless of what an individual agent's own configured prompt
@@ -317,6 +351,16 @@ export class VapiProvider implements CallOrchestrationProvider {
       payload.forwardingPhoneNumber = config.transferRules.transfer_to;
     }
 
+    // Registers this backend's webhook receiver directly on the
+    // assistant - the only real, API-reachable way to do this (see this
+    // file's header comment for why there's no account-wide equivalent).
+    // Without it, Vapi never sends status-update/end-of-call-report/
+    // transcript events for calls placed with this assistant at all.
+    const webhookUrl = vapiWebhookUrl();
+    if (webhookUrl) {
+      payload.server = { url: webhookUrl };
+    }
+
     return payload;
   }
 
@@ -538,11 +582,20 @@ export class VapiProvider implements CallOrchestrationProvider {
     };
   }
 
-  /** Vapi delivers webhook events per-assistant (assistant.serverUrl) or
-   * account-wide (org server URL). This backend registers the account-wide
-   * default so every assistant's events land on the same receiver without
-   * having to set it per-assistant on every createAssistant() call. */
+  /** Vapi has no account-wide webhook API (see this file's header
+   * comment) - toVapiAssistantPayload() sets `server.url` on every
+   * assistant this backend creates or updates going forward, but that
+   * does nothing for assistants that already existed before this fix
+   * shipped. This backfills the same `server.url` onto every assistant
+   * already registered under this org's Vapi account, so re-running
+   * Test Connection actually fixes previously-published agents too,
+   * not just new ones. Vapi's real GET /assistant list endpoint caps at
+   * limit=1000 (docs.vapi.ai/api-reference/assistants/list) - a single
+   * page comfortably covers any real org's assistant count. */
   async registerWebhook(url: string): Promise<void> {
-    await this.request('PATCH', '/org', { server: { url } });
+    const assistants = await this.request<Array<{ id: string }>>('GET', '/assistant?limit=1000');
+    for (const assistant of assistants) {
+      await this.request('PATCH', `/assistant/${encodeURIComponent(assistant.id)}`, { server: { url } });
+    }
   }
 }

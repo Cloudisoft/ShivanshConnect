@@ -78,9 +78,6 @@ describe('Phase 10: Live Monitor supervisor actions', () => {
       if (url.startsWith('https://api.vapi.ai/call/') && url.endsWith('/hangup') && method === 'POST') {
         return { ok: true, status: 200, json: async () => ({ ok: true }) } as unknown as Response;
       }
-      if (url === 'https://api.vapi.ai/org' && method === 'PATCH') {
-        return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
-      }
       throw new Error(`Unexpected fetch call in test: ${method} ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);

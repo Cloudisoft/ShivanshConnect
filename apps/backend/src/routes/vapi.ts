@@ -131,13 +131,15 @@ export async function vapiRoutes(app: FastifyInstance): Promise<void> {
     try {
       await provider.ping();
 
-      // Vapi delivers call-status/end-of-call events to a server URL
-      // configured on the Vapi account itself - it has no way to discover
-      // ours on its own, so every successful connection re-registers it.
-      // Cheap and idempotent (a PATCH), and it means a connection that
-      // "works" always also means "will actually deliver call updates",
-      // rather than depending on someone setting this by hand in Vapi's
-      // dashboard and it silently drifting out of sync.
+      // Vapi delivers call-status/end-of-call/transcript events to a
+      // server URL set per-assistant (there is no account-wide webhook
+      // API - see lib/orchestration/vapi.ts's header comment) - it has no
+      // way to discover ours on its own, so every successful connection
+      // re-registers it on every assistant already in this org's Vapi
+      // account. Idempotent, and it means a connection that "works"
+      // always also means "will actually deliver call updates", rather
+      // than depending on new agents happening to be republished after
+      // this was fixed.
       const env = getEnv();
       if (env.BACKEND_PUBLIC_URL) {
         webhookUrl = `${env.BACKEND_PUBLIC_URL.replace(/\/+$/, '')}/api/v1/webhooks/vapi`;

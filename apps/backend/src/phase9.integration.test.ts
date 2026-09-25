@@ -110,9 +110,6 @@ describe('Phase 9: CDR artifact ingestion pipeline + CDR/export APIs', () => {
           json: async () => ({ model: 'gpt-4o-mini', choices: [{ message: { content: JSON.stringify(LLM_SUMMARY) } }] }),
         } as unknown as Response;
       }
-      if (url === 'https://api.vapi.ai/org' && method === 'PATCH') {
-        return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
-      }
       throw new Error(`Unexpected fetch call in test: ${method} ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
