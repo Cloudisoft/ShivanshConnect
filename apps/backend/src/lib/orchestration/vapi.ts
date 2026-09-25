@@ -393,6 +393,18 @@ export class VapiProvider implements CallOrchestrationProvider {
     await this.request('GET', '/assistant?limit=1');
   }
 
+  /** TEMPORARY diagnostic - GET /org has never been directly tested
+   * against a real Vapi account in this codebase (only PATCH /org was,
+   * which 404'd - see this file's header comment). The org's own report
+   * of previously fetching a real-time Vapi balance into a dashboard
+   * suggests GET might return real billing/credit fields even though
+   * PATCH doesn't exist as a route. Returns the raw response so it can be
+   * inspected via logs before building any real feature on it - never
+   * assumes a field name without seeing the real payload first. */
+  async debugGetOrg(): Promise<unknown> {
+    return this.request('GET', '/org');
+  }
+
   async createAssistant(config: AssistantConfig): Promise<AssistantResult> {
     const payload = this.toVapiAssistantPayload(config);
     const created = await this.request<{ id: string }>('POST', '/assistant', payload);
