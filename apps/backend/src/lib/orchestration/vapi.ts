@@ -613,11 +613,30 @@ export class VapiProvider implements CallOrchestrationProvider {
    * Test Connection actually fixes previously-published agents too,
    * not just new ones. Vapi's real GET /assistant list endpoint caps at
    * limit=1000 (docs.vapi.ai/api-reference/assistants/list) - a single
-   * page comfortably covers any real org's assistant count. */
+   * page comfortably covers any real org's assistant count.
+   *
+   * PATCHes run in bounded-concurrency batches rather than one at a
+   * time - an org with many assistants doing this sequentially made
+   * Test Connection take 49+ real seconds in production (confirmed in
+   * Railway logs), which just looks like a stuck/broken button with no
+   * feedback. A single already-deleted/archived assistant failing to
+   * PATCH is swallowed rather than aborting the rest of the batch or
+   * failing the whole connection test - this is a best-effort backfill,
+   * and every assistant created or updated from now on gets server.url
+   * set automatically regardless of whether this backfill fully
+   * succeeds. */
   async registerWebhook(url: string): Promise<void> {
     const assistants = await this.request<Array<{ id: string }>>('GET', '/assistant?limit=1000');
-    for (const assistant of assistants) {
-      await this.request('PATCH', `/assistant/${encodeURIComponent(assistant.id)}`, { server: { url } });
+    const CONCURRENCY = 10;
+    for (let i = 0; i < assistants.length; i += CONCURRENCY) {
+      const batch = assistants.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        batch.map((assistant) =>
+          this.request('PATCH', `/assistant/${encodeURIComponent(assistant.id)}`, { server: { url } }).catch(() => {
+            // best-effort - see doc comment above
+          }),
+        ),
+      );
     }
   }
 }

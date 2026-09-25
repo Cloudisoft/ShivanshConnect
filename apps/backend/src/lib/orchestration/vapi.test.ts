@@ -314,6 +314,22 @@ describe('VapiProvider', () => {
     expect(patch2Url).toBe('https://api.vapi.ai/assistant/asst_2');
   });
 
+  it('registerWebhook() never fails the whole backfill when one assistant PATCH fails - a best-effort backfill, not an all-or-nothing operation', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url === 'https://api.vapi.ai/assistant?limit=1000') {
+        return { ok: true, json: async () => [{ id: 'asst_deleted' }, { id: 'asst_ok' }] };
+      }
+      if (url === 'https://api.vapi.ai/assistant/asst_deleted') {
+        return { ok: false, status: 404, text: async () => 'not found' };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new VapiProvider('sk-test');
+    await expect(provider.registerWebhook('https://backend.example.com/api/v1/webhooks/vapi')).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it('createAssistant() sets server.url on the payload when BACKEND_PUBLIC_URL is configured', async () => {
     process.env.BACKEND_PUBLIC_URL = 'https://backend.example.com';
     try {
