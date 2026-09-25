@@ -308,6 +308,14 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
         .update({ status: candidate.attempt_count + 1 >= maxAttempts ? 'failed' : 'retry_pending', final_disposition: message })
         .eq('id', claimed.id);
       await logSkip(supabase, campaign.id, orgId, candidate.lead_id, 'origination_failed', message);
+      // Bug fix: this used to be recorded ONLY in a DB column nobody
+      // watches in real time (campaign_lead_skip_log) - a systemic
+      // failure (broken Vapi credentials, no balance, every call
+      // rejected) looked completely silent in the logs, identical to
+      // "nothing to dispatch right now". Now also logged loudly so a
+      // real outage is actually visible instead of invisible.
+      // eslint-disable-next-line no-console
+      console.error('campaignDispatcher: call origination failed for campaign', campaign.id, 'lead', candidate.lead_id, '-', message);
       skipped += 1;
     }
   }
