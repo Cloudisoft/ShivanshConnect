@@ -22,6 +22,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
 process.env.FRONTEND_URL = 'http://localhost:5173';
 process.env.CREDENTIAL_ENCRYPTION_KEY = 'a'.repeat(64);
 process.env.WORKER_POOL_CAPACITY = '50';
+process.env.BACKEND_PUBLIC_URL = 'http://localhost:4000';
 
 const fake = createFakeSupabase();
 
@@ -56,6 +57,9 @@ describe('Phase 7: campaign engine end-to-end', () => {
       }
       if (url.startsWith('https://api.vapi.ai/assistant?') && method === 'GET') {
         return { ok: true, status: 200, json: async () => [] } as unknown as Response;
+      }
+      if (url === 'https://api.vapi.ai/org' && method === 'PATCH') {
+        return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
       }
       throw new Error(`Unexpected fetch call in test: ${method} ${url}`);
     });
@@ -98,6 +102,12 @@ describe('Phase 7: campaign engine end-to-end', () => {
     const testConnRes = await app.inject({ method: 'POST', url: '/api/v1/vapi/test-connection', headers: { authorization: `Bearer ${token}` } });
     expect(testConnRes.statusCode).toBe(200);
     expect(testConnRes.json().data.status).toBe('connected');
+    // Bug: BACKEND_PUBLIC_URL unset used to silently skip webhook
+    // registration while still reporting 'connected' - every call placed
+    // under that state got stuck at 'dialing' forever with no status
+    // updates ever arriving. webhook_url being populated here proves
+    // registerWebhook() actually ran, not just that ping() succeeded.
+    expect(testConnRes.json().data.webhook_url).toBe('http://localhost:4000/api/v1/webhooks/vapi');
 
     const importRes = await app.inject({
       method: 'POST',

@@ -26,6 +26,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key';
 process.env.FRONTEND_URL = 'http://localhost:5173';
 process.env.CREDENTIAL_ENCRYPTION_KEY = 'a'.repeat(64);
 process.env.PIPECAT_SERVICE_TOKEN = 'test-pipecat-shared-secret';
+process.env.BACKEND_PUBLIC_URL = 'http://localhost:4000';
 
 const fake = createFakeSupabase();
 
@@ -76,6 +77,9 @@ describe('Phase 10: Live Monitor supervisor actions', () => {
       }
       if (url.startsWith('https://api.vapi.ai/call/') && url.endsWith('/hangup') && method === 'POST') {
         return { ok: true, status: 200, json: async () => ({ ok: true }) } as unknown as Response;
+      }
+      if (url === 'https://api.vapi.ai/org' && method === 'PATCH') {
+        return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
       }
       throw new Error(`Unexpected fetch call in test: ${method} ${url}`);
     });
