@@ -29,8 +29,8 @@ const STATE_TONE: Record<Mode, 'neutral' | 'success' | 'warning' | 'danger'> = {
   barged_in: 'danger',
 };
 
-function speakerLabel(speaker: 'ai' | 'caller'): string {
-  return speaker === 'ai' ? 'AI' : 'Caller';
+function speakerLabel(speaker: 'ai' | 'caller', voiceName: string | null | undefined): string {
+  return speaker === 'ai' ? (voiceName ?? 'AI') : 'Caller';
 }
 
 /** Opens a raw binary WS to `wsUrl?token=token` and wires a PcmStreamPlayer
@@ -324,7 +324,7 @@ export function CallDetailPanel({
             {segments.map((s) => (
               <p key={s.segment_index} className="text-sm">
                 <span className={s.speaker === 'ai' ? 'font-semibold text-ink-900' : 'font-semibold text-gold-700'}>
-                  {speakerLabel(s.speaker)}:
+                  {speakerLabel(s.speaker, call.voice_name)}:
                 </span>{' '}
                 <span className="text-ink-700">{s.text}</span>
               </p>
