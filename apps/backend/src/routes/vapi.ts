@@ -152,6 +152,16 @@ export async function vapiRoutes(app: FastifyInstance): Promise<void> {
           lastError = message;
           webhookUrl = null;
         }
+      } else {
+        // BACKEND_PUBLIC_URL missing used to silently skip webhook
+        // registration entirely while still reporting 'connected' - every
+        // call placed under that state got stuck at 'dialing' forever
+        // (Vapi has nowhere to send status-update/end-of-call-report
+        // events), with nothing in System Health or here to explain why.
+        // This is a real deployment misconfiguration, not a soft warning.
+        status = 'error';
+        message = 'Connected to Vapi, but BACKEND_PUBLIC_URL is not configured, so the call-status webhook could not be registered - every call would get stuck at "dialing" with no status updates. Set BACKEND_PUBLIC_URL in the backend service\'s environment variables, then test the connection again.';
+        lastError = message;
       }
     } catch (err) {
       status = 'error';

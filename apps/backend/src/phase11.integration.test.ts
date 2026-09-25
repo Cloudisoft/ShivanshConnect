@@ -28,6 +28,7 @@ process.env.FRONTEND_URL = 'http://localhost:5173';
 process.env.CREDENTIAL_ENCRYPTION_KEY = 'a'.repeat(64);
 process.env.WORKER_POOL_CAPACITY = '50';
 process.env.OPENAI_API_KEY = 'sk-test-openai-key';
+process.env.BACKEND_PUBLIC_URL = 'http://localhost:4000';
 
 const fake = createFakeSupabase();
 
@@ -129,6 +130,9 @@ describe('Phase 11: AI call evaluator + improvement queue', () => {
           content = LLM_SUGGESTION;
         }
         return { ok: true, status: 200, json: async () => ({ model: 'gpt-4o-mini', choices: [{ message: { content: JSON.stringify(content) } }] }) } as unknown as Response;
+      }
+      if (url === 'https://api.vapi.ai/org' && method === 'PATCH') {
+        return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
       }
       throw new Error(`Unexpected fetch call in test: ${method} ${url}`);
     });
