@@ -131,9 +131,6 @@ describe('Phase 11: AI call evaluator + improvement queue', () => {
         }
         return { ok: true, status: 200, json: async () => ({ model: 'gpt-4o-mini', choices: [{ message: { content: JSON.stringify(content) } }] }) } as unknown as Response;
       }
-      if (url === 'https://api.vapi.ai/org' && method === 'PATCH') {
-        return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
-      }
       throw new Error(`Unexpected fetch call in test: ${method} ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
