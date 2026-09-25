@@ -37,7 +37,16 @@ export async function buildLiveMonitorActiveCalls(supabase: Supabase, calls: Rec
   const agentById = new Map((agents ?? []).map((a: any) => [a.id, a]));
   const versionById = new Map((agentVersions ?? []).map((v: any) => [v.id, v]));
 
-  const voiceIds = uniq([...versionById.values()].map((v: any) => v.voice_id));
+  // The voice actually used for a call (a campaign override, most often)
+  // lives on calls.voice_id itself, NOT the agent version's own default -
+  // re-deriving it from the version was the bug ("Live Monitor still
+  // shows Tina instead of Mitchell"): it can only ever show the agent's
+  // default, wrong whenever a campaign's own voice overrides it. A call
+  // placed before that column existed falls back to the version's
+  // default, the best available answer for those older rows only.
+  const versionVoiceIds = uniq([...versionById.values()].map((v: any) => v.voice_id));
+  const callVoiceIds = uniq(calls.map((c) => c.voice_id));
+  const voiceIds = uniq([...versionVoiceIds, ...callVoiceIds]);
   const { data: voices } = voiceIds.length
     ? await supabase.from('voices').select('id, name').in('id', voiceIds)
     : { data: [] as any[] };
@@ -48,7 +57,8 @@ export async function buildLiveMonitorActiveCalls(supabase: Supabase, calls: Rec
     const lead = call.lead_id ? leadById.get(call.lead_id) : null;
     const agent = call.ai_agent_id ? agentById.get(call.ai_agent_id) : null;
     const version = call.ai_agent_version_id ? versionById.get(call.ai_agent_version_id) : null;
-    const voice = version?.voice_id ? voiceById.get(version.voice_id) : null;
+    const resolvedVoiceId = call.voice_id ?? version?.voice_id ?? null;
+    const voice = resolvedVoiceId ? voiceById.get(resolvedVoiceId) : null;
 
     return {
       id: call.id,
@@ -65,7 +75,7 @@ export async function buildLiveMonitorActiveCalls(supabase: Supabase, calls: Rec
       lead_name: lead ? `${lead.first_name ?? ''} ${lead.last_name ?? ''}`.trim() || null : null,
       ai_agent_id: call.ai_agent_id ?? null,
       ai_agent_name: agent?.name ?? null,
-      voice_id: version?.voice_id ?? null,
+      voice_id: resolvedVoiceId,
       voice_name: voice?.name ?? null,
       transfer_destination_e164: call.transfer_destination_e164 ?? null,
     };
@@ -78,7 +88,7 @@ export async function fetchActiveCallsSnapshot(supabase: Supabase, organizationI
   const { data, error } = await supabase
     .from('calls')
     .select(
-      'id, organization_id, engine, status, direction, customer_number, started_at, answered_at, campaign_id, lead_id, ai_agent_id, ai_agent_version_id, transfer_destination_e164',
+      'id, organization_id, engine, status, direction, customer_number, started_at, answered_at, campaign_id, lead_id, ai_agent_id, ai_agent_version_id, voice_id, transfer_destination_e164',
     )
     .eq('organization_id', organizationId)
     .in('status', [...LIVE_MONITOR_ACTIVE_STATUSES]);

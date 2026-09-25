@@ -26,7 +26,7 @@ export interface CdrFilters {
 }
 
 const CALL_COLUMNS =
-  'id, organization_id, engine, vapi_call_id, pipecat_call_id, ai_agent_id, ai_agent_version_id, campaign_id, lead_id, phone_number_id, direction, customer_number, status, started_at, answered_at, ended_at, duration_seconds, talk_duration_seconds, ended_reason, transfer_status, cost, created_at';
+  'id, organization_id, engine, vapi_call_id, pipecat_call_id, ai_agent_id, ai_agent_version_id, campaign_id, lead_id, phone_number_id, voice_id, direction, customer_number, status, started_at, answered_at, ended_at, duration_seconds, talk_duration_seconds, ended_reason, transfer_status, cost, created_at';
 
 /** Resolves `filters.disposition` (a disposition CODE or NAME, org-scoped
  * plus system defaults) to the exact set of call ids carrying it. Returns
@@ -169,7 +169,17 @@ export async function buildCdrRows(supabase: Supabase, orgId: string, calls: Rec
   const recordingReadyByCallId = new Set((recordings ?? []).filter((r: any) => r.status === 'ready').map((r: any) => r.call_id));
   const summaryByCallId = new Set((summaries ?? []).map((s: any) => s.call_id));
 
-  const voiceIds = uniq([...versionById.values()].map((v: any) => v.voice_id));
+  // The voice actually used for a call (a campaign override, most
+  // often) lives on calls.voice_id itself, NOT the agent version's own
+  // default - re-deriving it from the version was the bug ("Live
+  // Monitor/CDR still shows Tina instead of Mitchell"): it can only
+  // show the agent's default, wrong whenever a campaign's own voice
+  // overrides it. A call placed before that column existed falls back
+  // to the version's default, the best available answer for those
+  // older rows only.
+  const versionVoiceIds = uniq([...versionById.values()].map((v: any) => v.voice_id));
+  const callVoiceIds = uniq(calls.map((c) => c.voice_id));
+  const voiceIds = uniq([...versionVoiceIds, ...callVoiceIds]);
   const { data: voices } = voiceIds.length
     ? await supabase.from('voices').select('id, name').in('id', voiceIds)
     : { data: [] as any[] };
@@ -181,7 +191,8 @@ export async function buildCdrRows(supabase: Supabase, orgId: string, calls: Rec
     const lead = call.lead_id ? leadById.get(call.lead_id) : null;
     const agent = agentById.get(call.ai_agent_id);
     const version = versionById.get(call.ai_agent_version_id);
-    const voice = version?.voice_id ? voiceById.get(version.voice_id) : null;
+    const resolvedVoiceId = call.voice_id ?? version?.voice_id ?? null;
+    const voice = resolvedVoiceId ? voiceById.get(resolvedVoiceId) : null;
     const phoneNumber = phoneNumberById.get(call.phone_number_id);
 
     const row: CdrRow = {
@@ -196,7 +207,7 @@ export async function buildCdrRows(supabase: Supabase, orgId: string, calls: Rec
       direction: call.direction,
       ai_agent_id: call.ai_agent_id,
       ai_agent_name: agent?.name ?? null,
-      voice_id: version?.voice_id ?? null,
+      voice_id: resolvedVoiceId,
       voice_name: voice?.name ?? null,
       started_at: call.started_at,
       answered_at: call.answered_at,
