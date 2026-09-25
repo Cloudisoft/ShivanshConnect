@@ -131,6 +131,18 @@ export async function vapiRoutes(app: FastifyInstance): Promise<void> {
     try {
       await provider.ping();
 
+      // TEMPORARY diagnostic - see debugGetOrg()'s doc comment. Logged
+      // (never included in the response) so the real GET /org payload can
+      // be inspected in Railway logs before deciding whether a real
+      // account-balance feature can be built on it. Never affects the
+      // connection result either way.
+      try {
+        const orgInfo = await provider.debugGetOrg();
+        req.log.info({ orgInfo }, 'DIAGNOSTIC: Vapi GET /org response');
+      } catch (err) {
+        req.log.info({ err: err instanceof Error ? err.message : err }, 'DIAGNOSTIC: Vapi GET /org failed');
+      }
+
       // Vapi delivers call-status/end-of-call/transcript events to a
       // server URL set per-assistant (there is no account-wide webhook
       // API - see lib/orchestration/vapi.ts's header comment) - it has no
