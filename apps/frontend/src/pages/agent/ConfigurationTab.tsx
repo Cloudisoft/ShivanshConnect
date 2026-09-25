@@ -3,12 +3,14 @@ import { Play } from 'lucide-react';
 import {
   BEHAVIOR_TRAITS,
   EVALUATION_SCORE_CATEGORY_LABELS,
+  LLM_MODEL_OPTIONS,
   LLM_PROVIDERS,
   LLM_PROVIDER_LABELS,
   PERSONALITY_TONES,
   PERSONALITY_TRAITS,
   PROMPT_VARIABLES,
   type AiAgentVersion,
+  type LlmProvider,
 } from '@shivanshconnect/shared';
 import { useAuth } from '../../hooks/useAuth';
 import {
@@ -22,6 +24,56 @@ import { usePreviewVoice, useVoices } from '../../hooks/useVoices';
 import { Alert, Button, Card, Input, Label } from '../../components/ui';
 import { ApiClientError, describeApiError } from '../../lib/apiClient';
 import { handlePlaceholderPaste } from '../../lib/placeholderPaste';
+
+const CUSTOM_MODEL_SENTINEL = '__custom__';
+
+/** Model id picker: a real dropdown of the exact model ids Vapi's own
+ * docs currently list as supported for the selected provider
+ * (LLM_MODEL_OPTIONS - only openai/anthropic have a sourced list right
+ * now), with a free-text fallback for every other provider or a model id
+ * not on that list (e.g. an older/custom deployment, or a provider Vapi
+ * added a model for since this list was last updated). Never silently
+ * clears a value that isn't in the curated list - it shows up as
+ * "Custom" with the real value still intact in the text field. */
+function ModelField({ provider, model, onChange }: { provider: LlmProvider; model: string; onChange: (model: string) => void }): JSX.Element {
+  const curated = LLM_MODEL_OPTIONS[provider];
+  const isCustom = !curated || !curated.includes(model);
+
+  return (
+    <div>
+      <Label htmlFor="llm_model">Model</Label>
+      {curated && (
+        <select
+          id="llm_model"
+          className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
+          value={isCustom ? CUSTOM_MODEL_SENTINEL : model}
+          onChange={(e) => {
+            if (e.target.value !== CUSTOM_MODEL_SENTINEL) onChange(e.target.value);
+          }}
+        >
+          {curated.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+          <option value={CUSTOM_MODEL_SENTINEL}>Custom (type a model id)...</option>
+        </select>
+      )}
+      {isCustom && (
+        <Input
+          id={curated ? 'llm_model_custom' : 'llm_model'}
+          className={curated ? 'mt-2' : undefined}
+          placeholder="e.g. gpt-4o-mini, claude-sonnet-4-6"
+          value={model}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+      <p className="mt-1 text-xs text-ink-500">
+        {curated
+          ? "Sourced from Vapi's own supported-model list for this provider - Vapi rejects an unrecognized model id when placing a call."
+          : 'Must be a real model id for the provider above - Vapi rejects an unrecognized one when placing a call.'}
+      </p>
+    </div>
+  );
+}
 
 /** Phase 11: the evaluation-summary widget (spec sections 24/86) - real
  * server-aggregated (GROUP BY/AVG) average overall score and per-category
@@ -481,16 +533,7 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
               ))}
             </select>
           </div>
-          <div>
-            <Label htmlFor="llm_model">Model</Label>
-            <Input
-              id="llm_model"
-              placeholder="e.g. gpt-4o-mini, gpt-4o, claude-3-5-sonnet-20241022"
-              value={form.llm_model}
-              onChange={(e) => setForm((f) => ({ ...f, llm_model: e.target.value }))}
-            />
-            <p className="mt-1 text-xs text-ink-500">Must be a real model id for the provider above - Vapi rejects an unrecognized one when placing a call.</p>
-          </div>
+          <ModelField provider={form.llm_provider as LlmProvider} model={form.llm_model} onChange={(model) => setForm((f) => ({ ...f, llm_model: model }))} />
           <div>
             <Label htmlFor="llm_temperature">Temperature</Label>
             <Input

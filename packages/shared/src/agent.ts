@@ -166,6 +166,48 @@ export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
   mistral: 'Mistral',
 };
 
+/** The exact model ids Vapi's own docs (docs.vapi.ai/providers/model/{provider})
+ * currently list as supported for each provider - not a general "every
+ * model this vendor ever shipped" list, and not guessed: Vapi maintains
+ * its own allow-list independent of each vendor's full lineup, and
+ * assistantOverrides.model rejects anything not on it with a real 400.
+ * Only providers with a confirmed, sourced list are included here -
+ * every other LLM_PROVIDERS entry has no curated list, and the
+ * Configuration tab falls back to free text for those (see
+ * ConfigurationTab.tsx). Update this list by re-checking Vapi's docs
+ * when they add new models, not by adding a model just because the
+ * underlying vendor released it. */
+export const LLM_MODEL_OPTIONS: Partial<Record<LlmProvider, string[]>> = {
+  openai: [
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
+    'gpt-5.5',
+    'chat-latest',
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5.4-nano',
+    'gpt-5.2',
+    'gpt-5.1',
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5-nano',
+    'gpt-4.1',
+    'gpt-4.1-mini',
+    'gpt-4o-mini',
+    'gpt-realtime-2',
+    'o3',
+  ],
+  anthropic: [
+    'claude-opus-4-6',
+    'claude-opus-4-5-20251101',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-sonnet-4-5-20250929',
+    'claude-haiku-4-5-20251001',
+  ],
+};
+
 /** {{variable}} palette shown next to prompt/greeting/script editors. */
 export const PROMPT_VARIABLES = [
   'first_name',
