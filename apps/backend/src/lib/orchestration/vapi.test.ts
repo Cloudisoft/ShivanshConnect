@@ -58,8 +58,12 @@ describe('VapiProvider', () => {
     });
     // A fast, low-latency TTS model is requested explicitly (Bug: without
     // this, Vapi falls back to each provider's quality-optimized default
-    // model instead of a latency-optimized one).
-    expect(body.voice).toEqual({ provider: 'elevenlabs', voiceId: 'voice-123', model: 'eleven_flash_v2_5' });
+    // model instead of a latency-optimized one). The provider string is
+    // Vapi's own enum value ('11labs'), not our internal provider_key
+    // ('elevenlabs') - sending the internal key straight through got a
+    // real 400 from Vapi ("voice.provider must be one of the following
+    // values: ... 11labs ...").
+    expect(body.voice).toEqual({ provider: '11labs', voiceId: 'voice-123', model: 'eleven_flash_v2_5' });
     expect(body.maxDurationSeconds).toBe(600);
     expect(body.forwardingPhoneNumber).toBe('+14845550000');
     // Conversational-quality config (Bug 2): real, currently-documented
@@ -74,6 +78,17 @@ describe('VapiProvider', () => {
     // No voicemailDetection/backgroundDenoisingEnabled without config.
     expect(body.voicemailDetection).toBeUndefined();
     expect(body.backgroundDenoisingEnabled).toBeUndefined();
+  });
+
+  it('createAssistant() rejects a voice from a provider Vapi has no native support for, before ever calling the API', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new VapiProvider('sk-test');
+    await expect(
+      provider.createAssistant({ ...BASE_CONFIG, voice: { providerKey: 'omnivoice', providerVoiceId: 'voice-123' } }),
+    ).rejects.toThrow(/omnivoice/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('createAssistant() forwards voicemail detection and background denoising when configured (Bug 2)', async () => {
