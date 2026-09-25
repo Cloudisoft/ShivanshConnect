@@ -210,21 +210,32 @@ export function getLastReconciliationTickAt(): string | null {
   return lastTickAt;
 }
 
+function runTickOnce(): void {
+  if (tickInFlight) return;
+  tickInFlight = true;
+  runReconciliationTick()
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('callReconciliation: tick failed', err);
+    })
+    .finally(() => {
+      lastTickAt = new Date().toISOString();
+      tickInFlight = false;
+    });
+}
+
 export function startCallReconciliation(): void {
   if (intervalHandle) return;
-  intervalHandle = setInterval(() => {
-    if (tickInFlight) return;
-    tickInFlight = true;
-    runReconciliationTick()
-      .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error('callReconciliation: tick failed', err);
-      })
-      .finally(() => {
-        lastTickAt = new Date().toISOString();
-        tickInFlight = false;
-      });
-  }, RECONCILIATION_TICK_MS);
+  // Bug: setInterval's callback only ever fires after the FIRST full
+  // RECONCILIATION_TICK_MS (5 min) elapses - it never ran once at boot.
+  // Combined with STUCK_CALL_TIMEOUT_MS (10 min) and this process
+  // restarting on every deploy, a stuck call could sit unrepaired,
+  // visibly frozen in Live Monitor, for a long time after any restart
+  // before the safety net got its first real chance to run at all. Now
+  // also runs once immediately on startup, same "fire-and-forget, self-
+  // limiting" pattern as callEndDataRepair.ts's boot-time repair.
+  runTickOnce();
+  intervalHandle = setInterval(runTickOnce, RECONCILIATION_TICK_MS);
   if (typeof intervalHandle.unref === 'function') intervalHandle.unref();
 }
 
