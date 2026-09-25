@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type {
   LiveMonitorActiveCall,
@@ -38,16 +38,36 @@ interface LiveMonitorState {
   lastEventByCall: Map<string, LiveMonitorWsEvent>;
 }
 
+/** Call-lifecycle event types (excludes SNAPSHOT/HEARTBEAT and
+ * TRANSCRIPT_UPDATED, which fires many times per call and never changes a
+ * CDR row or a campaign's counts) that mean "a CDR row or a campaign's
+ * live counts just changed on the server" - worth pushing an instant
+ * refetch for rather than waiting on CDR's/Campaigns' own 5s polls. */
+const CDR_CAMPAIGN_RELEVANT_EVENTS = new Set([
+  'CALL_STARTED',
+  'CALL_CONNECTED',
+  'CALL_TRANSFER_CONNECTED',
+  'CALL_TRANSFER_FAILED',
+  'CALL_ENDED',
+]);
+
 /**
- * Phase 10: the real-time WebSocket connection backing the entire Live
- * Monitor page - no polling anywhere in here. Connects to
- * WS /api/v1/live-monitor/stream, applies the initial SNAPSHOT, then
- * folds every subsequent event into the same in-memory active-calls/
- * transcripts state as it arrives. Reconnects with backoff on an
- * unexpected close (e.g. a token nearing expiry, a network blip) - never
- * silently gives up.
+ * Phase 10: the real-time WebSocket connection backing Live Monitor and
+ * (via the same events) instant CDR/Campaigns cache invalidation - no
+ * polling alone anywhere that this connection is open. Connects to
+ * WS /api/v1/live-monitor/stream, applies the initial SNAPSHOT, then folds
+ * every subsequent event into the same in-memory active-calls/transcripts
+ * state as it arrives. Reconnects with backoff on an unexpected close
+ * (e.g. a token nearing expiry, a network blip) - never silently gives up.
+ *
+ * Exactly ONE of these connections exists for the whole authenticated app -
+ * see LiveMonitorSocketProvider/AppShell.tsx - rather than every page that
+ * wants live call data (Live Monitor, Dashboard) each opening its own, so
+ * CDR and Campaigns get the same instant push no matter which page is
+ * actually open, not only while Live Monitor itself happens to be mounted.
  */
-export function useLiveMonitorSocket() {
+function useLiveMonitorConnection(): LiveMonitorState {
+  const queryClient = useQueryClient();
   const [state, setState] = useState<LiveMonitorState>({
     status: 'connecting',
     calls: new Map(),
@@ -94,6 +114,15 @@ export function useLiveMonitorSocket() {
           return;
         }
         if (payload.type === 'HEARTBEAT') return;
+
+        if (payload.type !== 'SNAPSHOT' && CDR_CAMPAIGN_RELEVANT_EVENTS.has(payload.type)) {
+          // Push, not poll: instead of CDR/Campaigns finding out up to 5s
+          // later on their own interval, refetch the moment the call
+          // actually changed - "CDR/campaign stats should update in real
+          // time" rather than looking frozen until the next poll tick.
+          queryClient.invalidateQueries({ queryKey: ['cdr'] });
+          queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+        }
 
         setState((prev) => {
           if (payload.type === 'SNAPSHOT') {
@@ -148,9 +177,27 @@ export function useLiveMonitorSocket() {
       closedByUsRef.current = true;
       wsRef.current?.close();
     };
-  }, []);
+  }, [queryClient]);
 
   return state;
+}
+
+const LiveMonitorContext = createContext<LiveMonitorState | null>(null);
+
+/** Mounted once, in AppShell.tsx, around every authenticated route - owns
+ * the single shared WS connection described above. */
+export function LiveMonitorSocketProvider({ children }: { children: ReactNode }): JSX.Element {
+  const state = useLiveMonitorConnection();
+  return <LiveMonitorContext.Provider value={state}>{children}</LiveMonitorContext.Provider>;
+}
+
+/** Reads the shared connection - must be rendered under
+ * LiveMonitorSocketProvider (true of every authenticated route via
+ * AppShell.tsx). */
+export function useLiveMonitorSocket(): LiveMonitorState {
+  const ctx = useContext(LiveMonitorContext);
+  if (!ctx) throw new Error('useLiveMonitorSocket must be used within LiveMonitorSocketProvider');
+  return ctx;
 }
 
 // ---------------------------------------------------------------------
