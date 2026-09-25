@@ -43,13 +43,33 @@ export function registerLiveMonitorSubscriber(
     if (event.organizationId !== organizationId) return; // cross-org isolation - see header comment
     const type = mapTransitionToLiveMonitorEventType(event.from, event.to);
     if (!type) return;
+
+    // CALL_ENDED always sends call: null (the frontend just removes the
+    // id from its active-calls map) - dispatch it immediately rather
+    // than waiting on 5 DB round trips (campaign/lead/agent/version/
+    // voice) whose result would be thrown away unused. That wait was
+    // real, measurable delay on exactly "should be automatically
+    // removed as soon as the call is ended".
+    if (type === 'CALL_ENDED') {
+      onEvent({
+        type,
+        call_id: event.callId,
+        organization_id: event.organizationId,
+        occurred_at: new Date().toISOString(),
+        call: null,
+        from_status: event.from,
+        to_status: event.to,
+      });
+      return;
+    }
+
     void buildLiveMonitorActiveCalls(supabase, [event.call]).then(([call]) => {
       onEvent({
         type,
         call_id: event.callId,
         organization_id: event.organizationId,
         occurred_at: new Date().toISOString(),
-        call: type === 'CALL_ENDED' ? null : (call ?? null),
+        call: call ?? null,
         from_status: event.from,
         to_status: event.to,
       });
