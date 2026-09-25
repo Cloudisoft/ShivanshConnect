@@ -622,9 +622,16 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
 
     // agent_name is never part of the client-supplied sample lead payload
     // (it isn't lead data) - inject it here so a preview shows the SAME
-    // {{agent_name}} resolution a real call gets, rather than leaving it
-    // as literal text only in preview.
-    const previewContext = { ...(body.lead ?? {}), agent_name: agent.name };
+    // {{agent_name}} resolution a real call gets (the voice's own name,
+    // not the AI agent's internal configured name - see
+    // lib/promptVariables.ts's header comment for why), rather than
+    // leaving it as literal text only in preview.
+    let previewVoiceName = 'your assistant';
+    if (version.voice_id) {
+      const { data: voice } = await supabase.from('voices').select('name').eq('id', version.voice_id).maybeSingle();
+      if (voice?.name) previewVoiceName = voice.name;
+    }
+    const previewContext = { ...(body.lead ?? {}), agent_name: previewVoiceName };
     const renderedSystemPrompt = renderTemplate(version.system_prompt, previewContext);
     const renderedGreeting = version.greeting_template ? renderTemplate(version.greeting_template, previewContext) : '';
 

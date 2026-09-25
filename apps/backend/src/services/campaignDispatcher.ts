@@ -79,6 +79,22 @@ function recordDispatch(campaignId: string): void {
   else perMinuteCounters.set(campaignId, { windowStartMs: Date.now(), count: 1 });
 }
 
+/** In-process round-robin cursor per campaign for its phone number pool
+ * (campaign_phone_numbers) - same in-process-counter pattern as
+ * perMinuteCounters above, not a persisted queue. Resets to 0 on a
+ * process restart, which only means rotation starts over from the first
+ * number again, never a correctness issue (every number in the pool is
+ * equally valid to dial from). */
+const phoneNumberRotationCursors = new Map<string, number>();
+
+function nextPhoneNumberFromPool(campaignId: string, pool: Record<string, any>[]): Record<string, any> | null {
+  if (pool.length === 0) return null;
+  const cursor = phoneNumberRotationCursors.get(campaignId) ?? 0;
+  const number = pool[cursor % pool.length];
+  phoneNumberRotationCursors.set(campaignId, cursor + 1);
+  return number;
+}
+
 async function logSkip(supabase: Supabase, campaignId: string, orgId: string, leadId: string, reasonCode: string, reasonMessage: string): Promise<void> {
   await supabase.from('campaign_lead_skip_log').insert({
     campaign_id: campaignId,
@@ -181,18 +197,26 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
 
   // Resolved once per campaign, not per lead: the whole point of the
   // snapshot is that every call this tick uses the SAME locked-in agent
-  // version/voice/transfer number.
+  // version/voice/transfer number. The phone number pool is the one
+  // exception - a campaign can dial from several numbers (any mix of
+  // providers, see migration 00000000000056), so each call in the loop
+  // below rotates to the next one via nextPhoneNumberFromPool() rather
+  // than every call this tick using the same fixed number.
   let agentVersionRow: Record<string, any> | null = null;
-  let phoneNumberRow: Record<string, any> | null = null;
   let voiceOverride: { providerKey: string; providerVoiceId: string } | null = null;
   let engine: 'vapi' | 'pipecat' = 'vapi';
   if (version.ai_agent_version_id) {
     const { data } = await supabase.from('ai_agent_versions').select('*').eq('id', version.ai_agent_version_id).maybeSingle();
     agentVersionRow = data;
   }
-  if (campaign.phone_number_id) {
+  const { data: poolRows } = await supabase.from('campaign_phone_numbers').select('phone_numbers(*)').eq('campaign_id', campaign.id);
+  let phoneNumberPool: Record<string, any>[] = ((poolRows ?? []) as any[]).map((row) => row.phone_numbers).filter(Boolean);
+  if (phoneNumberPool.length === 0 && campaign.phone_number_id) {
+    // Legacy fallback: a campaign that predates the pool (or whose pool
+    // row was somehow never backfilled) still dials from its single
+    // configured number exactly as before.
     const { data } = await supabase.from('phone_numbers').select('*').eq('id', campaign.phone_number_id).maybeSingle();
-    phoneNumberRow = data;
+    if (data) phoneNumberPool = [data];
   }
   if (version.voice_id) {
     const { data } = await supabase.from('voices').select('provider_key, provider_voice_id').eq('id', version.voice_id).maybeSingle();
@@ -233,7 +257,7 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
       continue;
     }
 
-    if (!agentVersionRow || !phoneNumberRow) {
+    if (!agentVersionRow || phoneNumberPool.length === 0) {
       await logSkip(supabase, campaign.id, orgId, candidate.lead_id, 'campaign_misconfigured', 'Campaign is missing its agent version or phone number.');
       skipped += 1;
       continue;
@@ -245,6 +269,8 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
       // our CAS update - not an error, just a lost race. Never double-dial.
       continue;
     }
+
+    const phoneNumberRow = nextPhoneNumberFromPool(campaign.id, phoneNumberPool)!;
 
     try {
       const { call } = await originateCall({

@@ -11,10 +11,14 @@
  * on any real call it was never substituted at all, so the AI would
  * literally have to say the raw text "agent_name" out loud, or an LLM
  * reading it in the system prompt would have to guess. Resolves to the
- * AI agent's own configured name (ai_agents.name) - the persona name the
- * assistant introduces itself as - never the TTS voice's own name (a
- * technical/provider detail, e.g. "Rachel" from ElevenLabs, unrelated to
- * what character the agent is speaking as).
+ * VOICE's own name (the campaign's selected voice when one is set,
+ * otherwise the agent version's own default voice) - the voice is the
+ * real source of truth for who the caller actually hears introduce
+ * themselves as, never the AI agent's internal configured name
+ * (ai_agents.name, a separate record label unrelated to what the caller
+ * hears). Matches the platform's own pre-existing no-lead-name fallback
+ * greeting (callOrigination.ts), which already used the voice's name for
+ * this exact reason.
  */
 
 export interface PromptVariableContext {

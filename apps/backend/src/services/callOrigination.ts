@@ -138,25 +138,52 @@ async function resolveCallPersonalization(
   campaignId: string | null,
   voiceOverride: { providerKey: string; providerVoiceId: string } | null,
 ): Promise<{ firstMessage: string; systemPrompt: string }> {
-  const [{ data: lead }, { data: agentRow }] = await Promise.all([
-    leadId
-      ? supabase
-          .from('leads')
-          .select('first_name, last_name, phone_normalized, email, custom_fields')
-          .eq('id', leadId)
-          .eq('organization_id', orgId)
-          .maybeSingle()
-      : Promise.resolve({ data: null }),
-    supabase.from('ai_agents').select('name').eq('id', agent.id).eq('organization_id', orgId).maybeSingle(),
-  ]);
-  const agentName = agentRow?.name ?? undefined;
+  const leadPromise = leadId
+    ? supabase
+        .from('leads')
+        .select('first_name, last_name, phone_normalized, email, custom_fields')
+        .eq('id', leadId)
+        .eq('organization_id', orgId)
+        .maybeSingle()
+    : Promise.resolve({ data: null });
+
+  // {{agent_name}} resolves to the VOICE's own name - the campaign's
+  // selected voice (voiceOverride) when one is set, otherwise the
+  // agent version's own default voice - never the AI agent's own
+  // configured name (ai_agents.name, a separate/internal label). The
+  // voice IS the persona the caller actually hears introduce itself, so
+  // it's the real source of truth for "who is this AI on the phone",
+  // matching the platform's own pre-existing no-lead-name fallback
+  // greeting below, which already used the voice's name for exactly
+  // this reason.
+  let voiceNamePromise: Promise<string | null>;
+  if (voiceOverride) {
+    voiceNamePromise = Promise.resolve(
+      supabase
+        .from('voices')
+        .select('name')
+        .eq('organization_id', orgId)
+        .eq('provider_key', voiceOverride.providerKey)
+        .eq('provider_voice_id', voiceOverride.providerVoiceId)
+        .maybeSingle(),
+    ).then((r) => r.data?.name ?? null);
+  } else if (version.voice_id) {
+    voiceNamePromise = Promise.resolve(supabase.from('voices').select('name').eq('id', version.voice_id).maybeSingle()).then(
+      (r) => r.data?.name ?? null,
+    );
+  } else {
+    voiceNamePromise = Promise.resolve(null);
+  }
+
+  const [{ data: lead }, voiceNameResolved] = await Promise.all([leadPromise, voiceNamePromise]);
+  const voiceName = voiceNameResolved ?? 'your assistant';
 
   const context: PromptVariableContext = {
     first_name: lead?.first_name || undefined,
     last_name: lead?.last_name || undefined,
     phone: lead?.phone_normalized || undefined,
     email: lead?.email || undefined,
-    agent_name: agentName,
+    agent_name: voiceName,
     custom_field: (lead?.custom_fields as Record<string, string> | undefined) ?? undefined,
   };
 
@@ -178,28 +205,14 @@ async function resolveCallPersonalization(
   // or produce an awkward "Hi, am I speaking with ?"). Build a real,
   // generic, product-specified fallback instead: "Hi, my name is
   // {voice} from {campaign/agent}. How are you doing today?"
-  let voiceName = 'your assistant';
-  if (voiceOverride) {
-    const { data } = await supabase
-      .from('voices')
-      .select('name')
-      .eq('organization_id', orgId)
-      .eq('provider_key', voiceOverride.providerKey)
-      .eq('provider_voice_id', voiceOverride.providerVoiceId)
-      .maybeSingle();
-    if (data?.name) voiceName = data.name;
-  } else if (version.voice_id) {
-    const { data } = await supabase.from('voices').select('name').eq('id', version.voice_id).maybeSingle();
-    if (data?.name) voiceName = data.name;
-  }
-
   let orgOrCampaignName: string | null = null;
   if (campaignId) {
     const { data } = await supabase.from('campaigns').select('name').eq('id', campaignId).eq('organization_id', orgId).maybeSingle();
     orgOrCampaignName = data?.name ?? null;
   }
   if (!orgOrCampaignName) {
-    orgOrCampaignName = agentName ?? null;
+    const { data } = await supabase.from('ai_agents').select('name').eq('id', agent.id).eq('organization_id', orgId).maybeSingle();
+    orgOrCampaignName = data?.name ?? null;
   }
 
   const firstMessage = `Hi, my name is ${voiceName} from ${orgOrCampaignName ?? 'our team'}. How are you doing today?`;

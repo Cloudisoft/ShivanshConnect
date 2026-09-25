@@ -132,11 +132,14 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     expect(params.systemPromptOverride).toBe('You are a helpful sales agent. Reach out to priya@acme.example if needed.');
   });
 
-  it('{{agent_name}} in a named lead\'s system prompt/greeting renders to the agent\'s real name, not literal text', async () => {
+  it('{{agent_name}} in a named lead\'s system prompt/greeting renders to the VOICE\'s real name, not the AI agent\'s own name or literal text', async () => {
     const { createCall } = fakeVapiProvider();
     fake.tables.ai_agent_versions[0].system_prompt = 'You are {{agent_name}}, a helpful sales agent.';
     fake.tables.ai_agent_versions[0].greeting_template = "Hi, this is {{agent_name}} - am I speaking with {{first_name}}?";
     fake.tables.ai_agent_versions[0].vapi_assistant_id = 'asst_existing';
+    const voiceId = randomUUID();
+    fake.tables.voices.push({ id: voiceId, organization_id: orgId, provider_key: 'elevenlabs', provider_voice_id: 'voice-1', name: 'Sarah' });
+    fake.tables.ai_agent_versions[0].voice_id = voiceId;
     const leadId = randomUUID();
     fake.tables.leads.push({ id: leadId, organization_id: orgId, first_name: 'Priya', phone_normalized: '+14845552222', custom_fields: {} });
 
@@ -153,9 +156,43 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     });
 
     const params = createCall.mock.calls[0][0];
-    // agentId's row (set up in beforeEach) has name: 'Sales Agent'.
-    expect(params.systemPromptOverride).toBe('You are Sales Agent, a helpful sales agent.');
-    expect(params.firstMessageOverride).toBe('Hi, this is Sales Agent - am I speaking with Priya?');
+    // agentId's row (set up in beforeEach) has name 'Sales Agent' - NOT
+    // what should appear here. The voice ('Sarah') is the real source of
+    // truth for who the caller hears introduce themselves as.
+    expect(params.systemPromptOverride).toBe('You are Sarah, a helpful sales agent.');
+    expect(params.firstMessageOverride).toBe('Hi, this is Sarah - am I speaking with Priya?');
+  });
+
+  it('a campaign voice override wins over the agent version\'s own default voice for {{agent_name}} too', async () => {
+    const { createCall } = fakeVapiProvider();
+    fake.tables.ai_agent_versions[0].system_prompt = 'You are {{agent_name}}.';
+    fake.tables.ai_agent_versions[0].greeting_template = 'Hi, this is {{agent_name}}.';
+    fake.tables.ai_agent_versions[0].vapi_assistant_id = 'asst_existing';
+    const defaultVoiceId = randomUUID();
+    fake.tables.voices.push({ id: defaultVoiceId, organization_id: orgId, provider_key: 'elevenlabs', provider_voice_id: 'default-voice', name: 'Default Voice' });
+    fake.tables.ai_agent_versions[0].voice_id = defaultVoiceId;
+    fake.tables.voices.push({ id: randomUUID(), organization_id: orgId, provider_key: 'cartesia', provider_voice_id: 'override-voice', name: 'Override Voice' });
+    const leadId = randomUUID();
+    fake.tables.leads.push({ id: leadId, organization_id: orgId, first_name: 'Priya', phone_normalized: '+14845552222', custom_fields: {} });
+    const campaignId = randomUUID();
+    fake.tables.campaigns.push({ id: campaignId, organization_id: orgId, name: 'Fall Outreach' });
+
+    await originateCall({
+      organizationId: orgId,
+      engine: 'vapi',
+      agent: { id: agentId },
+      version: fake.tables.ai_agent_versions[0],
+      phoneNumber: fake.tables.phone_numbers[0],
+      customerNumber: '+14845552222',
+      leadId,
+      campaignId,
+      createdBy: null,
+      voiceOverride: { providerKey: 'cartesia', providerVoiceId: 'override-voice' },
+    });
+
+    const params = createCall.mock.calls[0][0];
+    expect(params.systemPromptOverride).toBe('You are Override Voice.');
+    expect(params.firstMessageOverride).toBe('Hi, this is Override Voice.');
   });
 
   it('an unnamed lead gets the generic fallback greeting with the real voice + campaign name, not the named template', async () => {

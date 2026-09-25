@@ -19,6 +19,7 @@ import {
   usePublishCampaignVersion,
   useRemoveLeads,
   useRotateLeads,
+  useSetCampaignPhoneNumbers,
   useUpdateCampaign,
   useUpdateConcurrency,
   type CampaignDetail,
@@ -217,6 +218,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const { hasPermission } = useAuth();
   const canEdit = hasPermission('campaigns.edit') && campaign.status !== 'running';
   const updateCampaign = useUpdateCampaign();
+  const setPhoneNumbers = useSetCampaignPhoneNumbers();
   const createVersion = useCreateCampaignVersion();
   const publishVersion = usePublishCampaignVersion();
   const pause = useCampaignLifecycleAction('pause');
@@ -233,7 +235,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const v = campaign.draft_version ?? campaign.current_version;
   const [prompt, setPrompt] = useState(v?.prompt ?? '');
   const [agentId, setAgentId] = useState(v?.ai_agent_id ?? '');
-  const [phoneNumberId, setPhoneNumberId] = useState(campaign.phone_number_id ?? '');
+  const [phoneNumberIds, setPhoneNumberIds] = useState<string[]>(campaign.phone_numbers.map((p) => p.id));
   const [voiceId, setVoiceId] = useState(v?.voice_id ?? '');
   const [scriptId, setScriptId] = useState(v?.script_id ?? '');
   const [kbIds, setKbIds] = useState<string[]>(v?.knowledge_base_ids ?? []);
@@ -306,7 +308,6 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
     try {
       await updateCampaign.mutateAsync({
         id: campaign.id,
-        phone_number_id: phoneNumberId || null,
         transfer_number_e164: transferNumber || null,
         voicemail_detection_enabled: voicemailEnabled,
         voicemail_message: voicemailMessage || null,
@@ -320,6 +321,15 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
       });
     } catch (err) {
       setError(describeApiError(err, 'Failed to save campaign fields.'));
+    }
+  }
+
+  async function handleSavePhoneNumbers() {
+    setError(null);
+    try {
+      await setPhoneNumbers.mutateAsync({ id: campaign.id, phoneNumberIds });
+    } catch (err) {
+      setError(describeApiError(err, 'Failed to save phone numbers.'));
     }
   }
 
@@ -435,27 +445,31 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
           </select>
         </div>
         <div>
-          <Label>Outbound phone number</Label>
-          <select
-            className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm"
-            value={phoneNumberId}
-            onChange={(e) => setPhoneNumberId(e.target.value)}
-            disabled={!canEdit}
-          >
-            <option value="">Select a number</option>
+          <Label>Outbound phone numbers</Label>
+          <div className="max-h-32 space-y-1 overflow-y-auto rounded-md border border-ink-200 p-2">
+            {(phoneNumbersQuery.data?.data ?? []).length === 0 && (
+              <p className="text-xs text-ink-400">No active numbers yet - go to DIDs to connect a provider and import/sync a number.</p>
+            )}
             {(phoneNumbersQuery.data?.data ?? []).map((n: any) => (
-              <option key={n.id} value={n.id}>
+              <label key={n.id} className="flex items-center gap-2 text-xs text-ink-700">
+                <input
+                  type="checkbox"
+                  checked={phoneNumberIds.includes(n.id)}
+                  disabled={!canEdit}
+                  onChange={(e) => setPhoneNumberIds((prev) => (e.target.checked ? [...prev, n.id] : prev.filter((id) => id !== n.id)))}
+                />
                 {n.phone_number} ({n.friendly_name || n.provider_key})
-              </option>
+              </label>
             ))}
-          </select>
-          <p className="mt-1 text-xs text-ink-400">
-            Unlike the other fields here, this one saves immediately with &quot;Save calling/voicemail settings&quot; - no publish needed.
+          </div>
+          <p className="mt-1 text-xs text-ink-500">
+            Select one or more - any mix of providers works. The dialer rotates across every number checked here. Saves
+            immediately with its own button below, not &quot;Save calling/voicemail settings&quot; - no publish needed.
           </p>
-          {(phoneNumbersQuery.data?.data ?? []).length === 0 && (
-            <p className="mt-1 text-xs text-ink-500">
-              No active numbers yet - go to DIDs to connect a provider and import/sync a number.
-            </p>
+          {canEdit && (
+            <Button variant="secondary" className="mt-2" onClick={handleSavePhoneNumbers} disabled={setPhoneNumbers.isPending}>
+              {setPhoneNumbers.isPending ? 'Saving...' : 'Save phone numbers'}
+            </Button>
           )}
         </div>
         <div>
