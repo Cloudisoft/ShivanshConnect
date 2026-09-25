@@ -205,6 +205,57 @@ describe('Phase 6: call origination via Vapi + webhook idempotency + cross-org i
     expect(fake.tables.webhook_events.length).toBe(webhookEventsBefore);
   });
 
+  it('never lets a status-update("ended") race discard end-of-call-report\'s real duration/ended_at/cost', async () => {
+    // Bug fix regression: Vapi's status-update("ended") used to map
+    // straight to calls.status = 'completed' with no end-of-call data
+    // attached. When it arrived BEFORE the end-of-call-report for the
+    // same call (a real, common Vapi delivery order), the call was
+    // already 'completed' by the time end-of-call-report arrived, and
+    // transitionCallState() treats a same-status transition as a no-op -
+    // silently discarding end-of-call-report's real duration_seconds/
+    // ended_at/cost forever. status-update("ended") is now ignored
+    // entirely; end-of-call-report is the only event that ever drives
+    // the terminal transition.
+    const token = await signup('Orchestration Status Race Org', 'orch-status-race@test.com');
+    const { agent, phoneNumber } = await setUpAgentAndNumber(token);
+
+    const createCallRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/calls',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { agent_id: agent.id, phone_number_id: phoneNumber.id, customer_number: '+14845558888', engine: 'vapi' },
+    });
+    expect(createCallRes.statusCode).toBe(200);
+    const call = createCallRes.json().data;
+
+    // status-update("ended") arrives first - must be a genuine no-op,
+    // never a premature/empty 'completed' transition.
+    const statusEndedWebhook = await app.inject({
+      method: 'POST',
+      url: '/api/v1/webhooks/vapi',
+      payload: { message: { type: 'status-update', status: 'ended', call: { id: call.vapi_call_id }, timestamp: 1000 } },
+    });
+    expect(statusEndedWebhook.statusCode).toBe(200);
+
+    const afterStatusUpdate = await app.inject({ method: 'GET', url: `/api/v1/calls/${call.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(afterStatusUpdate.json().data.status).toBe('dialing');
+
+    // end-of-call-report arrives second, with the real data - must still
+    // land, uncontested.
+    const endReportWebhook = await app.inject({
+      method: 'POST',
+      url: '/api/v1/webhooks/vapi',
+      payload: { message: { type: 'end-of-call-report', call: { id: call.vapi_call_id }, endedReason: 'customer-ended-call', durationSeconds: 77, cost: 0.34, timestamp: 2000 } },
+    });
+    expect(endReportWebhook.statusCode).toBe(200);
+
+    const afterCompleted = await app.inject({ method: 'GET', url: `/api/v1/calls/${call.id}`, headers: { authorization: `Bearer ${token}` } });
+    expect(afterCompleted.json().data.status).toBe('completed');
+    expect(afterCompleted.json().data.duration_seconds).toBe(77);
+    expect(afterCompleted.json().data.ended_at).not.toBeNull();
+    expect(afterCompleted.json().data.cost).toBe(0.34);
+  });
+
   it('resolves an unanswered call to completed instead of getting stuck at dialing/ringing (real no-answer path)', async () => {
     const token = await signup('Orchestration No Answer Org', 'orch-noanswer@test.com');
     const { agent, phoneNumber } = await setUpAgentAndNumber(token);

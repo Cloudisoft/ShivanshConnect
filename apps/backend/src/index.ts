@@ -48,6 +48,7 @@ import { dialingSettingsRoutes, campaignSettingsRoutes } from './routes/dialingS
 import { startCampaignDispatcher } from './services/campaignDispatcher.js';
 import { startAnalyticsAggregator } from './services/analyticsAggregator.js';
 import { startCallReconciliation } from './services/callReconciliation.js';
+import { runCallEndDataRepair } from './services/callEndDataRepair.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { dispositionRoutes } from './routes/dispositions.js';
@@ -366,6 +367,13 @@ async function main() {
     // callReconciliation.ts's header) - same "not started by buildApp()
     // itself" reasoning as every other scheduler above.
     startCallReconciliation();
+    // One-off (self-limiting) repair for historical calls stuck with a
+    // blank End Time/Duration by the status-update/end-of-call-report
+    // race bug fixed in routes/webhooks.ts - see services/
+    // callEndDataRepair.ts's header. Runs once at boot, never blocks
+    // startup (fire-and-forget, logs its own errors) - same "not started
+    // by buildApp() itself" reasoning as every other scheduler above.
+    void runCallEndDataRepair();
   } catch (err) {
     app.log.error(err);
     process.exit(1);

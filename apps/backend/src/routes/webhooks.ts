@@ -202,12 +202,29 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       switch (eventType) {
         case 'status-update': {
           const vapiStatus: string = message.status ?? '';
+          // 'ended' is deliberately NOT mapped here - see this file's
+          // header comment on webhook ordering. Vapi's real status-update
+          // events are its own live progression signal only, and its
+          // 'ended' value carries no completion data (no duration, ended
+          // reason, or cost). Real production behavior: status-update
+          // ('ended') frequently arrives BEFORE the end-of-call-report for
+          // the same call (end-of-call-report needs post-processing time
+          // Vapi's side). Bug this fixes: mapping 'ended' -> 'completed'
+          // here raced against end-of-call-report - whichever arrived
+          // first won, and transitionCallState() treats a same-status
+          // transition (completed -> completed) as a no-op, so when
+          // status-update won the race, end-of-call-report's real
+          // ended_at/duration_seconds/cost were silently discarded
+          // forever, leaving every affected call's CDR row permanently
+          // blank on End Time and Duration. end-of-call-report is Vapi's
+          // one guaranteed, authoritative source for how a call actually
+          // ended, so it is now the ONLY event that ever drives the
+          // terminal transition to 'completed'/'transferred'.
           const map: Record<string, CallStatus> = {
             queued: 'queued',
             ringing: 'ringing',
             'in-progress': 'in_progress',
             forwarding: 'transferring',
-            ended: 'completed',
           };
           const nextStatus = map[vapiStatus];
           if (nextStatus) {
