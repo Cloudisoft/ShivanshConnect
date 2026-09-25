@@ -24,17 +24,16 @@ function buildParams(page: number, pageSize: number, filters: CdrFilters): URLSe
 // CDR never auto-refreshed at all - a call that started, rang, connected
 // or ended while this page was open only ever showed up after a manual
 // browser refresh, reported as "not showing activity in real time".
-// Poll on a modest 10s interval (page 1 only - once a user has paged
-// past the newest rows, refetching underneath them would shift their
-// place) so new/updated calls appear on their own, same pattern already
-// used for Campaigns/Messaging's live counts.
+// Poll on the same 5s cadence already used for Campaigns/Messaging's
+// live counts (page 1 only - once a user has paged past the newest
+// rows, refetching underneath them would shift their place).
 export function useCdrList(page: number, pageSize: number, filters: CdrFilters = {}) {
   const params = buildParams(page, pageSize, filters);
   return useQuery({
     queryKey: ['cdr', page, pageSize, filters],
     queryFn: () => api.getPage<CdrRow[]>(`/cdr?${params.toString()}`),
     placeholderData: (prev) => prev,
-    refetchInterval: page === 1 ? 10_000 : false,
+    refetchInterval: page === 1 ? 5_000 : false,
   });
 }
 

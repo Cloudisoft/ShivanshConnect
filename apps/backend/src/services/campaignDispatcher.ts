@@ -31,6 +31,7 @@ import { getSupabaseAdmin } from '../lib/supabase.js';
 import { originateCall, resolveDefaultEngine } from './callOrigination.js';
 import { effectiveConcurrency, evaluateLeadEligibility, getWorkerPoolCapacity } from './leadEligibility.js';
 import { findDncMatches } from '../lib/leadHelpers.js';
+import { callEventBus } from '../lib/callStateMachine.js';
 import type { CampaignCallingRulesSnapshot, CampaignDispositionRulesSnapshot } from '@shivanshconnect/shared';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
@@ -305,28 +306,52 @@ export async function runDispatchTick(): Promise<void> {
   }
 }
 
+/** Runs a tick right now if one isn't already running, guarded by the
+ * same `tickInFlight` flag the interval uses - shared by both the
+ * regular timer and the event-driven trigger below, so they can never
+ * run concurrently with each other either. */
+function triggerDispatchTick(): void {
+  if (tickInFlight) return;
+  tickInFlight = true;
+  runDispatchTick()
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('Campaign dispatch tick failed', err);
+    })
+    .finally(() => {
+      tickInFlight = false;
+    });
+}
+
+let onCallTerminal: ((event: unknown) => void) | null = null;
+
 /** Starts the in-process dispatch loop. Guarded against overlapping ticks
  * (`tickInFlight`) so a slow tick never runs concurrently with itself in
  * this process - see this module's header comment for why that guard is
- * a convenience, not the actual race-safety mechanism. */
+ * a convenience, not the actual race-safety mechanism.
+ *
+ * Also fires an immediate tick the moment ANY call reaches a terminal
+ * status - a campaign call ending frees a concurrency slot, and waiting
+ * out the rest of the current DISPATCH_TICK_MS window before that slot
+ * got refilled was a real, avoidable dead spot ("at concurrency 5, one
+ * call ends, the next batch call should be placed") on top of the
+ * regular interval, which now serves purely as the fallback safety net.
+ * Cheap even when the ended call wasn't part of a running campaign at
+ * all: a tick that finds no capacity anywhere just returns fast. */
 export function startCampaignDispatcher(): void {
   if (intervalHandle) return;
-  intervalHandle = setInterval(() => {
-    if (tickInFlight) return;
-    tickInFlight = true;
-    runDispatchTick()
-      .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error('Campaign dispatch tick failed', err);
-      })
-      .finally(() => {
-        tickInFlight = false;
-      });
-  }, DISPATCH_TICK_MS);
+  intervalHandle = setInterval(triggerDispatchTick, DISPATCH_TICK_MS);
   if (typeof intervalHandle.unref === 'function') intervalHandle.unref();
+
+  onCallTerminal = () => triggerDispatchTick();
+  callEventBus.on('call.terminal', onCallTerminal);
 }
 
 export function stopCampaignDispatcher(): void {
   if (intervalHandle) clearInterval(intervalHandle);
   intervalHandle = null;
+  if (onCallTerminal) {
+    callEventBus.off('call.terminal', onCallTerminal);
+    onCallTerminal = null;
+  }
 }
