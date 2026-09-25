@@ -1,5 +1,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+/** Real production incident: a large paste-numbers/import batch built an
+ * `.in('phone_normalized', [...])` query whose URL exceeded PostgREST's
+ * ~16KB header limit (a 17124-character URL from ~450 E.164 numbers in
+ * one unbatched .in() call), failing the whole add/import with a bare
+ * "fetch failed" / HeadersOverflowError. 200 E.164 numbers (max 16 chars
+ * each, plus comma/URL-encoding overhead) keeps this well under that
+ * limit with room to spare for the rest of the request's headers. */
+const PHONE_IN_QUERY_BATCH_SIZE = 200;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
 /**
  * Is `phoneNormalized` on the DNC list for `organizationId` - either a
  * global (organization_id null) entry or one scoped to this org?
@@ -28,15 +43,18 @@ export async function findDncMatches(
   phoneNumbers: string[],
 ): Promise<Set<string>> {
   if (phoneNumbers.length === 0) return new Set();
-  const { data, error } = await supabase
-    .from('dnc_entries')
-    .select('phone_normalized, organization_id')
-    .in('phone_normalized', phoneNumbers);
-  if (error) throw error;
   const matches = new Set<string>();
-  for (const row of data ?? []) {
-    if (row.organization_id === null || row.organization_id === organizationId) {
-      matches.add(row.phone_normalized);
+  const results = await Promise.all(
+    chunk(phoneNumbers, PHONE_IN_QUERY_BATCH_SIZE).map((batch) =>
+      supabase.from('dnc_entries').select('phone_normalized, organization_id').in('phone_normalized', batch),
+    ),
+  );
+  for (const { data, error } of results) {
+    if (error) throw error;
+    for (const row of data ?? []) {
+      if (row.organization_id === null || row.organization_id === organizationId) {
+        matches.add(row.phone_normalized);
+      }
     }
   }
   return matches;
@@ -52,13 +70,17 @@ export async function findExistingLeadPhones(
   phoneNumbers: string[],
 ): Promise<Set<string>> {
   if (phoneNumbers.length === 0) return new Set();
-  const { data, error } = await supabase
-    .from('leads')
-    .select('phone_normalized')
-    .eq('organization_id', organizationId)
-    .in('phone_normalized', phoneNumbers);
-  if (error) throw error;
-  return new Set((data ?? []).map((row: any) => row.phone_normalized));
+  const existing = new Set<string>();
+  const results = await Promise.all(
+    chunk(phoneNumbers, PHONE_IN_QUERY_BATCH_SIZE).map((batch) =>
+      supabase.from('leads').select('phone_normalized').eq('organization_id', organizationId).in('phone_normalized', batch),
+    ),
+  );
+  for (const { data, error } of results) {
+    if (error) throw error;
+    for (const row of (data ?? []) as any[]) existing.add(row.phone_normalized);
+  }
+  return existing;
 }
 
 /**
