@@ -92,7 +92,18 @@ export function decideDisposition(signals: CallOutcomeSignals): DispositionDecis
   }
 
   // 2. Voicemail / answering machine detected by AMD.
-  if (signals.status === 'voicemail' || (signals.amdDetected && signals.status !== 'answering_machine')) {
+  //
+  // signals.endedReason === 'voicemail' is Vapi's real, documented
+  // end-of-call-report value when its voicemail detector ends the call
+  // (docs.vapi.ai/calls/call-ended-reason) - the webhook handler
+  // (routes/webhooks.ts) never sets calls.status to 'voicemail' itself
+  // (that status models a live, still-in-progress detection a call can
+  // continue past, not Vapi's actual end-of-call signal), so without
+  // this check here every voicemail call fell through to the duration-
+  // based CALL_CONNECTED branch below instead - a voicemail greeting
+  // plus a left message is easily 8+ seconds, so real voicemail calls
+  // were being disposed as if a live conversation had happened.
+  if (signals.status === 'voicemail' || signals.endedReason === 'voicemail' || (signals.amdDetected && signals.status !== 'answering_machine')) {
     return { code: 'VOICEMAIL', confidence: 1, reason: 'Answering-machine detection identified voicemail.' };
   }
   if (signals.status === 'answering_machine') {

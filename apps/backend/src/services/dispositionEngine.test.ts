@@ -24,6 +24,11 @@ describe('dispositionEngine.decideDisposition - the deterministic rules engine',
     expect(decideDisposition(signals({ status: 'completed', amdDetected: true })).code).toBe('VOICEMAIL');
   });
 
+  it('assigns VOICEMAIL for Vapi\'s real end-of-call-report shape (status stays "completed", only endedReason says voicemail) - never CALL_CONNECTED even with a long duration from leaving a message', () => {
+    const decision = decideDisposition(signals({ status: 'completed', endedReason: 'voicemail', durationSeconds: 22 }));
+    expect(decision.code).toBe('VOICEMAIL');
+  });
+
   it('assigns ANSWERING_MACHINE when the status is answering_machine', () => {
     expect(decideDisposition(signals({ status: 'answering_machine' })).code).toBe('ANSWERING_MACHINE');
   });
