@@ -113,7 +113,8 @@ export function useCreateCampaignVersion() {
 export function usePublishCampaignVersion() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, versionId }: { id: string; versionId: string }) => api.post(`/campaigns/${id}/versions/${versionId}/publish`),
+    mutationFn: ({ id, versionId, acknowledgeStaleAgentDraft }: { id: string; versionId: string; acknowledgeStaleAgentDraft?: boolean }) =>
+      api.post(`/campaigns/${id}/versions/${versionId}/publish`, { acknowledge_stale_agent_draft: acknowledgeStaleAgentDraft ?? false }),
     onSuccess: (_d, v) => invalidate(queryClient, v.id),
   });
 }
