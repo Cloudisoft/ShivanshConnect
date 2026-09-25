@@ -8,6 +8,7 @@ import { useLeads, useDeleteLead, useLeadBulkAction, type LeadsQuery } from '../
 import { useLeadList, useLeadLists } from '../hooks/useLeadLists';
 import { useQueueLeadsExport } from '../hooks/useExports';
 import { Alert, Badge, Button, Card, Input } from '../components/ui';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { AddLeadModal } from '../components/leads/AddLeadModal';
 import { PasteNumbersModal } from '../components/leads/PasteNumbersModal';
 import { ImportModal } from '../components/leads/ImportModal';
@@ -347,14 +348,16 @@ export function LeadsPage(): JSX.Element {
         </button>
       </div>
 
-      <LeadsTable
-        leads={leads}
-        loading={leadsQuery.isLoading}
-        hasError={leadsQuery.isError}
-        selected={selected}
-        onToggleRow={toggleRow}
-        onDelete={hasPermission('leads.delete') ? (id) => deleteLead.mutate(id) : undefined}
-      />
+      <ErrorBoundary label="Leads table" key={`${page}-${leads.length}-${leadsQuery.dataUpdatedAt}`}>
+        <LeadsTable
+          leads={leads}
+          loading={leadsQuery.isLoading}
+          hasError={leadsQuery.isError}
+          selected={selected}
+          onToggleRow={toggleRow}
+          onDelete={hasPermission('leads.delete') ? (id) => deleteLead.mutate(id) : undefined}
+        />
+      </ErrorBoundary>
 
       {pagination && pagination.total_pages > 1 && (
         <div className="mt-4 flex items-center justify-between text-sm text-ink-500">
@@ -450,6 +453,24 @@ function LeadsTable({
                 </td>
               </tr>
             )}
+            {/* The virtualizer measures the scroll container's size in an
+                effect that runs after mount - on a fresh mount (e.g. right
+                after navigating here) it can render zero virtual items on
+                the very first paint even though `leads` already has real
+                rows, since it hasn't measured yet. Without this fallback
+                that left the table showing NEITHER the row data NOR the
+                "no leads match" message - a real, non-empty result
+                rendering as a totally blank table with no error and no
+                explanation. Falls back to plain (non-virtualized)
+                rendering of every row just for that one frame; the next
+                render picks up the virtualizer's real measurement. */}
+            {!loading && !hasError && leads.length > 0 && virtualItems.length === 0 && (
+              <>
+                {leads.map((lead) => (
+                  <LeadRow key={lead.id} lead={lead} selected={selected.has(lead.id)} onToggleRow={onToggleRow} onDelete={onDelete} />
+                ))}
+              </>
+            )}
             {!loading && virtualItems.length > 0 && virtualItems[0].start > 0 && (
               <tr aria-hidden style={{ height: virtualItems[0].start }}>
                 <td colSpan={COLUMNS.length + 2} />
@@ -458,57 +479,7 @@ function LeadsTable({
             {!loading &&
               virtualItems.map((virtualRow) => {
                 const lead = leads[virtualRow.index];
-                return (
-                  <tr key={lead.id} style={{ height: ROW_HEIGHT }}>
-                    <td className="px-3 py-2">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-ink-300"
-                        checked={selected.has(lead.id)}
-                        onChange={() => onToggleRow(lead.id)}
-                      />
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 font-medium text-ink-900">
-                      <Link to={`/leads/${lead.id}`} className="hover:underline">
-                        {lead.first_name || lead.last_name ? `${lead.first_name} ${lead.last_name}`.trim() : '—'}
-                      </Link>
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 font-mono text-ink-600">{lead.phone_normalized}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.email || '—'}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.lead_list_name ?? '—'}</td>
-                    <td className="whitespace-nowrap px-3 py-2">
-                      <Badge tone={lead.status === 'DNC' ? 'danger' : lead.status === 'COMPLETED' ? 'success' : 'neutral'}>
-                        {lead.status}
-                      </Badge>
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink-600">
-                      {lead.last_called_at ? new Date(lead.last_called_at).toLocaleString() : '—'}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.attempts}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.last_disposition || '—'}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink-600">
-                      {lead.next_callback_at ? new Date(lead.next_callback_at).toLocaleString() : '—'}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2">
-                      {lead.is_dnc ? <Badge tone="danger">DNC</Badge> : '—'}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-ink-500">
-                      {new Date(lead.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right">
-                      {onDelete && (
-                        <button
-                          type="button"
-                          className="text-ink-400 hover:text-red-600"
-                          onClick={() => onDelete(lead.id)}
-                          aria-label="Delete lead"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
+                return <LeadRow key={lead.id} lead={lead} selected={selected.has(lead.id)} onToggleRow={onToggleRow} onDelete={onDelete} />;
               })}
             {!loading && virtualItems.length > 0 && (
               <tr aria-hidden style={{ height: Math.max(0, rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end) }}>
@@ -519,5 +490,60 @@ function LeadsTable({
         </table>
       </div>
     </Card>
+  );
+}
+
+function LeadRow({
+  lead,
+  selected,
+  onToggleRow,
+  onDelete,
+}: {
+  lead: LeadListRow;
+  selected: boolean;
+  onToggleRow: (id: string) => void;
+  onDelete?: (id: string) => void;
+}): JSX.Element {
+  return (
+    <tr style={{ height: ROW_HEIGHT }}>
+      <td className="px-3 py-2">
+        <input
+          type="checkbox"
+          className="h-4 w-4 rounded border-ink-300"
+          checked={selected}
+          onChange={() => onToggleRow(lead.id)}
+        />
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 font-medium text-ink-900">
+        <Link to={`/leads/${lead.id}`} className="hover:underline">
+          {lead.first_name || lead.last_name ? `${lead.first_name} ${lead.last_name}`.trim() : '—'}
+        </Link>
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 font-mono text-ink-600">{lead.phone_normalized}</td>
+      <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.email || '—'}</td>
+      <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.lead_list_name ?? '—'}</td>
+      <td className="whitespace-nowrap px-3 py-2">
+        <Badge tone={lead.status === 'DNC' ? 'danger' : lead.status === 'COMPLETED' ? 'success' : 'neutral'}>
+          {lead.status}
+        </Badge>
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-ink-600">
+        {lead.last_called_at ? new Date(lead.last_called_at).toLocaleString() : '—'}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.attempts}</td>
+      <td className="whitespace-nowrap px-3 py-2 text-ink-600">{lead.last_disposition || '—'}</td>
+      <td className="whitespace-nowrap px-3 py-2 text-ink-600">
+        {lead.next_callback_at ? new Date(lead.next_callback_at).toLocaleString() : '—'}
+      </td>
+      <td className="whitespace-nowrap px-3 py-2">{lead.is_dnc ? <Badge tone="danger">DNC</Badge> : '—'}</td>
+      <td className="whitespace-nowrap px-3 py-2 text-ink-500">{new Date(lead.created_at).toLocaleDateString()}</td>
+      <td className="whitespace-nowrap px-3 py-2 text-right">
+        {onDelete && (
+          <button type="button" className="text-ink-400 hover:text-red-600" onClick={() => onDelete(lead.id)} aria-label="Delete lead">
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
+      </td>
+    </tr>
   );
 }
