@@ -204,11 +204,24 @@ export interface AssignDispositionResult {
  * writes when no row exists yet or the existing row is itself
  * engine-sourced (e.g. a webhook replay re-deriving the same call). */
 export async function assignDispositionForCall(supabase: Supabase, call: Record<string, any>): Promise<AssignDispositionResult> {
-  const signals = await loadCallOutcomeSignals(supabase, call);
+  // Every terminal call transition (Live Monitor's real-time status/
+  // disposition update) waits on this function before broadcasting -
+  // `existing` doesn't depend on the decision at all, so it runs
+  // alongside loadCallOutcomeSignals() instead of after it, cutting one
+  // round trip off the critical path on the common (non-manual-override)
+  // case every call actually takes.
+  const [signals, existing] = await Promise.all([
+    loadCallOutcomeSignals(supabase, call),
+    supabase
+      .from('call_dispositions')
+      .select('id, disposition_source')
+      .eq('call_id', call.id)
+      .maybeSingle()
+      .then((r) => r.data),
+  ]);
   const decision = decideDisposition(signals);
   const dispositionId = await resolveDispositionRowId(supabase, call.organization_id, decision.code);
 
-  const { data: existing } = await supabase.from('call_dispositions').select('id, disposition_source').eq('call_id', call.id).maybeSingle();
   if (existing && existing.disposition_source === 'manual') {
     // A supervisor already corrected this call - the engine never
     // clobbers a manual override.
