@@ -383,7 +383,7 @@ export async function commitImportJob(jobId: string): Promise<CommitSummary> {
 
   const { data: validRows, error: rowsError } = await supabase
     .from('import_job_rows')
-    .select('id, raw_data, phone_normalized')
+    .select('id, row_number, raw_data, phone_normalized')
     .eq('import_job_id', jobId)
     .eq('result', 'valid');
   if (rowsError) throw rowsError;
@@ -434,15 +434,36 @@ export async function commitImportJob(jobId: string): Promise<CommitSummary> {
     // Backfill each row's lead_id in ONE batched upsert rather than one
     // sequential UPDATE per row - a 1000-lead import previously meant
     // 1000 sequential round trips just for this step, which was the real
-    // cause of "importing leads takes forever." Supplying only {id,
-    // lead_id} means PostgREST's upsert only ever touches that column,
-    // never the row's other fields (raw_data, result, etc).
+    // cause of "importing leads takes forever."
+    //
+    // Bug fix: Postgres validates NOT NULL constraints on the candidate
+    // row for `INSERT ... ON CONFLICT DO UPDATE` BEFORE checking whether
+    // a conflict actually occurs - so even though every id here always
+    // already exists (matching a real earlier committed row), supplying
+    // only {id, lead_id} made the implicit insert branch fail with "null
+    // value in column import_job_id violates not-null constraint" on
+    // every commit. Every NOT NULL column now rides along with its
+    // already-correct, unchanged value - PostgREST only SETs the columns
+    // present in the payload on the actual UPDATE branch, so this never
+    // overwrites anything with different data, it just satisfies the
+    // insert-branch's own validation.
     const rowLeadIdUpdates = batch
       .map((row: any, j: number) => {
         const lead = (insertedLeads ?? [])[j];
-        return lead ? { id: row.id, lead_id: lead.id } : null;
+        return lead
+          ? {
+              id: row.id,
+              import_job_id: jobId,
+              organization_id: job.organization_id,
+              row_number: row.row_number,
+              raw_data: row.raw_data,
+              result: 'valid' as const,
+              phone_normalized: row.phone_normalized,
+              lead_id: lead.id,
+            }
+          : null;
       })
-      .filter((u): u is { id: string; lead_id: string } => u !== null);
+      .filter((u): u is NonNullable<typeof u> => u !== null);
     if (rowLeadIdUpdates.length > 0) {
       const { error: rowUpdateError } = await supabase.from('import_job_rows').upsert(rowLeadIdUpdates, { onConflict: 'id' });
       if (rowUpdateError) throw rowUpdateError;
