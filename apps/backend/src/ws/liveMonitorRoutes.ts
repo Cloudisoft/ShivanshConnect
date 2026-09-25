@@ -24,7 +24,14 @@ import { authenticate, requirePermission } from '../middleware/auth.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { fetchActiveCallsSnapshot } from '../services/liveMonitorQuery.js';
 import { registerLiveMonitorSubscriber } from './liveMonitorBroadcaster.js';
-import type { LiveMonitorSnapshot } from '@shivanshconnect/shared';
+import type { LiveMonitorHeartbeat, LiveMonitorSnapshot } from '@shivanshconnect/shared';
+
+/** How often a heartbeat is sent - see LiveMonitorHeartbeat's doc comment
+ * (packages/shared/src/liveMonitor.ts) for why this exists at all. Well
+ * under any real proxy's typical idle-connection timeout (commonly
+ * 55-60s), and the frontend's own missed-heartbeat window is a multiple of
+ * this so one delayed tick never triggers a false reconnect. */
+const HEARTBEAT_INTERVAL_MS = 20000;
 
 /** Lets a browser WebSocket client authenticate via `?token=` since it
  * cannot set an Authorization header on the handshake - authenticate()
@@ -77,12 +84,17 @@ export async function liveMonitorWsRoutes(app: FastifyInstance): Promise<void> {
 
       const unsubscribe = registerLiveMonitorSubscriber(supabase, organizationId, send);
 
+      const heartbeat: LiveMonitorHeartbeat = { type: 'HEARTBEAT' };
+      const heartbeatInterval = setInterval(() => send(heartbeat), HEARTBEAT_INTERVAL_MS);
+
       socket.on('close', () => {
         closed = true;
+        clearInterval(heartbeatInterval);
         unsubscribe();
       });
       socket.on('error', () => {
         closed = true;
+        clearInterval(heartbeatInterval);
         unsubscribe();
       });
     },

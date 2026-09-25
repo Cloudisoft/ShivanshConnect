@@ -90,3 +90,17 @@ export interface LiveMonitorSnapshot {
   type: 'SNAPSHOT';
   calls: LiveMonitorActiveCall[];
 }
+
+/** Sent by the server on a fixed interval for as long as the connection is
+ * open (see ws/liveMonitorRoutes.ts) purely so the frontend can tell a
+ * genuinely silent connection apart from one that just has nothing to
+ * report right now - some calls can sit `dialing`/`in_progress` for
+ * minutes with zero real events. Without this, a WS connection an
+ * intermediary proxy has silently dropped (no close frame reaches either
+ * side, which real proxies do under idle timeouts) looks identical to
+ * "the socket is fine, there's just nothing new" - Live Monitor freezes on
+ * stale state and never reconnects. The frontend watches for a gap between
+ * these and force-reconnects if one is missed. */
+export interface LiveMonitorHeartbeat {
+  type: 'HEARTBEAT';
+}

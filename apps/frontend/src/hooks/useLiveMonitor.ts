@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type {
   LiveMonitorActiveCall,
+  LiveMonitorHeartbeat,
   LiveMonitorSnapshot,
   LiveMonitorTranscriptSegment,
   LiveMonitorWsEvent,
@@ -15,6 +16,18 @@ import { supabase } from '../lib/supabaseClient';
 function wsBaseUrl(): string {
   return API_BASE_URL.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
 }
+
+/** The server sends a HEARTBEAT every 20s (see ws/liveMonitorRoutes.ts) for
+ * as long as the connection is genuinely open. Some proxies silently drop
+ * an idle WebSocket without ever delivering a close frame to either side -
+ * that leaves `ws.readyState` reporting OPEN forever with nothing ever
+ * arriving again, which is exactly the "Live Monitor stopped updating,
+ * calls never move to connected/ended" symptom: the UI has no signal
+ * anything is wrong, so it never reconnects. Missing more than two
+ * heartbeats' worth of silence means the connection is dead even though
+ * neither side has been told yet - force-close it so the existing
+ * onclose-driven reconnect logic below takes over. */
+const HEARTBEAT_TIMEOUT_MS = 45000;
 
 export type ConnectionStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
@@ -44,6 +57,7 @@ export function useLiveMonitorSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const retryDelayRef = useRef(1000);
   const closedByUsRef = useRef(false);
+  const lastMessageAtRef = useRef(Date.now());
 
   useEffect(() => {
     closedByUsRef.current = false;
@@ -57,19 +71,29 @@ export function useLiveMonitorSocket() {
       setState((s) => ({ ...s, status: s.status === 'connecting' ? 'connecting' : 'reconnecting' }));
       const ws = new WebSocket(`${wsBaseUrl()}/live-monitor/stream?token=${encodeURIComponent(session.access_token)}`);
       wsRef.current = ws;
+      lastMessageAtRef.current = Date.now();
+
+      const watchdog = setInterval(() => {
+        if (Date.now() - lastMessageAtRef.current > HEARTBEAT_TIMEOUT_MS) {
+          ws.close(); // dead connection the server/proxy never told us about - onclose below reconnects
+        }
+      }, 10000);
 
       ws.onopen = () => {
         retryDelayRef.current = 1000;
+        lastMessageAtRef.current = Date.now();
         setState((s) => ({ ...s, status: 'open' }));
       };
 
       ws.onmessage = (event) => {
-        let payload: LiveMonitorSnapshot | LiveMonitorWsEvent;
+        lastMessageAtRef.current = Date.now();
+        let payload: LiveMonitorSnapshot | LiveMonitorWsEvent | LiveMonitorHeartbeat;
         try {
           payload = JSON.parse(event.data);
         } catch {
           return;
         }
+        if (payload.type === 'HEARTBEAT') return;
 
         setState((prev) => {
           if (payload.type === 'SNAPSHOT') {
@@ -103,6 +127,7 @@ export function useLiveMonitorSocket() {
       };
 
       ws.onclose = () => {
+        clearInterval(watchdog);
         wsRef.current = null;
         if (closedByUsRef.current) {
           setState((s) => ({ ...s, status: 'closed' }));
