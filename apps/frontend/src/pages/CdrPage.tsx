@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { FileText, History } from 'lucide-react';
+import { Download, FileText, History, Loader2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
-import { useCdrList, useCreateCdrExport, type CdrFilters } from '../hooks/useCdr';
+import { useCdrList, useCreateCdrExport, fetchRecordingObjectUrl, type CdrFilters } from '../hooks/useCdr';
 import { useExportHistory } from '../hooks/useExports';
 import { useCampaigns } from '../hooks/useCampaigns';
 import { useAgents } from '../hooks/useAgents';
@@ -10,7 +10,48 @@ import { Badge, Button, Card, Input, Label } from '../components/ui';
 import { CallDetailDrawer } from '../components/cdr/CallDetailDrawer';
 import { ExportTrigger } from '../components/exports/ExportTrigger';
 import { ExportHistoryList } from '../components/exports/ExportHistoryList';
+import { ApiClientError } from '../lib/apiClient';
 import type { CallStatus } from '@shivanshconnect/shared';
+
+/** Direct one-click download straight from the list row, no need to open
+ * the detail drawer first. The backend route requires an Authorization
+ * header (see hooks/useCdr.ts's fetchRecordingObjectUrl), so this can't
+ * be a plain <a href> - fetches the real audio bytes as a blob, then
+ * triggers a save-as via a throwaway anchor, exactly the same download
+ * mechanism the drawer's own recording player already uses. */
+function DownloadRecordingButton({ callId }: { callId: string }): JSX.Element {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDownload(e: React.MouseEvent) {
+    e.stopPropagation();
+    setLoading(true);
+    setError(null);
+    try {
+      const objectUrl = await fetchRecordingObjectUrl(callId);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = `call-${callId}.mp3`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : 'Could not download this recording.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1" title={error ?? 'Download recording'}>
+      <button type="button" onClick={handleDownload} disabled={loading} className="text-ink-500 hover:text-ink-900 disabled:opacity-50">
+        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+      </button>
+      {error && <span className="text-red-600">!</span>}
+    </span>
+  );
+}
 
 const STATUS_TONE: Record<string, 'neutral' | 'success' | 'warning' | 'danger'> = {
   completed: 'success',
@@ -179,7 +220,10 @@ export function CdrPage(): JSX.Element {
                   <td className="px-4 py-2"><Badge tone={STATUS_TONE[row.status] ?? 'neutral'}>{row.status}</Badge></td>
                   <td className="px-4 py-2 text-ink-700">{row.disposition_name ?? '-'}</td>
                   <td className="px-4 py-2 text-xs text-ink-500">
-                    {[row.has_transcript && 'Transcript', row.has_recording && 'Recording', row.has_summary && 'Summary'].filter(Boolean).join(', ') || '-'}
+                    <div className="flex items-center gap-2">
+                      <span>{[row.has_transcript && 'Transcript', row.has_recording && 'Recording', row.has_summary && 'Summary'].filter(Boolean).join(', ') || '-'}</span>
+                      {row.has_recording && <DownloadRecordingButton callId={row.call_id} />}
+                    </div>
                   </td>
                 </tr>
               ))}
