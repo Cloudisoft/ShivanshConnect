@@ -395,6 +395,13 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
       </Card>
 
       <Card className="grid gap-4 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <p className="text-xs font-medium text-ink-500">
+            Agent, Voice, Script and Knowledge base changes save with the <strong>&quot;Save as new draft version&quot;</strong> button
+            below, not &quot;Save calling/voicemail settings&quot; - and still need Publish to take effect, same as the Script/prompt
+            section above.
+          </p>
+        </div>
         <div>
           <Label>AI agent</Label>
           <select className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm" value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={!canEdit}>
@@ -421,6 +428,9 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
               </option>
             ))}
           </select>
+          <p className="mt-1 text-xs text-ink-400">
+            Unlike the other fields here, this one saves immediately with &quot;Save calling/voicemail settings&quot; - no publish needed.
+          </p>
           {(phoneNumbersQuery.data?.data ?? []).length === 0 && (
             <p className="mt-1 text-xs text-ink-500">
               No active numbers yet - go to DIDs to connect a provider and import/sync a number.
