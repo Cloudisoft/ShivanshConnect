@@ -91,7 +91,12 @@ export function useUpdateAgentVersion(agentId: string | undefined) {
 export function usePublishAgentVersion(agentId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (versionId: string) => api.post<AiAgentVersion>(`/agents/${agentId}/versions/${versionId}/publish`),
+    mutationFn: (versionId: string) =>
+      // vapi_sync_error isn't a real column - publish itself always
+      // succeeds even when syncing the new config to Vapi fails, so this
+      // is the only way the caller can tell that happened (see
+      // routes/agents.ts's publish handler).
+      api.post<AiAgentVersion & { vapi_sync_error: string | null }>(`/agents/${agentId}/versions/${versionId}/publish`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents', agentId, 'versions'] });
       queryClient.invalidateQueries({ queryKey: ['agents', agentId] });
