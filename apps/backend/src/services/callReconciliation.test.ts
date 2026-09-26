@@ -181,4 +181,38 @@ describe('callReconciliation', () => {
     const statuses = [callId1, callId2].map((id) => fake.tables.calls.find((c) => c.id === id)!.status).sort();
     expect(statuses).toEqual(['completed', 'in_progress'].sort());
   });
+
+  it('force-fails a call that was never actually handed to the provider (no vapi_call_id) - real incident: this silently occupied its campaign\'s concurrency forever, invisible in Live Monitor, since a queued-with-no-provider-id row can never be provider-confirmed', async () => {
+    const callId = stuckCall({ status: 'queued', vapi_call_id: null });
+    let getCallCount = 0;
+    __setOrchestrationProviderForTests('vapi', {
+      async createAssistant() {
+        throw new Error('unused');
+      },
+      async createCall() {
+        throw new Error('unused');
+      },
+      async getCall() {
+        getCallCount += 1;
+        return { status: 'in-progress', raw: { status: 'in-progress' } };
+      },
+      async endCall() {},
+      async transferCall() {},
+      async importPhoneNumber() {
+        throw new Error('unused');
+      },
+    } as any);
+
+    const stuckBefore = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const result = await reconcileOrganizationCalls(fake.supabase as any, orgId, stuckBefore);
+
+    expect(result.checked).toBe(1);
+    expect(result.repaired).toBe(1);
+    expect(result.stillActive).toBe(0);
+    expect(getCallCount).toBe(0); // never asked the provider - there was nothing to ask about
+
+    const call = fake.tables.calls.find((c) => c.id === callId)!;
+    expect(call.status).toBe('failed');
+    expect(call.ended_reason).toBe('never_reached_provider');
+  });
 });

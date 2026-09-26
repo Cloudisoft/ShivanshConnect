@@ -135,8 +135,34 @@ export async function reconcileOrganizationCalls(supabase: Supabase, organizatio
 
   for (const call of rows) {
     try {
+      // A call with NO provider id at all was never actually handed to
+      // the orchestration provider in the first place - the local `calls`
+      // row is always inserted in 'queued' status BEFORE createCall() is
+      // invoked (see services/callOrigination.ts's header comment), so
+      // this is exactly what's left behind when that process is killed
+      // (e.g. a deploy restart) between the insert and the provider call.
+      // This is NOT a guess about the provider's state - there is no
+      // provider-side call to have a state at all, so failing it outright
+      // is safe (unlike a call the provider might still be running,
+      // which this job never touches without asking first). Real
+      // incident this fixes: such a row is invisible in Live Monitor
+      // ('queued' isn't a Live Monitor status) but still counts against
+      // its campaign's concurrency (ACTIVE_CALL_STATUSES includes
+      // 'queued') - a silent, permanent, invisible dispatch block with no
+      // other way to clear it.
+      const hasProviderCallId = call.engine === 'vapi' ? Boolean(call.vapi_call_id) : call.engine === 'pipecat' ? Boolean(call.pipecat_call_id) : false;
+      if (!hasProviderCallId) {
+        const applied = await transitionCallState(supabase, call.id, 'failed', {
+          ended_at: new Date().toISOString(),
+          ended_reason: 'never_reached_provider',
+        });
+        if (applied.applied) result.repaired += 1;
+        else result.skipped += 1;
+        continue;
+      }
+
       if (call.engine === 'vapi') {
-        if (!call.vapi_call_id || !vapiApiKey) {
+        if (!vapiApiKey) {
           result.skipped += 1;
           continue;
         }
@@ -151,10 +177,6 @@ export async function reconcileOrganizationCalls(supabase: Supabase, organizatio
         if (applied.applied) result.repaired += 1;
         else result.skipped += 1;
       } else if (call.engine === 'pipecat') {
-        if (!call.pipecat_call_id) {
-          result.skipped += 1;
-          continue;
-        }
         const provider = createOrchestrationProvider('pipecat');
         const { raw } = await provider.getCall(call.pipecat_call_id);
         const transition = pipecatTerminalTransition(raw);
