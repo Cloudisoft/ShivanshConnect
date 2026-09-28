@@ -56,17 +56,14 @@ describe('VapiProvider', () => {
       maxTokens: 800,
       messages: [{ role: 'system', content: expect.stringContaining('You are a helpful sales agent.') }],
     });
-    // A fast TTS model is requested explicitly (Bug: without this, Vapi
-    // falls back to each provider's quality-optimized default model
-    // instead of a latency-optimized one) - eleven_turbo_v2_5 rather than
-    // eleven_flash_v2_5 (a real "low voice quality" production complaint
-    // traced to Flash's fidelity tradeoff; turbo is still low-latency
-    // enough for real-time conversation, just noticeably better quality).
-    // The provider string is Vapi's own enum value ('11labs'), not our
-    // internal provider_key ('elevenlabs') - sending the internal key
-    // straight through got a real 400 from Vapi ("voice.provider must be
-    // one of the following values: ... 11labs ...").
-    expect(body.voice).toEqual({ provider: '11labs', voiceId: 'voice-123', model: 'eleven_turbo_v2_5' });
+    // A fast, low-latency TTS model is requested explicitly (Bug: without
+    // this, Vapi falls back to each provider's quality-optimized default
+    // model instead of a latency-optimized one). The provider string is
+    // Vapi's own enum value ('11labs'), not our internal provider_key
+    // ('elevenlabs') - sending the internal key straight through got a
+    // real 400 from Vapi ("voice.provider must be one of the following
+    // values: ... 11labs ...").
+    expect(body.voice).toEqual({ provider: '11labs', voiceId: 'voice-123', model: 'eleven_flash_v2_5' });
     expect(body.maxDurationSeconds).toBe(600);
     expect(body.forwardingPhoneNumber).toBe('+14845550000');
     // Conversational-quality config (Bug 2): real, currently-documented
@@ -178,7 +175,9 @@ describe('VapiProvider', () => {
     expect(body.phoneNumberId).toBe('vapi-pn-1');
     expect(body.customer).toEqual({ number: '+14845552222' });
     expect(body.metadata).toEqual({ internalCallId: 'internal-call-1', organizationId: 'org-1' });
-    expect(body.assistantOverrides).toBeUndefined();
+    // Only the turn-taking plan - applied per call so it reaches
+    // assistants published before it existed, without a republish.
+    expect(body.assistantOverrides).toEqual({ stopSpeakingPlan: { numWords: 2 } });
   });
 
   it('createCall() sends real assistantOverrides.firstMessage/model.messages when a per-lead override is resolved (Bug 1)', async () => {
@@ -207,6 +206,7 @@ describe('VapiProvider', () => {
     // must be one of the following values: ...") even though neither was
     // ever sent at all - both must always be repeated alongside messages.
     expect(body.assistantOverrides).toEqual({
+      stopSpeakingPlan: { numWords: 2 },
       firstMessage: 'Hi, am I speaking with Priya?',
       model: {
         provider: 'anthropic',
