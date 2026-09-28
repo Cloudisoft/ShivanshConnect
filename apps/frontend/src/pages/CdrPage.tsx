@@ -11,7 +11,7 @@ import { CallDetailDrawer } from '../components/cdr/CallDetailDrawer';
 import { ExportTrigger } from '../components/exports/ExportTrigger';
 import { ExportHistoryList } from '../components/exports/ExportHistoryList';
 import { ApiClientError } from '../lib/apiClient';
-import { dispositionTone, type CallStatus } from '@shivanshconnect/shared';
+import { dispositionTone, callStatusLabel, type CallStatus } from '@shivanshconnect/shared';
 
 /** Direct one-click download straight from the list row, no need to open
  * the detail drawer first. The backend route requires an Authorization
@@ -56,7 +56,9 @@ function DownloadRecordingButton({ callId }: { callId: string }): JSX.Element {
 const STATUS_TONE: Record<string, 'neutral' | 'success' | 'warning' | 'danger'> = {
   completed: 'success',
   transferred: 'success',
-  failed: 'danger',
+  // 'failed' displays as "No Answer" (callStatusLabel) - neutral, not red,
+  // since it's not being shown as a failure any more.
+  failed: 'neutral',
   dnc: 'danger',
   cancelled: 'neutral',
 };
@@ -217,7 +219,7 @@ export function CdrPage(): JSX.Element {
                   <td className="px-4 py-2 text-ink-700">{row.campaign_name ?? '-'}</td>
                   <td className="px-4 py-2 text-ink-700">{row.ai_agent_name ?? '-'}</td>
                   <td className="px-4 py-2 text-ink-700">{row.duration_seconds != null ? `${row.duration_seconds}s` : '-'}</td>
-                  <td className="px-4 py-2"><Badge tone={STATUS_TONE[row.status] ?? 'neutral'}>{row.status}</Badge></td>
+                  <td className="px-4 py-2"><Badge tone={STATUS_TONE[row.status] ?? 'neutral'}>{callStatusLabel(row.status)}</Badge></td>
                   <td className="px-4 py-2">
                     {row.disposition_name ? <Badge tone={dispositionTone(row.disposition_code ?? '')}>{row.disposition_name}</Badge> : <span className="text-ink-700">-</span>}
                   </td>

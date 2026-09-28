@@ -59,6 +59,10 @@ describe('dispositionEngine.decideDisposition - the deterministic rules engine',
     expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'customer-did-not-answer' })).code).toBe('NO_ANSWER');
   });
 
+  it('assigns NO_ANSWER for dialTimeoutSweep.ts\'s own "dial_timeout" ended_reason - per explicit request, a never-connected call reads the same as a plain unanswered ring, not a failure', () => {
+    expect(decideDisposition(signals({ status: 'failed', durationSeconds: 0, endedReason: 'dial_timeout' })).code).toBe('NO_ANSWER');
+  });
+
   it('assigns NOT_IN_SERVICE for an invalid/disconnected destination number - its own disposition, not DISCONNECTED', () => {
     expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'invalid-number' })).code).toBe('NOT_IN_SERVICE');
   });
