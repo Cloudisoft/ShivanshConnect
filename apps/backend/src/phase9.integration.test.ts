@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { createFakeSupabase } from './test/fakeSupabase.js';
 
 /**
@@ -262,6 +263,33 @@ describe('Phase 9: CDR artifact ingestion pipeline + CDR/export APIs', () => {
     expect(downloadRes.statusCode).toBe(200);
     expect(Buffer.from(downloadRes.rawPayload)).toEqual(RECORDING_BYTES);
     expect(fake.tables.call_recordings.find((r) => r.call_id === call.id)!.status).toBe('ready');
+  });
+
+  it.runIf(spawnSync('ffmpeg', ['-version']).status === 0)('a recording stored as WAV is converted to MP3 (and kept as MP3) when downloaded', async () => {
+    const token = await signup('CDR Wav Org', `cdrwav-${Date.now()}@test.com`);
+    const { call } = await dialAndCompleteOneCall(token);
+    await waitFor(() => fake.tables.call_recordings.some((r) => r.call_id === call.id && r.status === 'ready'));
+    const row = fake.tables.call_recordings.find((r) => r.call_id === call.id)!;
+
+    // A real, decodable 1s 8kHz mono WAV.
+    const samples = 8000;
+    const wav = Buffer.alloc(44 + samples * 2);
+    wav.write('RIFF', 0, 'ascii'); wav.writeUInt32LE(36 + samples * 2, 4); wav.write('WAVE', 8, 'ascii');
+    wav.write('fmt ', 12, 'ascii'); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36, 'ascii'); wav.writeUInt32LE(samples * 2, 40);
+    for (let i = 0; i < samples; i += 1) wav.writeInt16LE(Math.round(Math.sin((i / 8000) * 440 * 2 * Math.PI) * 8000), 44 + i * 2);
+    const { getStorageAdapter } = await import('./lib/storage/index.js');
+    const stored = await getStorageAdapter().putObject(`recordings/${row.organization_id}/${call.id}.wav`, wav, 'audio/wav');
+    Object.assign(row, { format: 'wav', storage_path: stored.path });
+
+    const downloadRes = await app.inject({ method: 'GET', url: `/api/v1/cdr/${call.id}/recording/download`, headers: { authorization: `Bearer ${token}` } });
+    expect(downloadRes.statusCode).toBe(200);
+    expect(downloadRes.headers['content-type']).toBe('audio/mpeg');
+    expect(downloadRes.headers['content-disposition']).toContain('.mp3');
+    const updated = fake.tables.call_recordings.find((r) => r.call_id === call.id)!;
+    expect(updated.format).toBe('mp3');
+    expect(updated.storage_path).toMatch(/\.mp3$/);
   });
 
   it('GET /cdr/search-transcript finds the call by transcript content', async () => {

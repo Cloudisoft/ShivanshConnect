@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { X, Play, Pause, Download } from 'lucide-react';
 import { dispositionTone, callStatusLabel, EVALUATION_SCORE_CATEGORY_LABELS } from '@shivanshconnect/shared';
 import { useCdrDetail, fetchRecordingObjectUrl } from '../../hooks/useCdr';
@@ -246,6 +247,7 @@ function RecordingPlayer({ callId, recording }: { callId: string; recording: any
   const [error, setError] = useState<string | null>(null);
   const [audioEl, setAudioEl] = useState<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     return () => {
@@ -266,6 +268,9 @@ function RecordingPlayer({ callId, recording }: { callId: string; recording: any
     try {
       const url = await fetchRecordingObjectUrl(callId);
       setAudioUrl(url);
+      // The server converts an older WAV recording to MP3 when it is first
+      // loaded - refresh the details so format/size reflect the MP3.
+      void queryClient.invalidateQueries({ queryKey: ['cdr', 'detail', callId] });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load the recording.');
     } finally {
@@ -301,7 +306,7 @@ function RecordingPlayer({ callId, recording }: { callId: string; recording: any
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
           />
-          <a href={audioUrl} download={`call-${callId}.${recording.format ?? 'mp3'}`} className="text-ink-500 hover:text-ink-800">
+          <a href={audioUrl} download={`call-${callId}.mp3`} className="text-ink-500 hover:text-ink-800">
             <Download className="h-4 w-4" />
           </a>
         </div>

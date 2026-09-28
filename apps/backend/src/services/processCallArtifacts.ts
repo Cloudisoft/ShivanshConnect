@@ -276,6 +276,27 @@ async function ingestRecording(supabase: Supabase, call: Record<string, any>, ar
   });
 }
 
+/** Converts an already-stored WAV recording to MP3 in place (new MP3
+ * object, row updated, old WAV deleted). Returns true when converted.
+ * Never throws. */
+export async function convertStoredRecordingToMp3(recordingId: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  const { data: rec } = await supabase.from('call_recordings').select('*').eq('id', recordingId).maybeSingle();
+  if (!rec || rec.status !== 'ready' || rec.format !== 'wav' || !rec.storage_path) return false;
+  try {
+    const storage = getStorageAdapter();
+    const mp3 = await encodeMp3(await storage.getObject(rec.storage_path));
+    const stored = await storage.putObject(`recordings/${rec.organization_id}/${rec.call_id}.mp3`, mp3, 'audio/mpeg');
+    await supabase.from('call_recordings').update({ storage_path: stored.path, format: 'mp3', size_bytes: mp3.length }).eq('id', rec.id);
+    await storage.deleteObject(rec.storage_path).catch(() => undefined);
+    return true;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('convertStoredRecordingToMp3 failed for recording', recordingId, err);
+    return false;
+  }
+}
+
 /** Re-runs only the recording step for one call (the CDR download's
  * on-demand recovery and recordingBackfillSweep.ts). Returns true when the
  * recording is stored and ready. Never throws. */
