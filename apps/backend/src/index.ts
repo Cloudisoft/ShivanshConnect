@@ -88,6 +88,19 @@ export function buildApp() {
     logger: {
       level: env.NODE_ENV === 'production' ? 'info' : 'debug',
       transport: env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
+      // The Live Monitor WebSocket authenticates with ?token=<JWT> (browsers
+      // can't set headers on a WebSocket), and the default request logger
+      // wrote that full URL - i.e. users' session tokens - into the logs.
+      serializers: {
+        req(request) {
+          return {
+            method: request.method,
+            url: String(request.url ?? '').replace(/([?&](?:token|access_token|apikey|api_key)=)[^&]*/gi, '$1[redacted]'),
+            host: request.headers?.host,
+            remoteAddress: request.ip,
+          };
+        },
+      },
     },
     genReqId: () => randomUUID(),
   });
