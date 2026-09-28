@@ -56,8 +56,10 @@ const TRANSITIONS: Record<CallStatus, ReadonlySet<CallStatus>> = {
   // locally-known state happens to be when that report lands.
   dialing: new Set(['ringing', 'answered', 'in_progress', 'completed', 'transferred', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
   ringing: new Set(['answered', 'in_progress', 'completed', 'transferred', 'failed', 'cancelled', 'voicemail', 'answering_machine', 'dnc']),
-  answered: new Set(['in_progress', 'failed', 'completed', 'transferred', 'dnc']),
-  in_progress: new Set(['transfer_pending', 'completed', 'transferred', 'failed', 'voicemail', 'answering_machine', 'dnc']),
+  answered: new Set(['in_progress', 'transfer_pending', 'transferring', 'failed', 'completed', 'transferred', 'dnc']),
+  // 'transferring' directly: Vapi reports an assistant-initiated transfer
+  // as status 'forwarding' with no separate pending step.
+  in_progress: new Set(['transfer_pending', 'transferring', 'completed', 'transferred', 'failed', 'voicemail', 'answering_machine', 'dnc']),
   voicemail: new Set(['completed', 'failed', 'dnc']),
   answering_machine: new Set(['completed', 'failed', 'dnc']),
   // 'transferred'/'completed' reachable from both transfer states for the

@@ -91,7 +91,7 @@ describe('VapiProvider', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('createAssistant() forwards voicemail detection and background denoising when configured (Bug 2)', async () => {
+  it('createAssistant() forwards voicemail detection and always plays the office background sound (Bug 2)', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 'asst_123' }) });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -110,7 +110,9 @@ describe('VapiProvider', () => {
       beepMaxAwaitSeconds: 15,
     });
     expect(body.voicemailMessage).toBe('Please call us back at 555-0100.');
-    expect(body.backgroundDenoisingEnabled).toBe(true);
+    // Office ambience on every campaign; the old per-campaign noise level no longer maps to anything.
+    expect(body.backgroundSound).toBe('office');
+    expect(body.backgroundDenoisingEnabled).toBeUndefined();
   });
 
   it('createAssistant() omits voicemailMessage when leaveVoicemail is false, but still enables detection', async () => {
@@ -132,7 +134,7 @@ describe('VapiProvider', () => {
       beepMaxAwaitSeconds: 15,
     });
     expect(body.voicemailMessage).toBeUndefined();
-    expect(body.backgroundDenoisingEnabled).toBe(false);
+    expect(body.backgroundSound).toBe('office');
   });
 
   it('createCall() requires an assistant id and an imported phone number id', async () => {
@@ -177,7 +179,12 @@ describe('VapiProvider', () => {
     expect(body.metadata).toEqual({ internalCallId: 'internal-call-1', organizationId: 'org-1' });
     // Only the turn-taking plan - applied per call so it reaches
     // assistants published before it existed, without a republish.
-    expect(body.assistantOverrides).toEqual({ startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } }, stopSpeakingPlan: { numWords: 0 }, artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false } });
+    expect(body.assistantOverrides).toEqual({
+      startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } },
+      stopSpeakingPlan: { numWords: 0 },
+      artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false },
+      backgroundSound: 'office',
+    });
   });
 
   it('createCall() sends real assistantOverrides.firstMessage/model.messages when a per-lead override is resolved (Bug 1)', async () => {
@@ -209,6 +216,7 @@ describe('VapiProvider', () => {
       startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } },
       stopSpeakingPlan: { numWords: 0 },
       artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false },
+      backgroundSound: 'office',
       firstMessage: 'Hi, am I speaking with Priya?',
       model: {
         provider: 'anthropic',
@@ -216,6 +224,55 @@ describe('VapiProvider', () => {
         messages: [{ role: 'system', content: 'You are a helpful sales agent. This lead works at Acme Inc.' }],
       },
     });
+  });
+
+  it("createCall() gives the assistant a real transferCall tool for the call's transfer destination and tells it to use it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_abc', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new VapiProvider('sk-test').createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: '+14845559999',
+      systemPromptOverride: 'You are a helpful sales agent.',
+    });
+
+    const overrides = JSON.parse(fetchMock.mock.calls[0][1].body).assistantOverrides;
+    expect(overrides['tools:append']).toEqual([
+      {
+        type: 'transferCall',
+        destinations: [{ type: 'number', number: '+14845559999', message: '' }],
+        messages: [{ type: 'request-start', content: '', blocking: false }],
+      },
+    ]);
+    expect(overrides.model.messages[0].content).toContain('You are a helpful sales agent.');
+    expect(overrides.model.messages[0].content).toContain('call the transferCall tool');
+  });
+
+  it('createCall() adds no transfer tool when the call has no valid transfer destination', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_abc', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new VapiProvider('sk-test').createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: 'not-a-number',
+      systemPromptOverride: 'You are a helpful sales agent.',
+    });
+
+    const overrides = JSON.parse(fetchMock.mock.calls[0][1].body).assistantOverrides;
+    expect(overrides['tools:append']).toBeUndefined();
+    expect(overrides.model.messages[0].content).toBe('You are a helpful sales agent.');
   });
 
   it('createCall() falls back to "openai"/"gpt-4o-mini" on a model override when llmProvider/llmModel are not supplied', async () => {

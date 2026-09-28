@@ -1,3 +1,4 @@
+import { scheduleAutoTransferIfAnnounced } from '../services/autoTransfer.js';
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { authenticate, requirePermission } from '../middleware/auth.js';
@@ -277,6 +278,9 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
                 startMs: Math.max(0, Math.round((message.secondsFromStart ?? 0) * 1000)),
                 endMs: null,
               });
+              // "Transferring you now" must actually transfer - see
+              // services/autoTransfer.ts.
+              scheduleAutoTransferIfAnnounced(supabase, call, speaker, message.transcript);
             }
           }
           break;
