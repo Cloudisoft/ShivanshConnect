@@ -248,7 +248,7 @@ describe('VapiProvider', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('transferCall() posts a transfer-call control message to the call monitor.controlUrl', async () => {
+  it('transferCall() posts a transfer control message (Vapi documented type) to the call monitor.controlUrl', async () => {
     const fetchMock = vi.fn(async (input: string, _init?: RequestInit) => {
       if (input === 'https://api.vapi.ai/call/call_abc') {
         return { ok: true, json: async () => ({ id: 'call_abc', status: 'in-progress', monitor: { controlUrl: 'https://vapi.example/control/xyz' } }) };
@@ -266,7 +266,7 @@ describe('VapiProvider', () => {
     const controlCall = fetchMock.mock.calls.find(([url]) => url === 'https://vapi.example/control/xyz');
     expect(controlCall).toBeDefined();
     const body = JSON.parse(controlCall![1]!.body as string);
-    expect(body).toEqual({ type: 'transfer-call', destination: { type: 'number', number: '+14845559999' } });
+    expect(body).toEqual({ type: 'transfer', destination: { type: 'number', number: '+14845559999' } });
   });
 
   it('getLiveMonitorUrls() relays monitor.listenUrl/controlUrl from the call object', async () => {

@@ -229,7 +229,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     });
 
     const params = createCall.mock.calls[0][0];
-    expect(params.firstMessageOverride).toBe('Hi, my name is Sarah from Fall Outreach. How are you doing today?');
+    expect(params.firstMessageOverride).toBe('Hi, my name is Sarah from Acme Sales Co. How are you doing today?');
     expect(params.systemPromptOverride).toContain('You are a helpful sales agent.');
     expect(params.systemPromptOverride).toContain('politely ask for their name');
   });
@@ -251,8 +251,8 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     });
 
     const params = createCall.mock.calls[0][0];
-    // No campaign and no lead -> falls back to the agent's own name.
-    expect(params.firstMessageOverride).toBe('Hi, my name is your assistant from Sales Agent. How are you doing today?');
+    // Always the organization's name - never an internal campaign/agent label.
+    expect(params.firstMessageOverride).toBe('Hi, my name is your assistant from Acme Sales Co. How are you doing today?');
   });
 
   it('originateCall() invokes createCall() with the correct assistantOverrides for a named lead (integration)', async () => {

@@ -23,7 +23,7 @@
  * Vapi is a managed engine we do not run - the only real-time hooks it
  * exposes are `call.monitor.listenUrl` (a read-only WSS PCM stream) and
  * `call.monitor.controlUrl` (an HTTP endpoint accepting control messages,
- * of which 'say' and 'transfer-call' are the two this codebase uses).
+ * of which 'say' and 'transfer' are the two this codebase uses).
  * There is no distinct "whisper to the human agent only" primitive in
  * Vapi's public API, because there IS no human agent on a separate leg -
  * the "agent" on a Vapi call is Vapi's own AI. So here:

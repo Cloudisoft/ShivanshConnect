@@ -38,7 +38,7 @@ import { renderTemplate, type PromptVariableContext } from '../lib/promptVariabl
  * naturally for the rest of the call instead of ignoring it.
  */
 const ASK_CALLER_NAME_INSTRUCTION =
-  "\n\nYou do not yet know this caller's name. Early in the conversation, politely ask for their name if they haven't already given it, and once they do, use their first name naturally for the rest of the call.";
+  "\n\nYou do not yet know this caller's name. Early in the conversation, politely ask for their name once, if they haven't already given it, and once they do, use their first name naturally for the rest of the call. Ask only once: if you didn't clearly catch it, or it sounds unusual, carry on without using a name rather than asking again or guessing at it - never repeat back a name you're not sure you heard correctly.";
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
@@ -215,19 +215,17 @@ async function resolveCallPersonalization(
   // would either leave the literal "{{first_name}}" in the caller's ear,
   // per renderTemplate()'s own documented "never silently blank" rule,
   // or produce an awkward "Hi, am I speaking with ?"). Build a real,
-  // generic, product-specified fallback instead: "Hi, my name is
-  // {voice} from {campaign/agent}. How are you doing today?"
-  let orgOrCampaignName: string | null = null;
-  if (campaignId) {
-    const { data } = await supabase.from('campaigns').select('name').eq('id', campaignId).eq('organization_id', orgId).maybeSingle();
-    orgOrCampaignName = data?.name ?? null;
-  }
-  if (!orgOrCampaignName) {
-    const { data } = await supabase.from('ai_agents').select('name').eq('id', agent.id).eq('organization_id', orgId).maybeSingle();
-    orgOrCampaignName = data?.name ?? null;
-  }
+  // generic fallback instead: "Hi, my name is {voice} from {organization}.
+  // How are you doing today?" Uses the organization's name - never the
+  // campaign's or agent's: those are internal labels, and production calls
+  // were greeting people "from MBA Copy" (the campaign "MVA (copy)" read
+  // aloud).
+  const { data: org } = await supabase.from('organizations').select('name').eq('id', orgId).maybeSingle();
+  const companyName = org?.name?.trim() || null;
 
-  const firstMessage = `Hi, my name is ${voiceName} from ${orgOrCampaignName ?? 'our team'}. How are you doing today?`;
+  const firstMessage = companyName
+    ? `Hi, my name is ${voiceName} from ${companyName}. How are you doing today?`
+    : `Hi, my name is ${voiceName}. How are you doing today?`;
   return { firstMessage, systemPrompt: `${renderedSystemPrompt}${ASK_CALLER_NAME_INSTRUCTION}` };
 }
 

@@ -60,8 +60,14 @@ const TRANSITIONS: Record<CallStatus, ReadonlySet<CallStatus>> = {
   in_progress: new Set(['transfer_pending', 'completed', 'transferred', 'failed', 'voicemail', 'answering_machine', 'dnc']),
   voicemail: new Set(['completed', 'failed', 'dnc']),
   answering_machine: new Set(['completed', 'failed', 'dnc']),
-  transfer_pending: new Set(['transferring', 'transfer_failed', 'failed', 'dnc']),
-  transferring: new Set(['transferred', 'transfer_failed', 'failed', 'dnc']),
+  // 'transferred'/'completed' reachable from both transfer states for the
+  // same lost-webhook reason as above - real incident: a call Vapi
+  // forwarded and ended (endedReason 'assistant-forwarded-call') sat in
+  // 'transfer_pending' forever because its end-of-call-report ('transferred')
+  // was rejected as invalid, and the supervisor's End call ('completed')
+  // was silently a no-op, leaving it stuck in Live Monitor.
+  transfer_pending: new Set(['transferring', 'transferred', 'transfer_failed', 'completed', 'failed', 'dnc']),
+  transferring: new Set(['transferred', 'transfer_failed', 'completed', 'failed', 'dnc']),
   transferred: new Set([]),
   transfer_failed: new Set(['in_progress', 'completed', 'failed', 'dnc']),
   completed: new Set([]),
