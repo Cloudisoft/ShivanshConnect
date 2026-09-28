@@ -323,7 +323,14 @@ describe('VapiProvider', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     const provider = new VapiProvider('sk-test');
-    expect(await provider.getArtifacts('call_abc')).toEqual({ recordingUrl: 'https://rec', transcriptUrl: 'https://tx', transcript: 'hello world', segments: null });
+    expect(await provider.getArtifacts('call_abc')).toEqual({
+      recordingUrl: 'https://rec',
+      // Authenticated download - the raw recordingUrl can be private storage.
+      recordingDownload: { url: 'https://api.vapi.ai/call/call_abc/mono-recording', headers: { Authorization: 'Bearer sk-test' } },
+      transcriptUrl: 'https://tx',
+      transcript: 'hello world',
+      segments: null,
+    });
     expect(await provider.getTranscript('call_abc')).toBe('hello world');
     expect(await provider.getRecording('call_abc')).toBe('https://rec');
   });

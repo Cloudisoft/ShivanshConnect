@@ -50,6 +50,7 @@ import { startAnalyticsAggregator } from './services/analyticsAggregator.js';
 import { startCallReconciliation } from './services/callReconciliation.js';
 import { startDialTimeoutSweep } from './services/dialTimeoutSweep.js';
 import { startNoCallerAudioSweep } from './services/noCallerAudioSweep.js';
+import { startRecordingBackfillSweep } from './services/recordingBackfillSweep.js';
 import { runCallEndDataRepair } from './services/callEndDataRepair.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
@@ -393,6 +394,9 @@ async function main() {
     // dialTimeoutSweep.ts's pre-connect rule above (this one only ever
     // touches a call that already has answered_at set).
     startNoCallerAudioSweep();
+    // Recovers recordings that failed to download from the provider's
+    // private storage - see services/recordingBackfillSweep.ts.
+    startRecordingBackfillSweep();
     // One-off (self-limiting) repair for historical calls stuck with a
     // blank End Time/Duration by the status-update/end-of-call-report
     // race bug fixed in routes/webhooks.ts - see services/

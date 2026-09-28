@@ -35,6 +35,7 @@ vi.mock('./lib/supabase.js', () => ({
 }));
 
 const RECORDING_URL = 'https://recordings.example.com/rec-1.mp3';
+const recordingFetchHeaders: (Record<string, string> | null)[] = [];
 const RECORDING_BYTES = Buffer.from('fake-mp3-bytes-for-test');
 const FLAT_TRANSCRIPT = 'AI: Hi, this is Alex calling from Acme.\nUser: Hi, sure I have a minute.\nAI: Great, are you still interested in a quote?\nUser: Yes, please send it over.';
 const LLM_SUMMARY = {
@@ -84,6 +85,11 @@ describe('Phase 9: CDR artifact ingestion pipeline + CDR/export APIs', () => {
       if (url.startsWith('https://api.vapi.ai/assistant?') && method === 'GET') {
         return { ok: true, status: 200, json: async () => [] } as unknown as Response;
       }
+      if (url.startsWith('https://api.vapi.ai/call/') && url.endsWith('/mono-recording') && method === 'GET') {
+        // Vapi's authenticated download: a 302 to a short-lived signed URL.
+        expect((init?.headers as Record<string, string> | undefined)?.Authorization).toMatch(/^Bearer /);
+        return { ok: false, status: 302, headers: { get: (name: string) => (name.toLowerCase() === 'location' ? RECORDING_URL : null) } } as unknown as Response;
+      }
       if (url.startsWith('https://api.vapi.ai/call/') && method === 'GET') {
         return {
           ok: true,
@@ -96,6 +102,8 @@ describe('Phase 9: CDR artifact ingestion pipeline + CDR/export APIs', () => {
         } as unknown as Response;
       }
       if (url === RECORDING_URL) {
+        // The provider API key must never be forwarded to the storage URL.
+        recordingFetchHeaders.push((init?.headers as Record<string, string> | undefined) ?? null);
         return {
           ok: true,
           status: 200,
@@ -240,6 +248,20 @@ describe('Phase 9: CDR artifact ingestion pipeline + CDR/export APIs', () => {
     const downloadRes = await app.inject({ method: 'GET', url: `/api/v1/cdr/${call.id}/recording/download`, headers: { authorization: `Bearer ${token}` } });
     expect(downloadRes.statusCode).toBe(200);
     expect(Buffer.from(downloadRes.rawPayload)).toEqual(RECORDING_BYTES);
+    expect(recordingFetchHeaders.every((h) => !h || !('Authorization' in h))).toBe(true);
+  });
+
+  it('GET /cdr/:callId/recording/download recovers a recording that failed to download earlier', async () => {
+    const token = await signup('CDR Recover Org', `cdrrecover-${Date.now()}@test.com`);
+    const { call } = await dialAndCompleteOneCall(token);
+    await waitFor(() => fake.tables.call_recordings.some((r) => r.call_id === call.id && r.status === 'ready'));
+    const row = fake.tables.call_recordings.find((r) => r.call_id === call.id)!;
+    Object.assign(row, { status: 'failed', storage_path: null, failure_reason: "The provider's recording URL returned 400." });
+
+    const downloadRes = await app.inject({ method: 'GET', url: `/api/v1/cdr/${call.id}/recording/download`, headers: { authorization: `Bearer ${token}` } });
+    expect(downloadRes.statusCode).toBe(200);
+    expect(Buffer.from(downloadRes.rawPayload)).toEqual(RECORDING_BYTES);
+    expect(fake.tables.call_recordings.find((r) => r.call_id === call.id)!.status).toBe('ready');
   });
 
   it('GET /cdr/search-transcript finds the call by transcript content', async () => {

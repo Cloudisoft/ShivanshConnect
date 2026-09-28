@@ -126,8 +126,10 @@ const START_SPEAKING_PLAN = { waitSeconds: 0.4, smartEndpointingPlan: { provider
  * configured, so Vapi uploaded every recording to that PRIVATE bucket and
  * returned its raw, unsigned object URL, which nothing without the
  * bucket's own keys can download. recordingUseCustomStorageEnabled: false
- * makes Vapi keep recordings on its own storage (downloadable URLs) for
- * our calls regardless of that credential; processCallArtifacts.ts then
+ * alone did NOT fix it (the account stores recordings in a private
+ * "hipaa-recordings" bucket either way), so getArtifacts() also returns
+ * Vapi's authenticated GET /call/{id}/mono-recording download (302 to a
+ * short-lived signed URL), which processCallArtifacts.ts uses; it then
  * re-stores the bytes in this platform's own storage, so nothing depends
  * on Vapi keeping them. recordingEnabled: true is Vapi's default, set
  * explicitly per explicit request: recordings for every call. */
@@ -652,8 +654,18 @@ export class VapiProvider implements CallOrchestrationProvider {
 
   async getArtifacts(providerCallId: string): Promise<CallArtifacts> {
     const call = await this.request<VapiCallObject>('GET', `/call/${encodeURIComponent(providerCallId)}`);
+    const recordingUrl = call.artifact?.recordingUrl ?? null;
     return {
-      recordingUrl: call.artifact?.recordingUrl ?? null,
+      recordingUrl,
+      // The raw recordingUrl points into a private bucket (400
+      // "InvalidArgument: Authorization"); Vapi's own authenticated
+      // download endpoint redirects to a signed, fetchable URL.
+      recordingDownload: recordingUrl
+        ? {
+            url: `${VAPI_API_BASE}/call/${encodeURIComponent(providerCallId)}/mono-recording`,
+            headers: { Authorization: `Bearer ${this.requireApiKey()}` },
+          }
+        : null,
       transcriptUrl: call.artifact?.transcriptUrl ?? null,
       transcript: call.artifact?.transcript ?? null,
       segments: toSegments(call.artifact?.messages ?? call.messages),

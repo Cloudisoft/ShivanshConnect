@@ -201,6 +201,10 @@ export interface TranscriptSegmentRaw {
 
 export interface CallArtifacts {
   recordingUrl: string | null;
+  /** An authenticated way to download the recording when `recordingUrl`
+   * itself is not publicly fetchable (Vapi: GET /call/{id}/mono-recording
+   * with the API key, which redirects to a short-lived signed URL). */
+  recordingDownload?: { url: string; headers: Record<string, string> } | null;
   transcriptUrl: string | null;
   transcript: string | null;
   /** Structured per-utterance data when the engine provides it; null
