@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { X, Play, Pause, Download } from 'lucide-react';
-import { EVALUATION_SCORE_CATEGORY_LABELS } from '@shivanshconnect/shared';
+import { dispositionTone, EVALUATION_SCORE_CATEGORY_LABELS } from '@shivanshconnect/shared';
 import { useCdrDetail, fetchRecordingObjectUrl } from '../../hooks/useCdr';
 import { useCallEvaluation } from '../../hooks/useEvaluations';
 import { Badge, Button, Input } from '../ui';
@@ -56,7 +56,10 @@ export function CallDetailDrawer({ callId, onClose }: { callId: string; onClose:
               <Field label="Duration" value={detail.duration_seconds != null ? `${detail.duration_seconds}s` : '-'} />
               <Field label="Talk duration" value={detail.talk_duration_seconds != null ? `${detail.talk_duration_seconds}s` : '-'} />
               <Field label="Status" value={<Badge>{detail.status}</Badge>} />
-              <Field label="Disposition" value={detail.disposition_name ?? '-'} />
+              <Field
+                label="Disposition"
+                value={detail.disposition_name ? <Badge tone={dispositionTone(detail.disposition_code ?? '')}>{detail.disposition_name}</Badge> : '-'}
+              />
               <Field label="Ended reason" value={detail.ended_reason ?? '-'} />
               <Field label="Transfer status" value={detail.transfer_status ?? '-'} />
               <Field label="Cost" value={detail.cost != null ? `$${Number(detail.cost).toFixed(4)}` : '-'} />

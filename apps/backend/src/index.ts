@@ -48,6 +48,7 @@ import { dialingSettingsRoutes, campaignSettingsRoutes } from './routes/dialingS
 import { startCampaignDispatcher } from './services/campaignDispatcher.js';
 import { startAnalyticsAggregator } from './services/analyticsAggregator.js';
 import { startCallReconciliation } from './services/callReconciliation.js';
+import { startDialTimeoutSweep } from './services/dialTimeoutSweep.js';
 import { runCallEndDataRepair } from './services/callEndDataRepair.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
@@ -367,6 +368,14 @@ async function main() {
     // callReconciliation.ts's header) - same "not started by buildApp()
     // itself" reasoning as every other scheduler above.
     startCallReconciliation();
+    // Explicit request: a call that never connected to anything (no
+    // answered_at - not a human, not a machine, not voicemail) should
+    // clear out of Live Monitor within ~80 seconds, not sit there for
+    // the 10+ minutes callReconciliation's own slower, provider-confirmed
+    // path allows - see services/dialTimeoutSweep.ts's header for why
+    // this is a genuinely different, much faster, unambiguous rule than
+    // that one (and never touches a call that's actually connected).
+    startDialTimeoutSweep();
     // One-off (self-limiting) repair for historical calls stuck with a
     // blank End Time/Duration by the status-update/end-of-call-report
     // race bug fixed in routes/webhooks.ts - see services/

@@ -11,7 +11,7 @@ import { CallDetailDrawer } from '../components/cdr/CallDetailDrawer';
 import { ExportTrigger } from '../components/exports/ExportTrigger';
 import { ExportHistoryList } from '../components/exports/ExportHistoryList';
 import { ApiClientError } from '../lib/apiClient';
-import type { CallStatus } from '@shivanshconnect/shared';
+import { dispositionTone, type CallStatus } from '@shivanshconnect/shared';
 
 /** Direct one-click download straight from the list row, no need to open
  * the detail drawer first. The backend route requires an Authorization
@@ -218,7 +218,9 @@ export function CdrPage(): JSX.Element {
                   <td className="px-4 py-2 text-ink-700">{row.ai_agent_name ?? '-'}</td>
                   <td className="px-4 py-2 text-ink-700">{row.duration_seconds != null ? `${row.duration_seconds}s` : '-'}</td>
                   <td className="px-4 py-2"><Badge tone={STATUS_TONE[row.status] ?? 'neutral'}>{row.status}</Badge></td>
-                  <td className="px-4 py-2 text-ink-700">{row.disposition_name ?? '-'}</td>
+                  <td className="px-4 py-2">
+                    {row.disposition_name ? <Badge tone={dispositionTone(row.disposition_code ?? '')}>{row.disposition_name}</Badge> : <span className="text-ink-700">-</span>}
+                  </td>
                   <td className="px-4 py-2 text-xs text-ink-500">
                     <div className="flex items-center gap-2">
                       <span>{[row.has_transcript && 'Transcript', row.has_recording && 'Recording', row.has_summary && 'Summary'].filter(Boolean).join(', ') || '-'}</span>

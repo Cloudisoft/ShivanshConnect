@@ -52,8 +52,23 @@ const OTHER_NO_INTERACTION_ENDED_REASONS = new Set(['silence-timed-out', 'pipeli
 const NO_INTERACTION_ENDED_REASONS = new Set([...NO_ANSWER_ENDED_REASONS, ...NOT_IN_SERVICE_ENDED_REASONS, ...OTHER_NO_INTERACTION_ENDED_REASONS]);
 
 /** ended_reason values that indicate the CALLER hung up (as opposed to a
- * provider-side failure) - distinguishes Hung Up from Disconnected. */
+ * provider-side failure) - distinguishes Hung Up from Disconnected. These
+ * are duration-SENSITIVE: a 'customer-ended-call' after a real, lengthy
+ * conversation is a successful CALL_CONNECTED the customer simply ended
+ * naturally, not a hang-up - see branch 5's CALL_CONNECTED check, which
+ * runs before this set is ever consulted (branch 8/9 below). */
 const CALLER_HANGUP_ENDED_REASONS = new Set(['customer-ended-call', 'caller-hung-up', 'customer-hung-up']);
+
+/** ended_reason values that mean no real interaction happened AT ALL,
+ * regardless of whatever duration the provider reported for the call leg
+ * - unlike CALLER_HANGUP_ENDED_REASONS above, these are NOT duration-
+ * sensitive and always win over a duration-based CALL_CONNECTED read (see
+ * branch 4). 'call.in-progress.error-assistant-did-not-receive-customer-
+ * audio' is Vapi's real raw endedReason string (shown on its own
+ * dashboard as "Assistant Did Not Receive Customer Audio") - per explicit
+ * request, always disposed as HUNG_UP (never DISCONNECTED), since the
+ * caller's side of the line never produced any audio at all. */
+const ALWAYS_NO_INTERACTION_HANGUP_REASONS = new Set(['call.in-progress.error-assistant-did-not-receive-customer-audio']);
 
 export interface CallOutcomeSignals {
   /** The terminal `calls.status` this call ended in. */
@@ -122,26 +137,40 @@ export function decideDisposition(signals: CallOutcomeSignals): DispositionDecis
     };
   }
 
-  // 4. Human answered and a real conversation occurred.
+  // 4. A no-interaction-at-all reason always wins over a duration-based
+  // "connected" read, even if the provider still reported a nonzero
+  // duration for the call leg - e.g. Vapi's real
+  // 'call.in-progress.error-assistant-did-not-receive-customer-audio'
+  // means no audio from the caller ever reached the assistant at all, so
+  // there was no conversation regardless of how long the leg stayed up.
+  // Checked here, before branch 5's CALL_CONNECTED check, for exactly
+  // that reason - unlike CALLER_HANGUP_ENDED_REASONS (branch 8 below),
+  // which IS duration-sensitive (a real, lengthy conversation the
+  // customer ended naturally is still CALL_CONNECTED).
+  if (signals.endedReason != null && ALWAYS_NO_INTERACTION_HANGUP_REASONS.has(signals.endedReason)) {
+    return { code: 'HUNG_UP', confidence: 0.85, reason: 'No audio from the caller ever reached the assistant.' };
+  }
+
+  // 5. Human answered and a real conversation occurred.
   const hadMeaningfulDuration = (signals.durationSeconds ?? 0) >= CONNECTED_DURATION_THRESHOLD_SECONDS;
   const noInteraction = signals.endedReason != null && NO_INTERACTION_ENDED_REASONS.has(signals.endedReason);
   if (signals.status === 'completed' && hadMeaningfulDuration && !noInteraction) {
     return { code: 'CALL_CONNECTED', confidence: 0.9, reason: 'Call connected and a conversation of meaningful duration occurred.' };
   }
 
-  // 5. The phone simply rang with nobody picking up - its own distinct
+  // 6. The phone simply rang with nobody picking up - its own distinct
   // outcome, not a "disconnect".
   if (signals.endedReason != null && NO_ANSWER_ENDED_REASONS.has(signals.endedReason)) {
     return { code: 'NO_ANSWER', confidence: 0.9, reason: 'The call rang but nobody answered.' };
   }
 
-  // 6. The destination number itself is invalid/disconnected - distinct
+  // 7. The destination number itself is invalid/disconnected - distinct
   // from a generic technical failure or a plain no-answer.
   if (signals.endedReason != null && NOT_IN_SERVICE_ENDED_REASONS.has(signals.endedReason)) {
     return { code: 'NOT_IN_SERVICE', confidence: 0.9, reason: 'The destination number is not in service.' };
   }
 
-  // 7. DISCONNECTED is reserved for a genuine technical/provider-side
+  // 8. DISCONNECTED is reserved for a genuine technical/provider-side
   // failure with no meaningful interaction (busy, dial failed, an
   // assistant/pipeline error, a silence timeout) - never for a call the
   // CALLER actively ended, regardless of how short it was. A caller who
@@ -152,18 +181,21 @@ export function decideDisposition(signals: CallOutcomeSignals): DispositionDecis
     return { code: 'DISCONNECTED', confidence: 0.8, reason: signals.endedReason ? `Provider reported a technical failure (${signals.endedReason}) with no meaningful interaction.` : 'Call ended with no meaningful interaction.' };
   }
 
-  // 8. Caller hung up - checked BEFORE any generic "short call" fallback
-  // so an explicit customer-ended-call reason always wins over duration
-  // alone, no matter how brief the call was.
+  // 9. Caller hung up before a meaningful conversation - checked BEFORE
+  // the generic fallback below so an explicit customer-ended-call/
+  // caller-hung-up/customer-hung-up reason still gets its own clearer
+  // reason text and higher confidence than the fallback default, for the
+  // short-call case that never reached branch 5's CALL_CONNECTED check.
   if (signals.endedReason != null && CALLER_HANGUP_ENDED_REASONS.has(signals.endedReason)) {
     return { code: 'HUNG_UP', confidence: 0.85, reason: 'Caller ended the call before a full conversation concluded.' };
   }
 
-  // 9. Fallback: a call with no explicit technical-failure or
+  // 10. Fallback: a call with no explicit technical-failure or
   // caller-hangup reason, and no clean "connected" signal, reads as a
   // hang-up rather than a disconnect by default - DISCONNECTED/NO_ANSWER/
   // NOT_IN_SERVICE are never the default outcome, only ever an explicit
-  // signal (branches 5-7 above).
+  // signal (branches 6-8 above), and an always-no-interaction reason was
+  // already handled in branch 4, above CALL_CONNECTED.
   return { code: 'HUNG_UP', confidence: 0.6, reason: 'Call ended quickly without a clear connected outcome.' };
 }
 

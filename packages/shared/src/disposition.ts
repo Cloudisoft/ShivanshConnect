@@ -67,3 +67,29 @@ export interface CallDispositionWithDetails extends CallDisposition {
   disposition_code: string;
   disposition_name: string;
 }
+
+/** Which color a disposition badge should render in, across CDR and Live
+ * Monitor - per explicit request, a hang-up/disconnect-type outcome
+ * (including Vapi's real
+ * 'call.in-progress.error-assistant-did-not-receive-customer-audio'
+ * ended_reason, mapped to HUNG_UP by the disposition engine) shows in
+ * red. An org's own custom disposition code (not in SYSTEM_DISPOSITION_CODES)
+ * falls back to 'neutral' - this module has no way to know its intended
+ * meaning. */
+export function dispositionTone(code: string): 'neutral' | 'success' | 'warning' | 'danger' {
+  switch (code) {
+    case 'CALL_CONNECTED':
+    case 'TRANSFERRED':
+      return 'success';
+    case 'NOT_INTERESTED':
+      return 'warning';
+    case 'DNC':
+    case 'HUNG_UP':
+    case 'DISCONNECTED':
+    case 'NOT_IN_SERVICE':
+    case 'CALL_DISCONNECTED_IN_TRANSFER':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+}

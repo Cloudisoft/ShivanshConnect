@@ -63,6 +63,14 @@ describe('dispositionEngine.decideDisposition - the deterministic rules engine',
     expect(decideDisposition(signals({ status: 'completed', durationSeconds: 0, endedReason: 'invalid-number' })).code).toBe('NOT_IN_SERVICE');
   });
 
+  it('assigns HUNG_UP (never DISCONNECTED, never CALL_CONNECTED) for Vapi\'s real "no customer audio" ended_reason, even with a long reported duration - per explicit request, marked as the caller hanging up, not a technical failure', () => {
+    const noAudioReason = 'call.in-progress.error-assistant-did-not-receive-customer-audio';
+    const short = decideDisposition(signals({ status: 'completed', durationSeconds: 3, endedReason: noAudioReason }));
+    expect(short.code).toBe('HUNG_UP');
+    const long = decideDisposition(signals({ status: 'completed', durationSeconds: 45, endedReason: noAudioReason }));
+    expect(long.code).toBe('HUNG_UP');
+  });
+
   it('assigns DISCONNECTED only for an explicit technical-failure ended_reason (never no-answer/not-in-service, never a bare zero-duration default)', () => {
     expect(decideDisposition(signals({ status: 'failed', durationSeconds: 0, endedReason: 'pipeline-error' })).code).toBe('DISCONNECTED');
     expect(decideDisposition(signals({ status: 'failed', durationSeconds: 0, endedReason: 'busy' })).code).toBe('DISCONNECTED');
