@@ -17,7 +17,7 @@ import { evaluationSummaryQuerySchema, listAgentImprovementsQuerySchema } from '
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS, DEFAULT_AGENT_PERSONALITY, DEFAULT_CALL_ENDING_RULES, DEFAULT_TRANSFER_RULES } from '@shivanshconnect/shared';
 import { getLlmProvider, LlmNotConfiguredError } from '../lib/llm/index.js';
-import { renderTemplate } from '../lib/promptVariables.js';
+import { renderTemplate, spokenVoiceName } from '../lib/promptVariables.js';
 import { buildAssistantConfig, getOrgVapiProvider } from '../services/callOrigination.js';
 
 const AGENT_COLUMNS = 'id, organization_id, name, description, role, status, current_version_id, created_by, created_at, updated_at';
@@ -654,7 +654,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     let previewVoiceName = 'your assistant';
     if (version.voice_id) {
       const { data: voice } = await supabase.from('voices').select('name').eq('id', version.voice_id).maybeSingle();
-      if (voice?.name) previewVoiceName = voice.name;
+      previewVoiceName = spokenVoiceName(voice?.name) ?? previewVoiceName;
     }
     const previewContext = { ...(body.lead ?? {}), agent_name: previewVoiceName };
     const renderedSystemPrompt = renderTemplate(version.system_prompt, previewContext);

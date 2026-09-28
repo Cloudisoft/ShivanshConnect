@@ -26,7 +26,7 @@ import { transitionCallState } from '../lib/callStateMachine.js';
 import { VapiProvider } from '../lib/orchestration/vapi.js';
 import { decryptCredentials, type EncryptedEnvelope } from '../lib/crypto/credentials.js';
 import { toAdapterCredentials as toTelephonyAdapterCredentials } from '../routes/phoneNumberProviders.js';
-import { renderTemplate, type PromptVariableContext } from '../lib/promptVariables.js';
+import { renderTemplate, spokenVoiceName, type PromptVariableContext } from '../lib/promptVariables.js';
 
 /**
  * Appended to the resolved system prompt only for the unnamed/no-lead
@@ -188,7 +188,9 @@ async function resolveCallPersonalization(
   // phone", matching the platform's own pre-existing no-lead-name
   // fallback greeting below, which already used the voice's name for
   // exactly this reason.
-  const voiceName = actualVoiceName ?? 'your assistant';
+  // Only the voice's own name ("Ray"), never its catalog description
+  // ("Ray - Conversationalist").
+  const voiceName = spokenVoiceName(actualVoiceName) ?? 'your assistant';
 
   const context: PromptVariableContext = {
     first_name: lead?.first_name || undefined,
