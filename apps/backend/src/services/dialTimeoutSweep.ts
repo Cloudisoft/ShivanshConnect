@@ -25,8 +25,34 @@
  */
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { transitionCallState } from '../lib/callStateMachine.js';
+import { resolveProviderForCall } from '../lib/orchestration/resolveProvider.js';
+import { OrchestrationProviderError, OrchestrationProviderNotConfiguredError } from '../lib/orchestration/index.js';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
+
+/** Actually terminates the call at the provider (Vapi/pipecat) before
+ * disposing it locally - per explicit request ("end the call without
+ * wasting any more credits"). Without this, a call this sweep force-fails
+ * locally keeps ringing/dialing at the provider for real, still consuming
+ * minutes/credits, and can even connect a moment later with nobody on our
+ * end listening for it. Mirrors routes/liveMonitor.ts's supervisor
+ * "End call" action exactly: a provider error here (already ended, not
+ * configured, unreachable) is never fatal to the local disposition below -
+ * the local state machine transition is what actually matters and always
+ * still runs. */
+async function endCallAtProvider(supabase: Supabase, call: Record<string, any>): Promise<void> {
+  const providerCallId = call.engine === 'vapi' ? call.vapi_call_id : call.pipecat_call_id;
+  if (!providerCallId) return;
+  try {
+    const provider = await resolveProviderForCall(supabase, call);
+    await provider.endCall(providerCallId);
+  } catch (err) {
+    if (!(err instanceof OrchestrationProviderError) && !(err instanceof OrchestrationProviderNotConfiguredError)) {
+      // eslint-disable-next-line no-console
+      console.error('dialTimeoutSweep: endCall() at provider failed for call', call.id, err);
+    }
+  }
+}
 
 /** Only genuinely pre-connection statuses - a call here has never reached
  * a human, a machine, or voicemail. Deliberately NOT the full
@@ -59,7 +85,7 @@ export async function runDialTimeoutSweep(): Promise<DialTimeoutSweepResult> {
 
   const { data: staleCalls } = await supabase
     .from('calls')
-    .select('id, organization_id, status, created_at')
+    .select('id, organization_id, engine, vapi_call_id, pipecat_call_id, status, created_at')
     .in('status', PRE_CONNECT_STATUSES)
     .is('answered_at', null)
     .lte('created_at', cutoff)
@@ -70,6 +96,7 @@ export async function runDialTimeoutSweep(): Promise<DialTimeoutSweepResult> {
 
   for (const call of rows) {
     try {
+      await endCallAtProvider(supabase, call);
       const applied = await transitionCallState(supabase, call.id, 'failed', {
         ended_at: new Date().toISOString(),
         ended_reason: 'dial_timeout',

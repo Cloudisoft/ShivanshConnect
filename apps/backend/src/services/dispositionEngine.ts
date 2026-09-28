@@ -71,7 +71,13 @@ const CALLER_HANGUP_ENDED_REASONS = new Set(['customer-ended-call', 'caller-hung
  * dashboard as "Assistant Did Not Receive Customer Audio") - per explicit
  * request, always disposed as HUNG_UP (never DISCONNECTED), since the
  * caller's side of the line never produced any audio at all. */
-const ALWAYS_NO_INTERACTION_HANGUP_REASONS = new Set(['call.in-progress.error-assistant-did-not-receive-customer-audio']);
+const ALWAYS_NO_INTERACTION_HANGUP_REASONS = new Set([
+  'call.in-progress.error-assistant-did-not-receive-customer-audio',
+  // services/noCallerAudioSweep.ts's own reason for the exact same
+  // underlying condition, caught by our own backend backstop rather than
+  // Vapi's real end-of-call-report - same disposition either way.
+  'no_customer_audio',
+]);
 
 export interface CallOutcomeSignals {
   /** The terminal `calls.status` this call ended in. */

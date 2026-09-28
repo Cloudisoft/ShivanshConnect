@@ -6,11 +6,15 @@ vi.mock('../lib/supabase.js', () => ({
   getSupabaseAdmin: () => fake.supabase,
 }));
 
+process.env.CREDENTIAL_ENCRYPTION_KEY = 'a'.repeat(64);
+
 const fake = createFakeSupabase();
 
 const { runDialTimeoutSweep } = await import('./dialTimeoutSweep.js');
 const { registerTerminalCallHandler } = await import('../lib/callStateMachine.js');
 const { handleTerminalCall } = await import('./callTerminalHandler.js');
+const { __setOrchestrationProviderForTests } = await import('../lib/orchestration/index.js');
+const { encryptCredentials } = await import('../lib/crypto/credentials.js');
 
 registerTerminalCallHandler(handleTerminalCall);
 
@@ -86,5 +90,41 @@ describe('dialTimeoutSweep', () => {
     const result = await runDialTimeoutSweep();
     expect(result.checked).toBe(0);
     expect(fake.tables.calls.find((c) => c.id === id)!.status).toBe('voicemail');
+  });
+
+  it('actually ends the call at the provider before disposing it locally - "end the call without wasting any more credits"', async () => {
+    fake.tables.vapi_credentials.length = 0;
+    fake.tables.vapi_credentials.push({
+      id: randomUUID(),
+      organization_id: orgId,
+      encrypted_credentials: encryptCredentials({ api_key: 'sk-test' }) as any,
+      status: 'connected',
+    });
+    const endCall = vi.fn(async () => {});
+    __setOrchestrationProviderForTests('vapi', {
+      async createAssistant() {
+        throw new Error('unused');
+      },
+      async createCall() {
+        throw new Error('unused');
+      },
+      async getCall() {
+        throw new Error('unused');
+      },
+      endCall,
+      async transferCall() {},
+      async importPhoneNumber() {
+        throw new Error('unused');
+      },
+    } as any);
+
+    const id = call({ status: 'dialing' });
+    const result = await runDialTimeoutSweep();
+
+    expect(result.disposed).toBe(1);
+    expect(endCall).toHaveBeenCalledWith(`vapi_${id}`);
+    expect(fake.tables.calls.find((c) => c.id === id)!.status).toBe('failed');
+
+    __setOrchestrationProviderForTests('vapi', null);
   });
 });
