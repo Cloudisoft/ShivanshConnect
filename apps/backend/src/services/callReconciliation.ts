@@ -27,7 +27,7 @@
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { transitionCallState } from '../lib/callStateMachine.js';
 import { ACTIVE_CALL_STATUSES } from './campaignDispatcher.js';
-import { createOrchestrationProvider, OrchestrationProviderError, OrchestrationProviderNotConfiguredError } from '../lib/orchestration/index.js';
+import { createOrchestrationProvider, OrchestrationProviderNotConfiguredError } from '../lib/orchestration/index.js';
 import { decryptCredentials, type EncryptedEnvelope } from '../lib/crypto/credentials.js';
 import type { CallStatus } from '@shivanshconnect/shared';
 
@@ -195,7 +195,19 @@ export async function reconcileOrganizationCalls(supabase: Supabase, organizatio
       // one call must never corrupt local state - skip and let the next
       // tick try again.
       result.skipped += 1;
-      if (!(err instanceof OrchestrationProviderNotConfiguredError) && !(err instanceof OrchestrationProviderError)) {
+      // Bug fix: OrchestrationProviderError (a real non-2xx/network
+      // failure from Vapi's own GET /call/:id) used to be excluded from
+      // this log entirely, on the theory that "provider errors" are
+      // expected/noisy - but that made a PERSISTENT provider error on a
+      // specific call completely silent forever, tick after tick, with
+      // no way to ever notice it. Real incident this caused: 5 calls
+      // Vapi itself already reported as ended (status "Assistant Did Not
+      // Receive Customer Audio") never got repaired locally, silently
+      // blocking their campaign's concurrency, because getCall() was
+      // failing on every single tick with zero trace anywhere. Only
+      // OrchestrationProviderNotConfiguredError (no credentials at all
+      // for this org - genuinely nothing to report) stays silent.
+      if (!(err instanceof OrchestrationProviderNotConfiguredError)) {
         // eslint-disable-next-line no-console
         console.error('callReconciliation: getCall() failed for call', call.id, err);
       }
