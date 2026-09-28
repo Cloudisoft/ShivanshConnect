@@ -40,7 +40,21 @@ export async function runRecordingBackfillTick(): Promise<number> {
     .limit(200);
   if (error) throw error;
 
-  const batch = (data ?? []).map((r) => r.call_id as string).filter((id) => !attempted.has(id)).slice(0, BATCH_SIZE);
+  // Rows left 'downloading' by a server restart mid-download (nothing
+  // will ever finish them) are recovered the same way.
+  const { data: stuck, error: stuckError } = await supabase
+    .from('call_recordings')
+    .select('call_id')
+    .eq('status', 'downloading')
+    .lt('updated_at', new Date(Date.now() - 10 * 60_000).toISOString())
+    .gte('created_at', new Date(Date.now() - LOOKBACK_MS).toISOString())
+    .limit(50);
+  if (stuckError) throw stuckError;
+
+  const batch = [...(stuck ?? []), ...(data ?? [])]
+    .map((r) => r.call_id as string)
+    .filter((id) => !attempted.has(id))
+    .slice(0, BATCH_SIZE);
   let recovered = 0;
   for (const callId of batch) {
     attempted.add(callId);
