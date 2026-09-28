@@ -19,10 +19,14 @@ import { resolveProviderForCall } from '../lib/orchestration/resolveProvider.js'
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
 /** How long the transferCall tool gets to fire on its own first. */
-const AUTO_TRANSFER_DELAY_MS = Number.parseInt(process.env.AUTO_TRANSFER_DELAY_MS ?? '', 10) || 3000;
+const AUTO_TRANSFER_DELAY_MS = Number.parseInt(process.env.AUTO_TRANSFER_DELAY_MS ?? '', 10) || 1500;
 
+/** Any way the assistant says it is handing the caller over - "transferring
+ * the call", "transferring you now", "let me transfer you", "I'll connect
+ * you with a specialist", "putting you through". Per explicit request:
+ * whenever the AI says it is transferring, the call must transfer. */
 const TRANSFER_ANNOUNCEMENT =
-  /\b(transferring (you|the call|your call|now)|transfer(ring)? you (now|over|to|through)|i('| a)m (going to |gonna )?transfer(ring)? you|let me transfer you|i('| wi)ll transfer you|connect(ing)? you (now|with|to)|putting you through|i('| a)m (going to |gonna )?connect(ing)? you)\b/i;
+  /\btransferr?ing\b|\btransfer (you|your call|the call|this call)\b|\bconnect(ing)? you\b|\bget you (connected|over|through)\b|\bput(ting)? you through\b|\bpatch(ing)? you through\b/i;
 
 const TRANSFERABLE_STATUSES = new Set(['answered', 'in_progress']);
 

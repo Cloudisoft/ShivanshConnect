@@ -293,6 +293,9 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
               background_noise: callingRules.background_noise,
             }
           : null,
+        // The campaign's own script and knowledge base reach the call.
+        scriptIdOverride: version.script_id ?? null,
+        knowledgeBaseIdsOverride: version.knowledge_base_ids ?? [],
       });
       await supabase.from('campaign_leads').update({ last_call_id: call.id }).eq('id', claimed.id);
       dispatched += 1;
