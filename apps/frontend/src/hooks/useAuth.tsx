@@ -17,6 +17,36 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const ME_CACHE_KEY = 'sc:me';
+
+function readCachedMe(userId: string | undefined): MeResponse | undefined {
+  if (!userId) return undefined;
+  try {
+    const raw = localStorage.getItem(ME_CACHE_KEY);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as { userId: string; me: MeResponse };
+    return parsed.userId === userId ? parsed.me : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCachedMe(userId: string, me: MeResponse): void {
+  try {
+    localStorage.setItem(ME_CACHE_KEY, JSON.stringify({ userId, me }));
+  } catch {
+    // storage full/blocked - the app still works, just without the instant reload
+  }
+}
+
+function clearCachedMe(): void {
+  try {
+    localStorage.removeItem(ME_CACHE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
@@ -41,17 +71,29 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     return () => listener.subscription.unsubscribe();
   }, [queryClient]);
 
+  const userId = session?.user.id;
   const {
     data: me,
     isLoading: meLoading,
     error: meError,
   } = useQuery({
-    queryKey: ['me', session?.user.id],
+    queryKey: ['me', userId],
     queryFn: () => api.get<MeResponse>('/me'),
     enabled: !!session,
     retry: false,
     staleTime: 60_000,
+    // The last /me this browser saw for this user, so a reload renders the
+    // app immediately instead of a full-screen spinner while /me travels
+    // to the US and back. initialDataUpdatedAt 0 marks it stale, so the
+    // real /me still refetches right away in the background. Permissions
+    // are enforced server-side on every request regardless.
+    initialData: () => readCachedMe(userId),
+    initialDataUpdatedAt: 0,
   });
+
+  useEffect(() => {
+    if (me && userId) writeCachedMe(userId, me);
+  }, [me, userId]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -62,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       meError,
       hasPermission: (key: string) => !!me?.permissions.includes(key),
       signOut: async () => {
+        clearCachedMe();
         await supabase.auth.signOut();
         queryClient.clear();
       },
