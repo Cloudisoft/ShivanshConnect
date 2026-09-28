@@ -439,22 +439,21 @@ export async function getDashboardCharts(supabase: Supabase, orgId: string, reso
 
   const completionCampaignIds = (allCampaignsForCompletion ?? []).map((c: any) => c.id);
 
-  const [{ data: allCampaignLeads }, { data: completionLeads }] = await Promise.all([
-    campaignAgg.size
-      ? supabase.from('campaign_leads').select('campaign_id, status').in('campaign_id', [...campaignAgg.keys()])
-      : Promise.resolve({ data: [] as any[] }),
-    completionCampaignIds.length
-      ? supabase.from('campaign_leads').select('campaign_id, status, attempt_count').in('campaign_id', completionCampaignIds)
-      : Promise.resolve({ data: [] as any[] }),
-  ]);
+  // Performance fix: this used to fetch every campaign_leads ROW (twice -
+  // once per call site below) for every campaign the org has, with no
+  // limit - an org with large lead lists was pulling tens of thousands of
+  // raw rows on every dashboard load just to compute a few percentages
+  // ("dashboard takes 80 seconds to load"). One grouped SQL aggregate
+  // (00000000000059) over the union of both id sets replaces both raw
+  // fetches - a row per CAMPAIGN, never per lead.
+  const completionCampaignIdSet = new Set([...campaignAgg.keys(), ...completionCampaignIds]);
+  const { data: completionRows } = completionCampaignIdSet.size
+    ? await supabase.rpc('campaign_lead_completion_bulk', { p_campaign_ids: [...completionCampaignIdSet] })
+    : { data: [] as any[] };
+  const completionByCampaign = new Map(
+    ((completionRows as any[]) ?? []).map((r) => [r.campaign_id, { total: Number(r.total), called: Number(r.called), terminal: Number(r.terminal) }]),
+  );
 
-  const completionByCampaign = new Map<string, { total: number; terminal: number }>();
-  for (const cl of allCampaignLeads ?? []) {
-    const e = completionByCampaign.get(cl.campaign_id) ?? { total: 0, terminal: 0 };
-    e.total += 1;
-    if (['completed', 'failed', 'dnc', 'skipped'].includes(cl.status)) e.terminal += 1;
-    completionByCampaign.set(cl.campaign_id, e);
-  }
 
   const campaign_performance: CampaignPerformancePoint[] = [...campaignAgg.entries()].map(([campaignId, v]) => {
     const completion = completionByCampaign.get(campaignId);
@@ -468,15 +467,8 @@ export async function getDashboardCharts(supabase: Supabase, orgId: string, reso
     };
   });
 
-  const completionAgg = new Map<string, { total: number; called: number }>();
-  for (const cl of completionLeads ?? []) {
-    const e = completionAgg.get(cl.campaign_id) ?? { total: 0, called: 0 };
-    e.total += 1;
-    if (cl.attempt_count > 0) e.called += 1;
-    completionAgg.set(cl.campaign_id, e);
-  }
   const campaign_completion = (allCampaignsForCompletion ?? []).map((c: any) => {
-    const e = completionAgg.get(c.id) ?? { total: 0, called: 0 };
+    const e = completionByCampaign.get(c.id) ?? { total: 0, called: 0, terminal: 0 };
     return { campaign_id: c.id, campaign_name: c.name, total_leads: e.total, leads_called: e.called, completion_pct: pct(e.called, e.total) };
   });
 
@@ -568,11 +560,16 @@ export async function getCampaignAnalytics(supabase: Supabase, orgId: string, ca
     { avg: average(todayDurations), weight: todayCalls.length },
   ]);
 
-  const { data: campaignLeads } = await supabase.from('campaign_leads').select('status, attempt_count').eq('campaign_id', campaign.id);
-  const leads = campaignLeads ?? [];
-  const totalLeads = leads.length;
-  const terminalLeads = leads.filter((l: any) => ['completed', 'failed', 'dnc', 'skipped'].includes(l.status)).length;
-  const totalAttempts = leads.reduce((a: number, l: any) => a + (l.attempt_count ?? 0), 0);
+  // Performance fix: this used to fetch every campaign_leads ROW for this
+  // campaign with no limit, just to count/sum three numbers - same class
+  // of bug as getDashboardCharts's own fix just above (a large campaign's
+  // lead list made this analytics tab slow to load). One grouped SQL
+  // aggregate (00000000000059) instead.
+  const { data: completionRows } = await supabase.rpc('campaign_lead_completion_bulk', { p_campaign_ids: [campaign.id] });
+  const completion = (completionRows as any[] | null)?.[0];
+  const totalLeads = completion ? Number(completion.total) : 0;
+  const terminalLeads = completion ? Number(completion.terminal) : 0;
+  const totalAttempts = completion ? Number(completion.total_attempts) : 0;
 
   return {
     campaign_id: campaign.id,
