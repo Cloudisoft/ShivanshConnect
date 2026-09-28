@@ -102,6 +102,17 @@ function vapiWebhookUrl(): string | null {
  * conversation" with an automated IVR menu instead of navigating it
  * tersely, and failing to recognize a voicemail greeting on its own as a
  * fallback when Vapi's own voicemailDetection doesn't fire. */
+/** Vapi's documented stopSpeakingPlan: how much caller speech it takes to
+ * interrupt the assistant mid-sentence. Vapi's default (numWords: 0) stops
+ * on any voice activity at all, so a one-word interjection ("oh", "okay",
+ * "what?") or line noise cuts the assistant off mid-sentence. Production
+ * transcripts showed exactly that - replies chopped into fragments ("I'm
+ * calling to see whether you may" / "qualify for" / "free motor") and
+ * callers asking the same question twice because they never heard a
+ * complete answer. Requiring 2 words lets a real attempt to talk still
+ * interrupt, while backchannels and noise no longer do. */
+const STOP_SPEAKING_PLAN = { numWords: 2 };
+
 const BASELINE_CONVERSATION_INSTRUCTIONS = `Conversation style (always follow these, in addition to everything above):
 - Speak naturally, like a real person on the phone - contractions, brief pauses, natural phrasing. Never sound like you are reading a script verbatim.
 - Practice active listening: briefly acknowledge or react to what the caller just said before moving on to your next point. Never ignore a question or comment the caller made in order to continue a scripted line.
@@ -284,23 +295,13 @@ export class VapiProvider implements CallOrchestrationProvider {
       // NOT the fastest one available - Cartesia's default is an older
       // "sonic" model rather than the low-latency sonic-2 this platform's
       // own lib/voice/cartesia.ts already uses everywhere else (voice
-      // previews, cloning). Cartesia's sonic-2 is genuinely both its
-      // fastest AND its flagship-quality model, so no tradeoff there.
-      //
-      // ElevenLabs is a real tradeoff, and this used to default to its
-      // fastest tier (eleven_flash_v2_5) - a real production complaint
-      // ("client is complaining for low voice quality") traced directly
-      // to this: Flash noticeably sacrifices fidelity for the lowest
-      // possible latency, sounding more robotic than a live phone call
-      // conversation calls for. eleven_turbo_v2_5 is the documented
-      // middle tier - meaningfully better voice quality than Flash while
-      // still low-latency enough for real-time conversational use (unlike
-      // eleven_multilingual_v2, ElevenLabs' full-quality but
-      // noticeably-higher-latency model, which would reintroduce the slow-
-      // to-respond problem the original Flash choice was made to avoid).
+      // previews, cloning), and ElevenLabs' default is a quality-optimized
+      // model, not the latency-optimized Flash one. This is the single
+      // biggest TTS lever on the pause between a caller finishing a
+      // sentence and the assistant's reply starting to play.
       const fastModelByProvider: Record<string, string> = {
         cartesia: 'sonic-2',
-        elevenlabs: 'eleven_turbo_v2_5',
+        elevenlabs: 'eleven_flash_v2_5',
       };
       const fastModel = fastModelByProvider[config.voice.providerKey];
       if (fastModel) {
@@ -318,6 +319,7 @@ export class VapiProvider implements CallOrchestrationProvider {
     // this is what actually makes the assistant's turn-taking feel
     // humanlike instead of firing on the first micro-pause.
     payload.startSpeakingPlan = { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'vapi' } };
+    payload.stopSpeakingPlan = STOP_SPEAKING_PLAN;
     // Real field: ends the call if the caller goes silent for this long
     // (Vapi default is 30s; set explicitly here so a campaign never
     // leaves a call hung open indefinitely on a dead line).
@@ -484,8 +486,13 @@ export class VapiProvider implements CallOrchestrationProvider {
     // every future call too). Only sent when the caller actually resolved
     // an override - a plain call with neither leaves the assistant's own
     // stored firstMessage/system message untouched.
-    if (params.firstMessageOverride || params.systemPromptOverride) {
-      const assistantOverrides: Record<string, unknown> = {};
+    //
+    // stopSpeakingPlan is always sent here too (not just on the stored
+    // assistant) so it applies to every call immediately, including ones
+    // placed with assistants published before it existed - no republish
+    // needed.
+    {
+      const assistantOverrides: Record<string, unknown> = { stopSpeakingPlan: STOP_SPEAKING_PLAN };
       if (params.firstMessageOverride) assistantOverrides.firstMessage = params.firstMessageOverride;
       if (params.systemPromptOverride) {
         // Vapi requires BOTH `provider` and `model` on the override's model
