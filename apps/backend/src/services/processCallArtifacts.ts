@@ -190,12 +190,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchRecordingWithRetry(url: string): Promise<{ res: Response } | { error: string }> {
+/** Fetches the recording, following a redirect manually so the provider's
+ * API key is only ever sent to the provider itself, never to the signed
+ * storage URL it redirects to. */
+async function fetchRecordingOnce(url: string, headers?: Record<string, string>): Promise<Response> {
+  if (!headers) return fetch(url);
+  const res = await fetch(url, { headers, redirect: 'manual' });
+  const location = res.headers.get('location');
+  if (res.status >= 300 && res.status < 400 && location) return fetch(new URL(location, url).toString());
+  return res;
+}
+
+async function fetchRecordingWithRetry(url: string, headers?: Record<string, string>, retry = true): Promise<{ res: Response } | { error: string }> {
   let lastError: string | null = null;
-  for (let attempt = 0; attempt <= RECORDING_FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+  const attempts = retry ? RECORDING_FETCH_RETRY_DELAYS_MS.length : 0;
+  for (let attempt = 0; attempt <= attempts; attempt += 1) {
     if (attempt > 0) await sleep(RECORDING_FETCH_RETRY_DELAYS_MS[attempt - 1]);
     try {
-      const res = await fetch(url);
+      const res = await fetchRecordingOnce(url, headers);
       if (res.ok) return { res };
       lastError = `The provider's recording URL returned ${res.status}.`;
     } catch (err) {
@@ -205,7 +217,7 @@ async function fetchRecordingWithRetry(url: string): Promise<{ res: Response } |
   return { error: lastError ?? "The provider's recording URL could not be fetched." };
 }
 
-async function ingestRecording(supabase: Supabase, call: Record<string, any>, artifacts: CallArtifacts): Promise<void> {
+async function ingestRecording(supabase: Supabase, call: Record<string, any>, artifacts: CallArtifacts, retry = true): Promise<void> {
   if (!artifacts.recordingUrl) {
     await upsertRecordingFailed(supabase, call, 'No recording is available for this call.');
     return;
@@ -218,7 +230,10 @@ async function ingestRecording(supabase: Supabase, call: Record<string, any>, ar
     failure_reason: null,
   });
 
-  const attempt = await fetchRecordingWithRetry(artifacts.recordingUrl);
+  const download = artifacts.recordingDownload ?? null;
+  const attempt = download
+    ? await fetchRecordingWithRetry(download.url, download.headers, retry)
+    : await fetchRecordingWithRetry(artifacts.recordingUrl, undefined, retry);
   if ('error' in attempt) {
     await upsertRecordingFailed(supabase, call, attempt.error);
     return;
@@ -245,6 +260,28 @@ async function ingestRecording(supabase: Supabase, call: Record<string, any>, ar
     status: 'ready',
     failure_reason: null,
   });
+}
+
+/** Re-runs only the recording step for one call (the CDR download's
+ * on-demand recovery and recordingBackfillSweep.ts). Returns true when the
+ * recording is stored and ready. Never throws. */
+export async function reingestRecording(callId: string, options: { retry?: boolean } = {}): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  const { data: call } = await supabase.from('calls').select('*').eq('id', callId).maybeSingle();
+  if (!call) return false;
+  const providerCallId = call.engine === 'vapi' ? call.vapi_call_id : call.pipecat_call_id;
+  if (!providerCallId) return false;
+  try {
+    const provider = await resolveProviderForCall(supabase, call);
+    const artifacts = await provider.getArtifacts(providerCallId);
+    await ingestRecording(supabase, call, artifacts, options.retry ?? true);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('reingestRecording failed for call', callId, err);
+    return false;
+  }
+  const { data: recording } = await supabase.from('call_recordings').select('status').eq('call_id', callId).maybeSingle();
+  return recording?.status === 'ready';
 }
 
 /** The one entry point services/callTerminalHandler.ts schedules

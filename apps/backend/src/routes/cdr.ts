@@ -33,6 +33,7 @@ import { uuidSchema } from '../schemas/common.js';
 import { createExportSchema, listCdrQuerySchema, searchTranscriptQuerySchema } from '../schemas/cdr.js';
 import { buildCdrRows, fetchCdrCallsPage, type CdrFilters } from '../services/cdrQuery.js';
 import { queueCdrExport } from '../services/cdrExport.js';
+import { reingestRecording } from '../services/processCallArtifacts.js';
 import { getStorageAdapter, StorageObjectNotFoundError } from '../lib/storage/index.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
@@ -209,7 +210,14 @@ export async function cdrRoutes(app: FastifyInstance): Promise<void> {
     const { data: call } = await supabase.from('calls').select('id, organization_id').eq('id', callId).maybeSingle();
     if (!call || call.organization_id !== orgId) throw new NotFoundError('Call not found.');
 
-    const { data: recording } = await supabase.from('call_recordings').select('*').eq('call_id', callId).maybeSingle();
+    let { data: recording } = await supabase.from('call_recordings').select('*').eq('call_id', callId).maybeSingle();
+    if (!recording || recording.status !== 'ready' || !recording.storage_path) {
+      // Recover on demand: many recordings failed to download earlier
+      // (private provider storage) but are still fetchable now.
+      if (await reingestRecording(callId, { retry: false })) {
+        ({ data: recording } = await supabase.from('call_recordings').select('*').eq('call_id', callId).maybeSingle());
+      }
+    }
     if (!recording || recording.status !== 'ready' || !recording.storage_path) {
       throw new ValidationError('No recording is available for this call yet.');
     }
