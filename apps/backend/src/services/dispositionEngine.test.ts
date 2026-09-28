@@ -75,6 +75,10 @@ describe('dispositionEngine.decideDisposition - the deterministic rules engine',
     expect(long.code).toBe('HUNG_UP');
   });
 
+  it('assigns HUNG_UP for noCallerAudioSweep.ts\'s own "no_customer_audio" ended_reason - our own backend backstop for the same underlying condition', () => {
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 90, endedReason: 'no_customer_audio' })).code).toBe('HUNG_UP');
+  });
+
   it('assigns DISCONNECTED only for an explicit technical-failure ended_reason (never no-answer/not-in-service, never a bare zero-duration default)', () => {
     expect(decideDisposition(signals({ status: 'failed', durationSeconds: 0, endedReason: 'pipeline-error' })).code).toBe('DISCONNECTED');
     expect(decideDisposition(signals({ status: 'failed', durationSeconds: 0, endedReason: 'busy' })).code).toBe('DISCONNECTED');

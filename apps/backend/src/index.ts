@@ -49,6 +49,7 @@ import { startCampaignDispatcher } from './services/campaignDispatcher.js';
 import { startAnalyticsAggregator } from './services/analyticsAggregator.js';
 import { startCallReconciliation } from './services/callReconciliation.js';
 import { startDialTimeoutSweep } from './services/dialTimeoutSweep.js';
+import { startNoCallerAudioSweep } from './services/noCallerAudioSweep.js';
 import { runCallEndDataRepair } from './services/callEndDataRepair.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
@@ -376,6 +377,15 @@ async function main() {
     // this is a genuinely different, much faster, unambiguous rule than
     // that one (and never touches a call that's actually connected).
     startDialTimeoutSweep();
+    // Explicit request: "assistant didn't get sound or voice on calls
+    // please resolve this... end the call without wasting any more
+    // credits." A call that DID connect but has never had one real caller
+    // transcript segment after a generous window has no audio flowing
+    // from the caller's side at all - see services/noCallerAudioSweep.ts's
+    // header for why this is a different, narrower condition than
+    // dialTimeoutSweep.ts's pre-connect rule above (this one only ever
+    // touches a call that already has answered_at set).
+    startNoCallerAudioSweep();
     // One-off (self-limiting) repair for historical calls stuck with a
     // blank End Time/Duration by the status-update/end-of-call-report
     // race bug fixed in routes/webhooks.ts - see services/
