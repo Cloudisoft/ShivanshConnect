@@ -189,6 +189,7 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       return reply.status(200).send({ received: true, deduplicated: true });
     }
 
+    let toolResults: Array<{ toolCallId: string; result: string }> = [];
     try {
       if (!call) {
         // A webhook for a call this backend doesn't know about (e.g. a
@@ -288,7 +289,10 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
         case 'tool-calls': {
           // Phase 8: real tool-call handling (spec 17/53/60) -
           // schedule_callback / request_dnc, see services/toolCallHandler.ts.
-          await processToolCalls(supabase, call, extractVapiToolCalls(message));
+          // search_knowledge_base needs its answer back in this response
+          // (Vapi's server-tool contract: { results: [{ toolCallId, result }] }).
+          const toolResult = await processToolCalls(supabase, call, extractVapiToolCalls(message));
+          toolResults = toolResult.results;
           break;
         }
         default:
@@ -296,7 +300,7 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       }
 
       await markWebhookProcessed(supabase, webhookEventId, call.organization_id);
-      return reply.status(200).send({ received: true });
+      return reply.status(200).send(toolResults.length > 0 ? { received: true, results: toolResults } : { received: true });
     } catch (err) {
       await markWebhookFailed(supabase, webhookEventId, err instanceof Error ? err.message : 'Unknown webhook processing error.');
       // Still a 200: Vapi should not aggressively retry-storm a

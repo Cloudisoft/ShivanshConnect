@@ -55,6 +55,7 @@
  * never a fabricated assistant/call.
  */
 
+import { CONVERSATION_GUIDANCE, personalityLines } from '../callGuidance.js';
 import {
   type AssistantConfig,
   type AssistantResult,
@@ -157,16 +158,29 @@ export function buildTransferTool(destinationE164: string): Record<string, unkno
   };
 }
 
-const BASELINE_CONVERSATION_INSTRUCTIONS = `Conversation style (always follow these, in addition to everything above):
-- Speak naturally, like a real person on the phone - contractions, brief pauses, natural phrasing. Never sound like you are reading a script verbatim.
-- Practice active listening: briefly acknowledge or react to what the caller just said before moving on to your next point. Never ignore a question or comment the caller made in order to continue a scripted line.
-- Be warm, patient, and polite even if the caller is short, confused, or pushes back. Never sound rushed or robotic.
-- Keep your turns concise - a sentence or two at a time, not a monologue - and pause to let the caller respond.
-- If you reach an automated menu (IVR) that lists numbered/keyword options ("for sales, say 1 or press 1"; "for support, say support"), respond with ONLY the single option that gets you to a real person or the right department - never explain who you are or why you're calling to a menu, and never keep talking after selecting an option. Wait silently for the menu to respond.
-- If you reach a gatekeeper (a receptionist or human assistant screening the call) who asks who you are or why you're calling before connecting you, answer clearly and naturally in one short sentence, then wait - do not repeat yourself or hang up early. It can take a few seconds to be connected.
-- Recognize a voicemail/answering machine greeting on your own, even if you are not explicitly told this call went to voicemail: it is a single uninterrupted recorded message (e.g. "You've reached ___, please leave a message after the tone") with no menu options and no response to anything you say. The moment you recognize this, stop trying to have a conversation with it - do not repeat your greeting, ask questions, or wait for a reply that will never come. If a voicemail message is configured for this call, deliver it once, concisely, after the beep, then stop talking. If none is configured, simply stop talking.
-- Never mistake an IVR menu or a voicemail greeting for a real person, and never mistake a real person's actual reply for a menu prompt - these three cases sound different (a menu lists options and pauses for input; voicemail is one long uninterrupted recording; a real person responds specifically to what you just said) and call for entirely different behavior as described above.
-- Once a real person is on the line, engage with them naturally as the actual conversation - do not restart your introduction from scratch if you already gave it to a gatekeeper.`;
+/** Function tool the model calls to look things up in the campaign's
+ * knowledge base mid-call. Answered synchronously by routes/webhooks.ts
+ * (tool-calls -> services/toolCallHandler.ts search_knowledge_base). */
+export function buildKnowledgeBaseTool(serverUrl: string | null): Record<string, unknown> {
+  const tool: Record<string, unknown> = {
+    type: 'function',
+    function: {
+      name: 'search_knowledge_base',
+      description:
+        "Look up facts in this company's knowledge base (services, process, eligibility, timelines, costs, FAQs). Call it whenever the caller asks something specific you aren't certain of from your instructions.",
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string', description: "A short search query for what the caller wants to know." } },
+        required: ['query'],
+      },
+    },
+    // Silent lookup - the assistant just answers once the result is back.
+    messages: [{ type: 'request-start', content: '', blocking: false }],
+  };
+  if (serverUrl) tool.server = { url: serverUrl };
+  return tool;
+}
+
 
 interface VapiArtifactMessage {
   role?: string; // 'assistant' | 'bot' | 'user' | 'customer' | ...
@@ -296,11 +310,7 @@ export class VapiProvider implements CallOrchestrationProvider {
    * forwardingPhoneNumber (transfer_to, when configured) and
    * maxDurationSeconds. */
   private toVapiAssistantPayload(config: AssistantConfig): Record<string, unknown> {
-    const traitLines = [
-      config.personality.tone ? `Tone: ${config.personality.tone}.` : null,
-      config.personality.personality_traits.length ? `Personality traits: ${config.personality.personality_traits.join(', ')}.` : null,
-      config.personality.behavior_traits.length ? `Behavior: ${config.personality.behavior_traits.join(', ')}.` : null,
-    ].filter(Boolean);
+    const traitLines = personalityLines(config.personality);
     // Baseline conversational instructions appended to every assistant's
     // system prompt, regardless of what any individual agent's own prompt
     // says - applies automatically to every existing agent the next time
@@ -310,7 +320,7 @@ export class VapiProvider implements CallOrchestrationProvider {
     // than like a natural conversation, not acknowledging what the caller
     // actually just said before moving on, and mishandling a gatekeeper/
     // IVR system that asks for a name before connecting to a real person.
-    const systemContent = [config.systemPrompt, ...traitLines, BASELINE_CONVERSATION_INSTRUCTIONS].join('\n\n');
+    const systemContent = [config.systemPrompt, ...traitLines, CONVERSATION_GUIDANCE].join('\n\n');
 
     const payload: Record<string, unknown> = {
       name: config.name,
@@ -545,7 +555,11 @@ export class VapiProvider implements CallOrchestrationProvider {
       // not in Vapi's current API, so the model had nothing to call and
       // only ever *said* it was transferring.
       const transferDestination = params.transferDestinationE164 && /^\+[1-9]\d{6,14}$/.test(params.transferDestinationE164) ? params.transferDestinationE164 : null;
-      if (transferDestination) assistantOverrides['tools:append'] = [buildTransferTool(transferDestination)];
+      const appendedTools: Record<string, unknown>[] = [];
+      if (transferDestination) appendedTools.push(buildTransferTool(transferDestination));
+      // The campaign's knowledge base, searchable live during the call.
+      if (params.knowledgeBaseSearch) appendedTools.push(buildKnowledgeBaseTool(vapiWebhookUrl()));
+      if (appendedTools.length > 0) assistantOverrides['tools:append'] = appendedTools;
       if (params.firstMessageOverride) assistantOverrides.firstMessage = params.firstMessageOverride;
       if (params.systemPromptOverride) {
         // Vapi requires BOTH `provider` and `model` on the override's model
@@ -557,6 +571,10 @@ export class VapiProvider implements CallOrchestrationProvider {
         assistantOverrides.model = {
           provider: params.llmProvider ?? 'openai',
           model: params.llmModel ?? 'gpt-4o-mini',
+          // The override replaces the whole model block, so the agent's
+          // own temperature/max tokens are repeated here too.
+          ...(params.llmTemperature != null ? { temperature: params.llmTemperature } : {}),
+          ...(params.llmMaxTokens != null ? { maxTokens: params.llmMaxTokens } : {}),
           messages: [{ role: 'system', content: transferDestination ? `${params.systemPromptOverride}${TRANSFER_TOOL_INSTRUCTION}` : params.systemPromptOverride }],
         };
       }

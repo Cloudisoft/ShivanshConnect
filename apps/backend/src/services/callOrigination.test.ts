@@ -129,7 +129,46 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     expect(createCall).toHaveBeenCalledTimes(1);
     const params = createCall.mock.calls[0][0];
     expect(params.firstMessageOverride).toBe('Hi, am I speaking with Priya?');
-    expect(params.systemPromptOverride).toBe('You are a helpful sales agent. Reach out to priya@acme.example if needed.');
+    expect(params.systemPromptOverride).toContain('You are a helpful sales agent. Reach out to priya@acme.example if needed.');
+  });
+
+  it('a campaign call carries its script, knowledge base tool and the conversation rules in the per-call prompt', async () => {
+    const { createCall } = fakeVapiProvider();
+    const leadId = randomUUID();
+    fake.tables.leads.push({ id: leadId, organization_id: orgId, first_name: 'Priya', last_name: null, phone_normalized: '+14845552222', email: null, custom_fields: {} });
+    const scriptId = randomUUID();
+    fake.tables.scripts.push({ id: scriptId, organization_id: orgId, agent_id: agentId, name: 'MVA Script', content: '## 1. OPENING\nHi, is this {{first_name}}? This is {{agent_name}}.\nAsk about {{accident_date}}.' });
+    const kbId = randomUUID();
+    fake.tables.knowledge_bases.push({ id: kbId, organization_id: orgId, agent_id: agentId, name: 'KB' });
+    fake.tables.knowledge_documents.push({ id: randomUUID(), knowledge_base_id: kbId, organization_id: orgId, file_name: 'manual.docx', status: 'ready' });
+    fake.tables.ai_agent_versions[0].vapi_assistant_id = 'asst_existing';
+    fake.tables.ai_agent_versions[0].personality = { tone: 'friendly', personality_traits: ['calm'], behavior_traits: [] };
+    fake.tables.ai_agent_versions[0].llm_temperature = 0.4;
+
+    await originateCall({
+      organizationId: orgId,
+      engine: 'vapi',
+      agent: { id: agentId },
+      version: fake.tables.ai_agent_versions[0],
+      phoneNumber: fake.tables.phone_numbers[0],
+      customerNumber: '+14845552222',
+      leadId,
+      campaignId: null,
+      createdBy: null,
+      scriptIdOverride: scriptId,
+      knowledgeBaseIdsOverride: [kbId],
+    });
+
+    const params = createCall.mock.calls[0][0];
+    const prompt: string = params.systemPromptOverride;
+    expect(prompt).toContain('Hi, is this Priya?');
+    expect(prompt).not.toContain('{{accident_date}}');
+    expect(prompt).toContain('Call script');
+    expect(prompt).toContain('Tone: friendly.');
+    expect(prompt).toContain('search_knowledge_base');
+    expect(prompt).toContain('Conversation style');
+    expect(params.knowledgeBaseSearch).toBe(true);
+    expect(params.llmTemperature).toBe(0.4);
   });
 
   it('{{agent_name}} in a named lead\'s system prompt/greeting renders to the VOICE\'s real name, not the AI agent\'s own name or literal text', async () => {
@@ -159,7 +198,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     // agentId's row (set up in beforeEach) has name 'Sales Agent' - NOT
     // what should appear here. The voice ('Sarah') is the real source of
     // truth for who the caller hears introduce themselves as.
-    expect(params.systemPromptOverride).toBe('You are Sarah, a helpful sales agent.');
+    expect(params.systemPromptOverride).toContain('You are Sarah, a helpful sales agent.');
     expect(params.firstMessageOverride).toBe('Hi, this is Sarah - am I speaking with Priya?');
   });
 
@@ -191,7 +230,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     });
 
     const params = createCall.mock.calls[0][0];
-    expect(params.systemPromptOverride).toBe('You are Override Voice.');
+    expect(params.systemPromptOverride).toContain('You are Override Voice.');
     expect(params.firstMessageOverride).toBe('Hi, this is Override Voice.');
   });
 

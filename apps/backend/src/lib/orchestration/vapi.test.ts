@@ -254,6 +254,31 @@ describe('VapiProvider', () => {
     expect(overrides.model.messages[0].content).toContain('call the transferCall tool');
   });
 
+  it('createCall() adds a live search_knowledge_base tool and keeps the agent temperature when the call has a knowledge base', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_abc', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new VapiProvider('sk-test').createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: null,
+      systemPromptOverride: 'You are a helpful sales agent.',
+      llmTemperature: 0.4,
+      knowledgeBaseSearch: true,
+    });
+
+    const overrides = JSON.parse(fetchMock.mock.calls[0][1].body).assistantOverrides;
+    expect(overrides['tools:append']).toHaveLength(1);
+    expect(overrides['tools:append'][0].type).toBe('function');
+    expect(overrides['tools:append'][0].function.name).toBe('search_knowledge_base');
+    expect(overrides.model.temperature).toBe(0.4);
+  });
+
   it('createCall() adds no transfer tool when the call has no valid transfer destination', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_abc', status: 'queued' }) });
     vi.stubGlobal('fetch', fetchMock);

@@ -42,6 +42,9 @@ describe('autoTransfer', () => {
       "I'll transfer you right away.",
       'Connecting you now, one moment.',
       'Transferring the call now.',
+      'Okay, I am transferring the call.',
+      "Perfect, I'm going to get you connected with a specialist.",
+      'Please hold while I put you through.',
     ]) {
       expect(announcesTransfer(text)).toBe(true);
     }

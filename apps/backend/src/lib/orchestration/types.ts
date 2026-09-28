@@ -178,6 +178,14 @@ export interface CreateCallParams {
    * "assistantOverrides.model.model must be one of the following
    * values: ..." even though the field was never sent at all. */
   llmModel?: string | null;
+  /** The agent version's own temperature / max tokens - repeated on the
+   * per-call model override, which replaces the assistant's whole model
+   * block (Vapi only). */
+  llmTemperature?: number | null;
+  llmMaxTokens?: number | null;
+  /** True when this call has a knowledge base to search: the provider
+   * gives the assistant a live search_knowledge_base tool (Vapi only). */
+  knowledgeBaseSearch?: boolean;
 }
 
 export interface CreateCallResult {

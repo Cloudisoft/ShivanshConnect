@@ -21,6 +21,8 @@
  * An unrecognized function name is recorded (call_events) and ignored -
  * never crashes the webhook.
  */
+import { getLlmProvider } from '../lib/llm/index.js';
+import { knowledgeBaseIdsForCall } from './callKnowledge.js';
 import { createCallback } from './callbackScheduler.js';
 import { handleDncRequest } from './dncToolHandler.js';
 import type { getSupabaseAdmin } from '../lib/supabase.js';
@@ -75,6 +77,62 @@ export function extractPipecatToolCalls(body: Record<string, any>): NormalizedTo
 export interface ProcessToolCallsResult {
   handled: number;
   skipped: number;
+  /** Vapi's synchronous server-tool response entries - only
+   * search_knowledge_base returns one (the model needs its answer);
+   * schedule_callback/request_dnc are side effects. */
+  results: Array<{ toolCallId: string; result: string }>;
+}
+
+const KB_NO_RESULTS = 'Nothing in the knowledge base covers that.';
+const KB_UNAVAILABLE = 'The knowledge base is not available right now.';
+
+/** Live knowledge-base lookup for one call: embeds the query and runs the
+ * same pgvector search the agent's "test your knowledge base" uses, over
+ * the knowledge bases this call may use (campaign's, else the agent's).
+ * Returns plain text for the model to answer from. */
+export async function searchKnowledgeBaseForCall(supabase: Supabase, call: Record<string, any>, query: string): Promise<string> {
+  if (!query.trim()) return KB_NO_RESULTS;
+  const provider = getLlmProvider();
+  if (!provider.isConfigured) return KB_UNAVAILABLE;
+
+  let kbIdsOverride: string[] | null = null;
+  if (call.campaign_id) {
+    const { data: campaign } = await supabase.from('campaigns').select('current_version_id').eq('id', call.campaign_id).maybeSingle();
+    if (campaign?.current_version_id) {
+      const { data: version } = await supabase.from('campaign_versions').select('knowledge_base_ids').eq('id', campaign.current_version_id).maybeSingle();
+      kbIdsOverride = version?.knowledge_base_ids ?? null;
+    }
+  }
+  const kbIds = await knowledgeBaseIdsForCall(supabase, call.organization_id, call.ai_agent_id ?? null, kbIdsOverride);
+  if (kbIds.length === 0) return KB_NO_RESULTS;
+
+  // match_knowledge_chunks scopes by the knowledge base's owning agent
+  // (null = organization-wide), so search once per owner and keep the best.
+  const { data: kbs } = await supabase.from('knowledge_bases').select('id, agent_id').in('id', kbIds).eq('organization_id', call.organization_id);
+  const owners = [...new Set((kbs ?? []).map((kb: { agent_id: string | null }) => kb.agent_id ?? null))];
+  if (owners.length === 0) return KB_NO_RESULTS;
+
+  const { embeddings } = await provider.embedText([query]);
+  const queryEmbedding = embeddings[0];
+  if (!queryEmbedding) return KB_UNAVAILABLE;
+
+  const matches: Array<{ content: string; similarity: number }> = [];
+  for (const owner of owners) {
+    const { data, error } = await supabase.rpc('match_knowledge_chunks', {
+      query_embedding: queryEmbedding,
+      match_organization_id: call.organization_id,
+      match_agent_id: owner,
+      match_count: 4,
+    });
+    if (error) throw error;
+    matches.push(...((data ?? []) as Array<{ content: string; similarity: number }>));
+  }
+  if (matches.length === 0) return KB_NO_RESULTS;
+  return matches
+    .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
+    .slice(0, 4)
+    .map((m) => m.content.trim())
+    .join('\n\n---\n\n');
 }
 
 /**
@@ -86,6 +144,7 @@ export interface ProcessToolCallsResult {
 export async function processToolCalls(supabase: Supabase, call: Record<string, any>, toolCalls: NormalizedToolCall[]): Promise<ProcessToolCallsResult> {
   let handled = 0;
   let skipped = 0;
+  const results: ProcessToolCallsResult['results'] = [];
 
   for (const toolCall of toolCalls) {
     try {
@@ -111,6 +170,18 @@ export async function processToolCalls(supabase: Supabase, call: Record<string, 
           createdBy: null,
         });
         handled += 1;
+      } else if (toolCall.name === 'search_knowledge_base') {
+        const query = typeof toolCall.arguments.query === 'string' ? toolCall.arguments.query : '';
+        let answer: string;
+        try {
+          answer = await searchKnowledgeBaseForCall(supabase, call, query);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error('search_knowledge_base failed for call', call.id, err);
+          answer = KB_UNAVAILABLE;
+        }
+        if (toolCall.id) results.push({ toolCallId: toolCall.id, result: answer });
+        handled += 1;
       } else if (toolCall.name === 'request_dnc') {
         const reason = typeof toolCall.arguments.reason === 'string' ? toolCall.arguments.reason : null;
         await handleDncRequest(supabase, call, reason);
@@ -126,5 +197,5 @@ export async function processToolCalls(supabase: Supabase, call: Record<string, 
     }
   }
 
-  return { handled, skipped };
+  return { handled, skipped, results };
 }

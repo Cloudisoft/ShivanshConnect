@@ -17,6 +17,8 @@
  * the local `calls` row is inserted in 'queued' status BEFORE the
  * provider's createCall() is ever invoked.
  */
+import { knowledgeBaseIdsForCall } from './callKnowledge.js';
+import { buildScriptSection, composeSystemPrompt, CONVERSATION_GUIDANCE, KNOWLEDGE_BASE_INSTRUCTION, personalityLines } from '../lib/callGuidance.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ValidationError } from '../lib/errors.js';
 import { writeAuditLog } from '../lib/audit.js';
@@ -171,7 +173,7 @@ async function resolveCallPersonalization(
   leadId: string | null,
   campaignId: string | null,
   actualVoiceName: string | null,
-): Promise<{ firstMessage: string; systemPrompt: string }> {
+): Promise<{ firstMessage: string; systemPrompt: string; context: PromptVariableContext }> {
   const { data: lead } = leadId
     ? await supabase
         .from('leads')
@@ -209,7 +211,7 @@ async function resolveCallPersonalization(
     // rendered live against this lead's real data (e.g. "Hi, am I
     // speaking with {{first_name}}?").
     const firstMessage = renderTemplate(version.greeting_template ?? '', context);
-    return { firstMessage, systemPrompt: renderedSystemPrompt };
+    return { firstMessage, systemPrompt: renderedSystemPrompt, context };
   }
 
   // Unnamed lead, or no lead at all (a manual test call): never render
@@ -235,7 +237,7 @@ async function resolveCallPersonalization(
   const firstMessage = companyName
     ? `Hi, my name is ${voiceName} calling from ${companyName}. How are you doing today?`
     : `Hi, my name is ${voiceName}. How are you doing today?`;
-  return { firstMessage, systemPrompt: `${renderedSystemPrompt}${ASK_CALLER_NAME_INSTRUCTION}` };
+  return { firstMessage, systemPrompt: `${renderedSystemPrompt}${ASK_CALLER_NAME_INSTRUCTION}`, context };
 }
 
 /** A campaign's name as it should be spoken to a caller: duplicate
@@ -334,6 +336,54 @@ export interface OriginateCallParams {
     leave_voicemail: boolean;
     background_noise: BackgroundNoise | null;
   } | null;
+  /** Campaign version's script_id (null = the campaign chose none).
+   * Omitted for a manual call, which uses the agent's own script. */
+  scriptIdOverride?: string | null;
+  /** Campaign version's knowledge_base_ids. Empty/omitted falls back to
+   * the agent's own knowledge bases. */
+  knowledgeBaseIdsOverride?: string[] | null;
+}
+
+export interface CallScriptAndKnowledge {
+  scriptContent: string | null;
+  hasKnowledgeBase: boolean;
+}
+
+/** The script and knowledge base this call should use: the campaign
+ * version's own script_id / knowledge_base_ids when the call comes from a
+ * campaign, otherwise the agent's own most recent script and its attached
+ * knowledge bases. A knowledge base only counts when it has at least one
+ * searchable (embedded) chunk. */
+export async function resolveCallScriptAndKnowledge(
+  supabase: Supabase,
+  orgId: string,
+  agentId: string,
+  scriptIdOverride: string | null | undefined,
+  knowledgeBaseIdsOverride: string[] | null | undefined,
+): Promise<CallScriptAndKnowledge> {
+  let scriptContent: string | null = null;
+  if (scriptIdOverride) {
+    const { data } = await supabase.from('scripts').select('content').eq('id', scriptIdOverride).eq('organization_id', orgId).maybeSingle();
+    scriptContent = data?.content ?? null;
+  } else if (scriptIdOverride === undefined) {
+    const { data } = await supabase
+      .from('scripts')
+      .select('content')
+      .eq('organization_id', orgId)
+      .eq('agent_id', agentId)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    scriptContent = data?.content ?? null;
+  }
+
+  const kbIds = await knowledgeBaseIdsForCall(supabase, orgId, agentId, knowledgeBaseIdsOverride);
+  let hasKnowledgeBase = false;
+  if (kbIds.length > 0) {
+    const { data: docs } = await supabase.from('knowledge_documents').select('id').in('knowledge_base_id', kbIds).eq('status', 'ready').limit(1);
+    hasKnowledgeBase = (docs ?? []).length > 0;
+  }
+  return { scriptContent, hasKnowledgeBase };
 }
 
 export interface OriginateCallResult {
@@ -349,15 +399,19 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
 
   const transferDestination = resolveTransferDestination(version, params.transferDestinationOverride);
   const actualVoice = await resolveActualVoice(supabase, orgId, version, params.voiceOverride ?? null);
-  const { firstMessage: firstMessageOverride, systemPrompt: systemPromptOverride } = await resolveCallPersonalization(
-    supabase,
-    orgId,
-    agent,
-    version,
-    leadId,
-    campaignId,
-    actualVoice.name,
-  );
+  const personalization = await resolveCallPersonalization(supabase, orgId, agent, version, leadId, campaignId, actualVoice.name);
+  const firstMessageOverride = personalization.firstMessage;
+  const scriptAndKnowledge = await resolveCallScriptAndKnowledge(supabase, orgId, agent.id, params.scriptIdOverride, params.knowledgeBaseIdsOverride);
+  // The per-call prompt replaces the assistant's stored one, so it carries
+  // everything: the agent's prompt, personality, the campaign script, the
+  // knowledge-base instruction and the conversation-style rules.
+  const systemPromptOverride = composeSystemPrompt([
+    personalization.systemPrompt,
+    ...personalityLines(version.personality),
+    buildScriptSection(scriptAndKnowledge.scriptContent, personalization.context),
+    scriptAndKnowledge.hasKnowledgeBase && engine === 'vapi' ? KNOWLEDGE_BASE_INSTRUCTION : null,
+    CONVERSATION_GUIDANCE,
+  ]);
 
   const { data: call, error: insertError } = await supabase
     .from('calls')
@@ -424,6 +478,9 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
         systemPromptOverride,
         llmProvider: version.llm_provider,
         llmModel: version.llm_model,
+        llmTemperature: version.llm_temperature ?? null,
+        llmMaxTokens: version.llm_max_tokens ?? null,
+        knowledgeBaseSearch: scriptAndKnowledge.hasKnowledgeBase,
       });
 
       await supabase.from('calls').update({ vapi_call_id: created.providerCallId, started_at: new Date().toISOString() }).eq('id', call.id);
