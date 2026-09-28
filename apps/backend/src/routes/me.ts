@@ -6,6 +6,7 @@ import { ok } from '../lib/response.js';
 import { NotFoundError } from '../lib/errors.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
+import { warmDashboard } from './dashboard.js';
 
 const updateSelfSchema = z
   .object({
@@ -30,6 +31,10 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     ]);
     if (orgError || !org) throw new NotFoundError('Organization not found.');
     if (userError || !userRow) throw new NotFoundError('User not found.');
+
+    // The dashboard is the first page after sign-in - start computing it
+    // now so it's ready by the time the browser asks for it.
+    if (ctx.permissions.includes('analytics.view')) warmDashboard(ctx.organizationId);
 
     return ok({
       user: userRow,

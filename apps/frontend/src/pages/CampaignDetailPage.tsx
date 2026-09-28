@@ -265,7 +265,6 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
     setVoiceId(v?.voice_id ?? '');
     setScriptId(v?.script_id ?? '');
     setKbIds(v?.knowledge_base_ids ?? []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionId]);
 
   const existingDraftId = campaign.draft_version?.id ?? null;

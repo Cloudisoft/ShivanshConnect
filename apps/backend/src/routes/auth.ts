@@ -11,7 +11,7 @@ import { generateUniqueOrgSlug } from '../lib/slug.js';
 import { getEnv } from '../env.js';
 import { ok } from '../lib/response.js';
 import { AppError, ConflictError, NotFoundError, UnauthorizedError, ValidationError } from '../lib/errors.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, forgetVerifiedToken } from '../middleware/auth.js';
 import { writeAuditLog } from '../lib/audit.js';
 
 const AUTH_RATE_LIMIT = {
@@ -145,6 +145,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const authHeader = req.headers.authorization!;
     const token = authHeader.slice('Bearer '.length).trim();
     const supabaseAdmin = getSupabaseAdmin();
+    forgetVerifiedToken(token);
     await supabaseAdmin.auth.admin.signOut(token, 'global').catch(() => undefined);
     return ok({ signed_out: true });
   });

@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { createHash } from 'node:crypto';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { loadUserContext } from '../lib/permissions.js';
 import { ForbiddenError, UnauthorizedError } from '../lib/errors.js';
@@ -9,6 +10,55 @@ import { ForbiddenError, UnauthorizedError } from '../lib/errors.js';
  * organization_id + permission set to req.user. Any route that needs an
  * authenticated caller registers this as a preHandler.
  */
+/** Verified tokens, keyed by SHA-256 of the token (the token itself is
+ * never kept). Every API request used to make its own network round trip
+ * to Supabase Auth; a page load makes several requests with the same
+ * token, so each token is verified once and trusted for up to
+ * TOKEN_CACHE_TTL_MS, never past its own `exp`. Account status/role
+ * changes are still enforced through loadUserContext on every request. */
+const TOKEN_CACHE_TTL_MS = 60_000;
+const TOKEN_CACHE_MAX = 5_000;
+const verifiedTokens = new Map<string, { userId: string; expiresAt: number }>();
+
+function tokenExpiryMs(token: string): number | null {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as { exp?: number };
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+async function verifyToken(token: string): Promise<string | null> {
+  const key = createHash('sha256').update(token).digest('hex');
+  const now = Date.now();
+  const cached = verifiedTokens.get(key);
+  if (cached && cached.expiresAt > now) return cached.userId;
+
+  const { data, error } = await getSupabaseAdmin().auth.getUser(token);
+  if (error || !data?.user) {
+    verifiedTokens.delete(key);
+    return null;
+  }
+  const exp = tokenExpiryMs(token);
+  const expiresAt = Math.min(now + TOKEN_CACHE_TTL_MS, exp ?? now + TOKEN_CACHE_TTL_MS);
+  if (expiresAt > now) {
+    if (verifiedTokens.size >= TOKEN_CACHE_MAX) verifiedTokens.clear();
+    verifiedTokens.set(key, { userId: data.user.id, expiresAt });
+  }
+  return data.user.id;
+}
+
+/** Sign-out: this token must stop working immediately. */
+export function forgetVerifiedToken(token: string): void {
+  verifiedTokens.delete(createHash('sha256').update(token).digest('hex'));
+}
+
+/** Tests: forget every cached token verification. */
+export function clearVerifiedTokenCache(): void {
+  verifiedTokens.clear();
+}
+
 export async function authenticate(req: FastifyRequest, _reply: FastifyReply): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -19,13 +69,12 @@ export async function authenticate(req: FastifyRequest, _reply: FastifyReply): P
     throw new UnauthorizedError('Missing bearer token.');
   }
 
-  const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data?.user) {
+  const userId = await verifyToken(token);
+  if (!userId) {
     throw new UnauthorizedError('Your session is invalid or has expired. Please sign in again.');
   }
 
-  const ctx = await loadUserContext(data.user.id);
+  const ctx = await loadUserContext(userId);
   if (!ctx) {
     throw new UnauthorizedError('No account was found for this session.');
   }
