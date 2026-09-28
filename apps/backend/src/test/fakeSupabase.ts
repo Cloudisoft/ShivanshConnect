@@ -991,6 +991,29 @@ export function createFakeSupabase() {
   }
 
   /**
+   * Minimal stand-in for supabase.rpc('campaign_lead_completion_bulk', ...)
+   * - see 00000000000059_campaign_lead_completion_bulk_fn.sql. Same
+   * conditional-aggregate logic as the real SQL, grouped by campaign_id.
+   */
+  function campaignLeadCompletionBulk(args: { p_campaign_ids: string[] }): { data: Row[]; error: null } {
+    const ids = new Set(args.p_campaign_ids);
+    const byCampaign = new Map<string, { total: number; called: number; terminal: number; total_attempts: number }>();
+    for (const row of tables.campaign_leads) {
+      const campaignId = row.campaign_id as string;
+      if (!ids.has(campaignId)) continue;
+      const e = byCampaign.get(campaignId) ?? { total: 0, called: 0, terminal: 0, total_attempts: 0 };
+      e.total += 1;
+      const attemptCount = (row.attempt_count as number) ?? 0;
+      if (attemptCount > 0) e.called += 1;
+      if (['completed', 'failed', 'dnc', 'skipped'].includes(row.status as string)) e.terminal += 1;
+      e.total_attempts += attemptCount;
+      byCampaign.set(campaignId, e);
+    }
+    const data = Array.from(byCampaign.entries()).map(([campaign_id, e]) => ({ campaign_id, ...e }));
+    return { data, error: null };
+  }
+
+  /**
    * Minimal stand-ins for supabase.rpc('sms_campaign_message_status_counts_bulk', ...)
    * and ('email_campaign_message_status_counts_bulk', ...) - see
    * 00000000000055_messaging_counts_bulk_fns.sql. Plain GROUP BY against
@@ -1303,6 +1326,9 @@ export function createFakeSupabase() {
       }
       if (fnName === 'campaign_active_call_counts_bulk') {
         return campaignActiveCallCountsBulk(args as any);
+      }
+      if (fnName === 'campaign_lead_completion_bulk') {
+        return campaignLeadCompletionBulk(args as any);
       }
       if (fnName === 'lead_list_member_counts_bulk') {
         return leadListMemberCountsBulk(args as any);
