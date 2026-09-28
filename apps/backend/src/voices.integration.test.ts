@@ -185,13 +185,15 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     expect(syncRes.statusCode).toBe(200);
     expect(syncRes.json().data.created).toBe(2);
 
-    const listA = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
+    // Only English Cartesia voices stay active (services/voiceCatalog.ts), so
+    // synced ElevenLabs voices are listed under status=inactive.
+    const listA = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenA}` } });
     expect(listA.json().data).toHaveLength(2);
     expect(listA.json().data.every((v: any) => v.requires_external_hosting === false)).toBe(true);
 
     // Org B never connected ElevenLabs and never synced - its voice list
     // must stay empty even though org A's sync just ran.
-    const listB = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenB}` } });
+    const listB = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenB}` } });
     expect(listB.statusCode).toBe(200);
     expect(listB.json().data).toHaveLength(0);
     const catalogB = await app.inject({ method: 'GET', url: '/api/v1/voice-providers', headers: { authorization: `Bearer ${tokenB}` } });
@@ -284,7 +286,7 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     });
     expect(syncRes.json().data.created).toBe(2);
 
-    const listA = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
+    const listA = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenA}` } });
     const [voice1, voice2] = listA.json().data;
 
     // Org B cannot delete Org A's voices by id - scoped out, affected=0.
@@ -296,7 +298,7 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     });
     expect(crossOrgAttempt.statusCode).toBe(200);
     expect(crossOrgAttempt.json().data.affected).toBe(0);
-    const listAStillThere = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
+    const listAStillThere = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenA}` } });
     expect(listAStillThere.json().data).toHaveLength(2);
 
     // Org A deletes both of its own voices in one call.
@@ -309,7 +311,7 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     expect(bulkDeleteRes.statusCode).toBe(200);
     expect(bulkDeleteRes.json().data.affected).toBe(2);
 
-    const listAfter = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
+    const listAfter = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenA}` } });
     expect(listAfter.json().data).toHaveLength(0);
   });
 

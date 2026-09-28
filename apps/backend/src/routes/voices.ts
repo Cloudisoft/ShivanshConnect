@@ -1,3 +1,4 @@
+import { normalizeVoiceCatalog } from '../services/voiceCatalog.js';
 import type { FastifyInstance } from 'fastify';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
@@ -73,7 +74,9 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     if (query.provider_key) builder = builder.eq('provider_key', query.provider_key);
     if (query.language) builder = builder.eq('language', query.language);
     if (query.gender) builder = builder.eq('gender', query.gender);
-    if (query.status) builder = builder.eq('status', query.status);
+    // Hidden (inactive) voices are only listed when explicitly asked for -
+    // see services/voiceCatalog.ts.
+    builder = builder.eq('status', query.status ?? 'active');
 
     const from = (query.page - 1) * query.page_size;
     const to = from + query.page_size - 1;
@@ -107,12 +110,14 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     let created = 0;
     let updated = 0;
     for (const v of remoteVoices) {
+      // Only English voices are offered from Cartesia (explicit request).
+      if (providerKey === 'cartesia' && !(v.language ?? '').toLowerCase().startsWith('en')) continue;
       const existingId = existingByProviderVoiceId.get(v.providerVoiceId);
       const row = {
         organization_id: orgId,
         provider_key: providerKey,
         provider_voice_id: v.providerVoiceId,
-        name: v.name,
+        provider_name: v.name,
         gender: v.gender ?? 'unknown',
         language: v.language ?? null,
         accent: v.accent ?? null,
@@ -123,15 +128,17 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
         created_by: req.user!.id,
       };
       if (existingId) {
+        // The display name is managed by voiceCatalog normalization below.
         const { error } = await supabase.from('voices').update(row).eq('id', existingId);
         if (error) throw error;
         updated += 1;
       } else {
-        const { error } = await supabase.from('voices').insert(row);
+        const { error } = await supabase.from('voices').insert({ ...row, name: v.name });
         if (error) throw error;
         created += 1;
       }
     }
+    await normalizeVoiceCatalog(orgId);
 
     await writeAuditLog({
       organizationId: orgId,
@@ -187,6 +194,7 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
         provider_key: body.provider_key,
         provider_voice_id: v.provider_voice_id,
         name: v.name,
+        provider_name: v.name,
         gender: info.gender ?? 'unknown',
         language: info.language ?? null,
         accent: info.accent ?? null,
