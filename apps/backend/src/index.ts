@@ -108,6 +108,13 @@ export function buildApp() {
       callback(new Error(`Origin not allowed: ${origin}`), false);
     },
     credentials: true,
+    // Lets the browser cache each CORS preflight instead of re-sending an
+    // OPTIONS request before nearly every API call (without this header
+    // browsers keep a preflight for only ~5 seconds). Each preflight is a
+    // full extra round trip - from the client's region (India) to the US
+    // backend that doubled the latency of every request. 7200s is
+    // Chromium's cap.
+    maxAge: 7200,
   });
 
   app.register(rateLimit, {

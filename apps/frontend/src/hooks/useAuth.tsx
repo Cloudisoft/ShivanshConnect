@@ -28,10 +28,14 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       setSessionLoading(false);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, newSession) => {
       setSession(newSession);
       setSessionLoading(false);
-      queryClient.invalidateQueries({ queryKey: ['me'] });
+      // Sign-in/sign-out already refetch /me through the ['me', userId]
+      // query key changing - invalidating on those too fetched /me twice
+      // on every login, and TOKEN_REFRESHED (hourly) refetched it for no
+      // reason. Only a profile change needs an explicit refetch.
+      if (event === 'USER_UPDATED') queryClient.invalidateQueries({ queryKey: ['me'] });
     });
 
     return () => listener.subscription.unsubscribe();
