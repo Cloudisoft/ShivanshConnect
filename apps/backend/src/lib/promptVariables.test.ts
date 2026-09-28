@@ -28,3 +28,23 @@ describe('renderTemplate', () => {
     expect(renderTemplate('No variables here.', {})).toBe('No variables here.');
   });
 });
+
+describe('spokenVoiceName', () => {
+  it('keeps only the person name from a provider voice label', async () => {
+    const { spokenVoiceName } = await import('./promptVariables.js');
+    expect(spokenVoiceName('Ray - Conversationalist')).toBe('Ray');
+    expect(spokenVoiceName('Tina - Customer Ally')).toBe('Tina');
+    expect(spokenVoiceName('Tina – Customer Ally')).toBe('Tina');
+    expect(spokenVoiceName('Mitchell (ElevenLabs)')).toBe('Mitchell');
+    expect(spokenVoiceName('Katie: Friendly Fixer')).toBe('Katie');
+    expect(spokenVoiceName('Mary-Anne')).toBe('Mary-Anne');
+    expect(spokenVoiceName('Alexei\t- Articulate Analyst')).toBe('Alexei');
+    expect(spokenVoiceName('Barry 2.0 - Helper')).toBe('Barry');
+    expect(spokenVoiceName('Emi - Soft-Spoken Friend')).toBe('Emi');
+    expect(spokenVoiceName('Ana Paula - Marketer')).toBe('Ana Paula');
+    expect(spokenVoiceName('Heath - Calm & Composed')).toBe('Heath');
+    expect(spokenVoiceName('Sarah')).toBe('Sarah');
+    expect(spokenVoiceName('  ')).toBeNull();
+    expect(spokenVoiceName(null)).toBeNull();
+  });
+});

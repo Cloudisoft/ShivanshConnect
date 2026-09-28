@@ -41,3 +41,21 @@ export function renderTemplate(template: string, context: PromptVariableContext)
     return typeof value === 'string' && value.length > 0 ? value : match;
   });
 }
+
+/** A voice's name as the AI should say it on a call. Provider voice
+ * catalogs name voices with a description after the person's name
+ * ("Ray - Conversationalist", "Tina - Customer Ally", "Mitchell
+ * (ElevenLabs)"); the caller should only ever hear "Ray", "Tina",
+ * "Mitchell". Real catalog labels include tab separators ("Alexei\t-
+ * Articulate Analyst") and versions ("Barry 2.0 - Helper"). */
+export function spokenVoiceName(name: string | null | undefined): string | null {
+  const full = (name ?? '').trim();
+  if (!full) return null;
+  const spoken = full
+    .split(/\s+[-–—|:]\s*|\s*[-–—|:]\s+/)[0]
+    .replace(/\s*[([].*$/, '')
+    // "Barry 2.0", "Wade 2.0" - a catalog version, not part of the name.
+    .replace(/\s+v?\d+(\.\d+)*$/i, '')
+    .trim();
+  return spoken || full;
+}
