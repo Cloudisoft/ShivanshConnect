@@ -114,6 +114,16 @@ function vapiWebhookUrl(): string | null {
  * overridden too. */
 const STOP_SPEAKING_PLAN = { numWords: 0 };
 
+/** Vapi's documented startSpeakingPlan: when the caller has finished their
+ * turn. Was `smartEndpointingPlan: { provider: 'vapi' }`; Vapi's own API
+ * spec now says "We strongly recommend using livekit endpointing when
+ * working in English". Production per-turn data showed the old one
+ * ending the caller's turn mid-sentence - "Yes. It's" -> the assistant
+ * jumped in, so the caller never got to finish saying their name and the
+ * assistant asked for it again ("asking for the name again and again, not
+ * listening"). Sent per call too, so it applies without a republish. */
+const START_SPEAKING_PLAN = { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } };
+
 /** Vapi's documented artifactPlan (verified against Vapi's own published
  * OpenAPI spec, api.vapi.ai/api-json). Real production incident: 0 of
  * 108 calls in a 3-hour window had a recording - every one failed with
@@ -315,8 +325,11 @@ export class VapiProvider implements CallOrchestrationProvider {
       // model, not the latency-optimized Flash one. This is the single
       // biggest TTS lever on the pause between a caller finishing a
       // sentence and the assistant's reply starting to play.
+      // Cartesia: sonic-3 (a newer, higher-quality generation than
+      // sonic-2, listed in Vapi's own CartesiaVoice model enum) - per the
+      // "voice quality is still poor" report on a Cartesia voice.
       const fastModelByProvider: Record<string, string> = {
-        cartesia: 'sonic-2',
+        cartesia: 'sonic-3',
         elevenlabs: 'eleven_flash_v2_5',
       };
       const fastModel = fastModelByProvider[config.voice.providerKey];
@@ -334,7 +347,7 @@ export class VapiProvider implements CallOrchestrationProvider {
     // endpointing model to avoid cutting a caller off mid-sentence -
     // this is what actually makes the assistant's turn-taking feel
     // humanlike instead of firing on the first micro-pause.
-    payload.startSpeakingPlan = { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'vapi' } };
+    payload.startSpeakingPlan = START_SPEAKING_PLAN;
     payload.stopSpeakingPlan = STOP_SPEAKING_PLAN;
     payload.artifactPlan = ARTIFACT_PLAN;
     // Real field: ends the call if the caller goes silent for this long
@@ -509,7 +522,7 @@ export class VapiProvider implements CallOrchestrationProvider {
     // including ones placed with assistants published before they existed -
     // no republish needed.
     {
-      const assistantOverrides: Record<string, unknown> = { stopSpeakingPlan: STOP_SPEAKING_PLAN, artifactPlan: ARTIFACT_PLAN };
+      const assistantOverrides: Record<string, unknown> = { startSpeakingPlan: START_SPEAKING_PLAN, stopSpeakingPlan: STOP_SPEAKING_PLAN, artifactPlan: ARTIFACT_PLAN };
       if (params.firstMessageOverride) assistantOverrides.firstMessage = params.firstMessageOverride;
       if (params.systemPromptOverride) {
         // Vapi requires BOTH `provider` and `model` on the override's model

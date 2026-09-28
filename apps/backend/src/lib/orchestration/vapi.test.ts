@@ -69,7 +69,7 @@ describe('VapiProvider', () => {
     // Conversational-quality config (Bug 2): real, currently-documented
     // Vapi fields for natural turn-taking and a sane silence timeout,
     // always set.
-    expect(body.startSpeakingPlan).toEqual({ waitSeconds: 0.4, smartEndpointingPlan: { provider: 'vapi' } });
+    expect(body.startSpeakingPlan).toEqual({ waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } });
     // Explicitly requested rather than relying on Vapi's own undocumented
     // default set - without 'transcript' here, Live Monitor's real-time
     // transcript feed would never receive anything from Vapi to ingest.
@@ -177,7 +177,7 @@ describe('VapiProvider', () => {
     expect(body.metadata).toEqual({ internalCallId: 'internal-call-1', organizationId: 'org-1' });
     // Only the turn-taking plan - applied per call so it reaches
     // assistants published before it existed, without a republish.
-    expect(body.assistantOverrides).toEqual({ stopSpeakingPlan: { numWords: 0 }, artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false } });
+    expect(body.assistantOverrides).toEqual({ startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } }, stopSpeakingPlan: { numWords: 0 }, artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false } });
   });
 
   it('createCall() sends real assistantOverrides.firstMessage/model.messages when a per-lead override is resolved (Bug 1)', async () => {
@@ -206,6 +206,7 @@ describe('VapiProvider', () => {
     // must be one of the following values: ...") even though neither was
     // ever sent at all - both must always be repeated alongside messages.
     expect(body.assistantOverrides).toEqual({
+      startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } },
       stopSpeakingPlan: { numWords: 0 },
       artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false },
       firstMessage: 'Hi, am I speaking with Priya?',
