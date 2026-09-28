@@ -17,13 +17,7 @@
  *                                              byo-sip-trunk for BYON)
  *   POST   /call                            - create an outbound call
  *   GET    /call/{id}                       - get call status/artifacts
- *   POST   /call/{id}/hangup                - end a call (Vapi models this
- *                                              as updating the call to
- *                                              ended, exposed as a control
- *                                              message over the call's own
- *                                              control URL when live, or a
- *                                              hangup shortcut otherwise)
- *   POST   {call.monitor.controlUrl}        - transfer-call / say control
+ *   POST   {call.monitor.controlUrl}        - end-call / transfer / say control
  *                                              messages while the call is
  *                                              live (see transferCall())
  *   PATCH  /assistant/{id} (server: {url})  - registers the webhook
@@ -548,8 +542,33 @@ export class VapiProvider implements CallOrchestrationProvider {
     return { status: call.status, raw: call as unknown as Record<string, unknown> };
   }
 
+  /** Ends a live call with an 'end-call' control message on the call's own
+   * monitor.controlUrl. Vapi's REST API has no hangup endpoint (the old
+   * POST /call/{id}/hangup returned 404), so supervisor End call and the
+   * stuck/silent-call sweeps were never actually ending calls at Vapi -
+   * they kept running (and billing) until the caller hung up. A call that
+   * has already ended is a no-op. */
   async endCall(providerCallId: string): Promise<void> {
-    await this.request('POST', `/call/${encodeURIComponent(providerCallId)}/hangup`, {});
+    const call = await this.request<VapiCallObject>('GET', `/call/${encodeURIComponent(providerCallId)}`);
+    if (call.status === 'ended') return;
+    if (!call.monitor?.controlUrl) {
+      throw new OrchestrationProviderError('This call has no active control URL - it may have already ended.');
+    }
+    let res: Response;
+    try {
+      res = await fetch(call.monitor.controlUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'end-call' }),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (err) {
+      throw new OrchestrationProviderError('Failed to reach the Vapi call control URL to end the call.', err);
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new OrchestrationProviderError(`Vapi end-call control message failed (${res.status}): ${text.slice(0, 500)}`);
+    }
   }
 
   /** Real transfer mechanism: Vapi accepts a "transfer-call" control

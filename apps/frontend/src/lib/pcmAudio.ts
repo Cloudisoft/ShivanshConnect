@@ -28,15 +28,39 @@ export class PcmStreamPlayer {
   private nextStartTime = 0;
   private sampleRate: number;
 
+  private channels = 1;
+
+  /** Must be constructed synchronously inside the user's click handler
+   * (before any await): browsers only let an AudioContext start playing
+   * when it is created/resumed during a user gesture. Created later (after
+   * the /listen request resolved) it stays 'suspended' and every pushed
+   * chunk plays silently - which is exactly how Listen "did nothing". */
   constructor(sampleRate: number = DEFAULT_SAMPLE_RATE) {
     this.sampleRate = sampleRate;
     this.ctx = new AudioContext();
+    void this.ctx.resume().catch(() => undefined);
+  }
+
+  /** Applies a stream's own announced format (e.g. a JSON start frame
+   * carrying sampleRate/channels) when it provides one. */
+  setFormat(sampleRate: number, channels: number): void {
+    if (Number.isFinite(sampleRate) && sampleRate >= 8000 && sampleRate <= 48000) this.sampleRate = sampleRate;
+    if (channels === 1 || channels === 2) this.channels = channels;
   }
 
   push(int16: Int16Array): void {
     if (int16.length === 0) return;
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i += 1) float32[i] = int16[i] / 32768;
+    if (this.ctx.state === 'suspended') void this.ctx.resume().catch(() => undefined);
+    // Interleaved stereo (e.g. caller + assistant on separate channels) is
+    // mixed down to mono so the supervisor hears both sides.
+    const frames = Math.floor(int16.length / this.channels);
+    if (frames === 0) return;
+    const float32 = new Float32Array(frames);
+    for (let i = 0; i < frames; i += 1) {
+      let sum = 0;
+      for (let c = 0; c < this.channels; c += 1) sum += int16[i * this.channels + c];
+      float32[i] = Math.max(-1, Math.min(1, sum / 32768));
+    }
 
     const buffer = this.ctx.createBuffer(1, float32.length, this.sampleRate);
     buffer.copyToChannel(float32, 0);

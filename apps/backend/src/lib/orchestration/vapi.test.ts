@@ -269,6 +269,38 @@ describe('VapiProvider', () => {
     expect(body).toEqual({ type: 'transfer', destination: { type: 'number', number: '+14845559999' } });
   });
 
+  it('endCall() sends an end-call control message to the call monitor.controlUrl (Vapi has no REST hangup endpoint)', async () => {
+    const fetchMock = vi.fn(async (input: string, _init?: RequestInit) => {
+      if (input === 'https://api.vapi.ai/call/call_abc') {
+        return { ok: true, json: async () => ({ id: 'call_abc', status: 'in-progress', monitor: { controlUrl: 'https://vapi.example/control/xyz' } }) };
+      }
+      if (input === 'https://vapi.example/control/xyz') {
+        return { ok: true, json: async () => ({}) };
+      }
+      throw new Error(`Unexpected fetch: ${input}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new VapiProvider('sk-test').endCall('call_abc');
+
+    const controlCall = fetchMock.mock.calls.find(([url]) => url === 'https://vapi.example/control/xyz');
+    expect(JSON.parse(controlCall![1]!.body as string)).toEqual({ type: 'end-call' });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/hangup'))).toBe(false);
+  });
+
+  it('endCall() is a no-op for a call Vapi already reports as ended', async () => {
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input === 'https://api.vapi.ai/call/call_done') {
+        return { ok: true, json: async () => ({ id: 'call_done', status: 'ended' }) };
+      }
+      throw new Error(`Unexpected fetch: ${input}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new VapiProvider('sk-test').endCall('call_done');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('getLiveMonitorUrls() relays monitor.listenUrl/controlUrl from the call object', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

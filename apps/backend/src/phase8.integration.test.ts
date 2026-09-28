@@ -36,7 +36,7 @@ vi.mock('./lib/supabase.js', () => ({
 let vapiCallCounter = 0;
 let vapiAssistantCounter = 0;
 let vapiPhoneNumberCounter = 0;
-let vapiHangupCalls: string[] = [];
+const vapiHangupCalls: string[] = [];
 
 describe('Phase 8: disposition engine, retry engine, callbacks, DNC tool-calls', () => {
   let app: Awaited<ReturnType<typeof import('./index.js').buildApp>>;
@@ -61,8 +61,12 @@ describe('Phase 8: disposition engine, retry engine, callbacks, DNC tool-calls',
       if (url.startsWith('https://api.vapi.ai/assistant?') && method === 'GET') {
         return { ok: true, status: 200, json: async () => [] } as unknown as Response;
       }
-      if (url.startsWith('https://api.vapi.ai/call/') && url.endsWith('/hangup') && method === 'POST') {
-        vapiHangupCalls.push(url);
+      if (url.startsWith('https://api.vapi.ai/call/') && method === 'GET') {
+        const id = url.split('/').pop();
+        return { ok: true, status: 200, json: async () => ({ id, status: 'in-progress', monitor: { controlUrl: `https://vapi.example.com/control/${id}` } }) } as unknown as Response;
+      }
+      if (url.startsWith('https://vapi.example.com/control/') && method === 'POST') {
+        if (JSON.parse(String(init?.body ?? '{}')).type === 'end-call') vapiHangupCalls.push(url);
         return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
       }
       throw new Error(`Unexpected fetch call in test: ${method} ${url}`);
@@ -218,7 +222,7 @@ describe('Phase 8: disposition engine, retry engine, callbacks, DNC tool-calls',
     // the live call itself kept going until it wrapped up naturally. A
     // caller who explicitly asked to be hung up on must actually be hung
     // up on, not talked at for another turn.
-    expect(vapiHangupCalls).toEqual([`https://api.vapi.ai/call/${call.vapi_call_id}/hangup`]);
+    expect(vapiHangupCalls).toEqual([`https://vapi.example.com/control/${call.vapi_call_id}`]);
 
     const updatedCall = fake.tables.calls.find((c) => c.id === call.id)!;
     expect(updatedCall.status).toBe('dnc');

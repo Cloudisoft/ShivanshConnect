@@ -38,15 +38,40 @@ function speakerLabel(speaker: 'ai' | 'caller', voiceName: string | null | undef
  * direction tag (0=caller,1=ai) - see apps/pipecat-service/app/
  * supervisor_hub.py's broadcast_audio(); Vapi's own listenUrl carries raw
  * PCM with no tag, so `stripDirectionByte` is false for it. */
-function openListenSocket(wsUrl: string, token: string | undefined, stripDirectionByte: boolean): { socket: WebSocket; player: PcmStreamPlayer } {
+function openListenSocket(
+  wsUrl: string,
+  token: string | undefined,
+  stripDirectionByte: boolean,
+  player: PcmStreamPlayer,
+  onFailure: (message: string) => void,
+): { socket: WebSocket; player: PcmStreamPlayer } {
   const url = token ? `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : wsUrl;
   const socket = new WebSocket(url);
   socket.binaryType = 'arraybuffer';
-  const player = new PcmStreamPlayer();
+  let receivedAudio = false;
   socket.onmessage = (event) => {
+    if (typeof event.data === 'string') {
+      // Some engines announce the stream format in a JSON text frame.
+      try {
+        const meta = JSON.parse(event.data) as { sampleRate?: number; sample_rate?: number; channels?: number };
+        const rate = Number(meta.sampleRate ?? meta.sample_rate);
+        if (rate || meta.channels) player.setFormat(rate, Number(meta.channels ?? 1));
+      } catch {
+        // Not a format frame - ignore.
+      }
+      return;
+    }
     if (!(event.data instanceof ArrayBuffer)) return;
     const bytes = stripDirectionByte ? event.data.slice(1) : event.data;
-    player.push(new Int16Array(bytes));
+    if (bytes.byteLength < 2) return;
+    receivedAudio = true;
+    player.push(new Int16Array(bytes, 0, Math.floor(bytes.byteLength / 2)));
+  };
+  socket.onerror = () => {
+    if (!receivedAudio) onFailure('Could not connect to the call audio. The call may have just ended - try again.');
+  };
+  socket.onclose = (event) => {
+    if (!receivedAudio && event.code !== 1000) onFailure('The call audio stream closed before any audio arrived. The call may have ended.');
   };
   return { socket, player };
 }
@@ -99,7 +124,13 @@ export function CallDetailPanel({
   }, [call.id]);
 
   function teardownListen() {
-    listenSocketRef.current?.socket.close();
+    const current = listenSocketRef.current?.socket;
+    if (current) {
+      // A deliberate close must not surface as a "stream closed" error.
+      current.onclose = null;
+      current.onerror = null;
+      current.close();
+    }
     void listenSocketRef.current?.player.close();
     listenSocketRef.current = null;
   }
@@ -114,14 +145,25 @@ export function CallDetailPanel({
     teardownInject();
   }
 
+  function handleListenFailure(message: string) {
+    teardownListen();
+    setMode('idle');
+    setError(message);
+  }
+
   async function handleListen() {
     setError(null);
+    teardownListen();
+    // Created before the await, while still inside the click gesture - see
+    // PcmStreamPlayer's constructor comment.
+    const player = new PcmStreamPlayer();
     try {
       const result: ListenResult = await listenMutation.mutateAsync(call.id);
       const stripTag = result.engine === 'pipecat';
-      listenSocketRef.current = openListenSocket(result.ws_url, result.token, stripTag);
+      listenSocketRef.current = openListenSocket(result.ws_url, result.token, stripTag, player, handleListenFailure);
       setMode('listening');
     } catch (err) {
+      void player.close();
       setError(err instanceof ApiClientError ? err.message : 'Could not start listening.');
     }
   }
@@ -167,11 +209,14 @@ export function CallDetailPanel({
 
   async function handleBargeStart() {
     setError(null);
+    teardownListen();
+    const player = new PcmStreamPlayer();
     try {
       const result: BargeResult = await bargeMutation.mutateAsync({ callId: call.id, action: 'start' });
+      if (!result.ws_url) void player.close();
       if (result.ws_url) {
         const stripTag = result.engine === 'pipecat';
-        listenSocketRef.current = openListenSocket(result.ws_url, result.token, stripTag);
+        listenSocketRef.current = openListenSocket(result.ws_url, result.token, stripTag, player, handleListenFailure);
         if (result.engine === 'pipecat') {
           // pipecat's /barge socket is bidirectional - the SAME socket
           // carries both tapped audio (handled by openListenSocket above)
@@ -185,6 +230,8 @@ export function CallDetailPanel({
       }
       setMode('barged_in');
     } catch (err) {
+      teardownListen();
+      void player.close();
       setError(err instanceof ApiClientError ? err.message : 'Could not barge in.');
     }
   }
