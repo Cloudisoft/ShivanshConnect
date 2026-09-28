@@ -197,7 +197,22 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
         return reply.status(200).send({ received: true, matched: false });
       }
 
-      await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: eventType, payload: message, occurred_at: new Date().toISOString() });
+      // Skipped for 'transcript' - Vapi delivers one of these per finalized
+      // utterance (by far the highest-volume webhook type on any live
+      // call), and nothing ever reads a call_events row of this type back
+      // (grep confirms it): the transcript content itself is already
+      // durably stored via ingestLiveTranscriptSegment() below, into
+      // transcript_segments, which is what the CDR transcript viewer and
+      // live monitor actually read from. Writing a second, unread copy of
+      // every single utterance into call_events was pure extra DB load on
+      // the busiest webhook path, contending with every other request
+      // (dashboard/campaigns/CDR/live monitor) for the same connection
+      // pool - a real production incident this fixes: those pages all
+      // reported slow loads specifically while calls were active and
+      // transcripts were streaming in.
+      if (eventType !== 'transcript') {
+        await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: eventType, payload: message, occurred_at: new Date().toISOString() });
+      }
 
       switch (eventType) {
         case 'status-update': {
@@ -328,7 +343,12 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
         return reply.status(200).send({ received: true, matched: false });
       }
 
-      await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: eventType, payload: body, occurred_at: new Date().toISOString() });
+      // Same 'transcript' skip as the vapi receiver above - pipecat-service
+      // also posts one of these per completed utterance, and nothing reads
+      // it back from call_events (transcript_segments is the real store).
+      if (eventType !== 'transcript') {
+        await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: eventType, payload: body, occurred_at: new Date().toISOString() });
+      }
 
       if (eventType === 'tool-calls') {
         await processToolCalls(supabase, call, extractPipecatToolCalls(body));
