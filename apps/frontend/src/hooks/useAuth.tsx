@@ -39,14 +39,6 @@ function writeCachedMe(userId: string, me: MeResponse): void {
   }
 }
 
-function clearCachedMe(): void {
-  try {
-    localStorage.removeItem(ME_CACHE_KEY);
-  } catch {
-    // ignore
-  }
-}
-
 export function AuthProvider({ children }: { children: ReactNode }): JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
@@ -104,7 +96,9 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       meError,
       hasPermission: (key: string) => !!me?.permissions.includes(key),
       signOut: async () => {
-        clearCachedMe();
+        // The cached /me is kept: it is keyed to this user id, so it only
+        // ever renders for the same user signing back in (instantly), and
+        // /me refetches straight away regardless.
         await supabase.auth.signOut();
         queryClient.clear();
       },
