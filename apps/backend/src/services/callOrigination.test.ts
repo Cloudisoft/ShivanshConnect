@@ -229,7 +229,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     });
 
     const params = createCall.mock.calls[0][0];
-    expect(params.firstMessageOverride).toBe('Hi, my name is Sarah from Acme Sales Co. How are you doing today?');
+    expect(params.firstMessageOverride).toBe('Hi, my name is Sarah calling from Fall Outreach. How are you doing today?');
     expect(params.systemPromptOverride).toContain('You are a helpful sales agent.');
     expect(params.systemPromptOverride).toContain('politely ask for their name');
   });
@@ -251,8 +251,8 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     });
 
     const params = createCall.mock.calls[0][0];
-    // Always the organization's name - never an internal campaign/agent label.
-    expect(params.firstMessageOverride).toBe('Hi, my name is your assistant from Acme Sales Co. How are you doing today?');
+    // No campaign -> the organization's name.
+    expect(params.firstMessageOverride).toBe('Hi, my name is your assistant calling from Acme Sales Co. How are you doing today?');
   });
 
   it('originateCall() invokes createCall() with the correct assistantOverrides for a named lead (integration)', async () => {
@@ -359,5 +359,18 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     expect(config.voice).toEqual({ providerKey: 'cartesia', providerVoiceId: 'override-voice' });
     // Never the agent's own default voice.
     expect(config.voice).not.toEqual({ providerKey: 'elevenlabs', providerVoiceId: 'default-voice' });
+  });
+});
+
+describe('spokenCampaignName', () => {
+  it('drops duplicate markers so a copied campaign is spoken by its real name', async () => {
+    const { spokenCampaignName } = await import('./callOrigination.js');
+    for (const name of ['MVA', 'MVA (copy)', 'MVA (Copy 2)', 'MVA copy 3', 'MVA - Copy', 'MVA copy2', 'Copy of MVA', 'MVA (2)', 'MVA (copy) (copy)', '  MVA  ']) {
+      expect(spokenCampaignName(name)).toBe('MVA');
+    }
+    expect(spokenCampaignName('Fall Outreach 2026')).toBe('Fall Outreach 2026');
+    expect(spokenCampaignName('Copycat Promo')).toBe('Copycat Promo');
+    expect(spokenCampaignName('(copy)')).toBeNull();
+    expect(spokenCampaignName(null)).toBeNull();
   });
 });
