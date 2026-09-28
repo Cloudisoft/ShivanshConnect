@@ -570,7 +570,12 @@ export class VapiProvider implements CallOrchestrationProvider {
       res = await fetch(call.monitor.controlUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'transfer-call', destination: { type: 'number', number: destinationE164 } }),
+        // Vapi's control-message type is 'transfer' (ClientInboundMessageTransfer
+        // in its published API spec) - 'transfer-call' is not a control
+        // message Vapi accepts, which is why supervisor transfers hung for
+        // ~30s and failed.
+        body: JSON.stringify({ type: 'transfer', destination: { type: 'number', number: destinationE164 } }),
+        signal: AbortSignal.timeout(10_000),
       });
     } catch (err) {
       throw new OrchestrationProviderError('Failed to reach the Vapi call control URL for transfer.', err);
@@ -612,7 +617,10 @@ export class VapiProvider implements CallOrchestrationProvider {
       res = await fetch(call.monitor.controlUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'say', message: text }),
+        // Vapi's ClientInboundMessageSay carries the text in `content`, not
+        // `message` (published API spec).
+        body: JSON.stringify({ type: 'say', content: text }),
+        signal: AbortSignal.timeout(10_000),
       });
     } catch (err) {
       throw new OrchestrationProviderError('Failed to reach the Vapi call control URL for say/whisper.', err);

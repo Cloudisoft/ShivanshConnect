@@ -71,4 +71,10 @@ describe('call state machine', () => {
     expect(isValidCallTransition('answered', 'transferred')).toBe(true);
     expect(isValidCallTransition('in_progress', 'transferred')).toBe(true);
   });
+
+  it('lets a call mid-transfer reach its real end state (a forwarded call ending, or a supervisor End call)', () => {
+    expect(isValidCallTransition('transfer_pending', 'transferred')).toBe(true);
+    expect(isValidCallTransition('transfer_pending', 'completed')).toBe(true);
+    expect(isValidCallTransition('transferring', 'completed')).toBe(true);
+  });
 });
