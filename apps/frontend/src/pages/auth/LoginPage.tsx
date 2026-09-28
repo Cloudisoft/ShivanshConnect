@@ -2,10 +2,13 @@ import { useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AuthLayout } from '../../components/AuthLayout';
 import { Alert, Button, Input, Label } from '../../components/ui';
+import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../../lib/supabaseClient';
+import { api } from '../../lib/apiClient';
 
 export function LoginPage(): JSX.Element {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const location = useLocation() as { state?: { from?: string } };
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -22,7 +25,20 @@ export function LoginPage(): JSX.Element {
         setError('Incorrect email or password.');
         return;
       }
-      navigate(location.state?.from ?? '/dashboard', { replace: true });
+      const destination = location.state?.from ?? '/dashboard';
+      if (destination === '/dashboard') {
+        // Start the dashboard's data loading now, in parallel with /me -
+        // otherwise it only starts after ProtectedRoute's /me round trip
+        // finishes, a strictly sequential chain of round trips on every
+        // login. Same keys/params as useDashboardMetrics/useDashboardCharts
+        // with the page's default 'today' period, so the page picks these
+        // results straight up. Errors are ignored here; the page's own
+        // queries surface them.
+        const period = { period: 'today' as const };
+        void queryClient.prefetchQuery({ queryKey: ['dashboard', 'metrics', period], queryFn: () => api.get('/dashboard?period=today') });
+        void queryClient.prefetchQuery({ queryKey: ['dashboard', 'charts', period], queryFn: () => api.get('/dashboard/charts?period=today') });
+      }
+      navigate(destination, { replace: true });
     } finally {
       setLoading(false);
     }
