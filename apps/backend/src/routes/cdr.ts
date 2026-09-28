@@ -24,7 +24,7 @@
  * organization_id server-side, on top of RLS.
  */
 import type { FastifyInstance } from 'fastify';
-import { spawn } from 'node:child_process';
+import { encodeMp3 } from '../lib/audio/mp3.js';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok, paginationMeta } from '../lib/response.js';
@@ -68,27 +68,7 @@ export async function maybeTranscodeToMp3(sourceBuffer: Buffer, sourceFormat: st
   }
 
   try {
-    const buffer = await new Promise<Buffer>((resolve, reject) => {
-      // Reads the source from stdin rather than a file path - the source
-      // bytes now come from the storage adapter (local disk in tests,
-      // Supabase Storage in production), not necessarily a real path on
-      // this machine's filesystem.
-      const proc = spawn('ffmpeg', ['-y', '-i', 'pipe:0', '-f', 'mp3', '-'], { stdio: ['pipe', 'pipe', 'ignore'] });
-      const chunks: Buffer[] = [];
-      proc.stdout.on('data', (c) => chunks.push(c));
-      proc.on('error', reject);
-      proc.on('close', (code) => {
-        if (code === 0 && chunks.length > 0) resolve(Buffer.concat(chunks));
-        else reject(new Error(`ffmpeg exited with code ${code}`));
-      });
-      proc.stdin.on('error', () => {
-        // A write to a already-dead/erroring ffmpeg process throws EPIPE
-        // here - the 'error'/'close' handlers above already reject this
-        // promise for that same failure, so this only prevents an
-        // unhandled 'error' event from crashing the process.
-      });
-      proc.stdin.end(sourceBuffer);
-    });
+    const buffer = await encodeMp3(sourceBuffer);
     return { buffer, contentType: 'audio/mpeg', extension: 'mp3' };
   } catch {
     // ffmpeg not installed (ENOENT) or failed - serve the real source

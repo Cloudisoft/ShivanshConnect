@@ -98,6 +98,14 @@ describe('cdr recording download - real ffmpeg MP3 transcode (Phase 14 polish)',
     const probe = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=format_name', '-of', 'default=noprint_wrappers=1:nokey=1', outPath]);
     expect(probe.status).toBe(0);
     expect(probe.stdout.toString('utf-8').trim()).toContain('mp3');
+
+    // High-quality settings: 192 kbps, 44.1 kHz, mono.
+    const stream = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name,sample_rate,channels,bit_rate', '-of', 'json', outPath]);
+    const info = JSON.parse(stream.stdout.toString('utf-8')).streams[0];
+    expect(info.codec_name).toBe('mp3');
+    expect(info.sample_rate).toBe('44100');
+    expect(info.channels).toBe(1);
+    expect(info.bit_rate).toBe('192000');
   });
 
   it.runIf(!ffmpegAvailable())('falls back to the real source bytes/format honestly when ffmpeg is unavailable', async () => {

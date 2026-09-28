@@ -23,7 +23,8 @@ RUN pnpm --filter @shivanshconnect/shared run build
 RUN pnpm --filter @shivanshconnect/backend run build
 
 FROM node:22-slim AS run
-RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
+# ffmpeg: call recordings are converted to high-quality MP3 (lib/audio/mp3.ts).
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /repo
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
