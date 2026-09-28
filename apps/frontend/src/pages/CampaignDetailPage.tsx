@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowLeftRight, Info, Trash2 } from 'lucide-react';
 import {
-  BACKGROUND_NOISE_OPTIONS,
   CAMPAIGN_STATUS_LABELS,
   LEAD_COOLDOWN_PRESETS,
   PROMPT_VARIABLES,
@@ -244,7 +243,6 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const [voicemailMessage, setVoicemailMessage] = useState(campaign.voicemail_message ?? '');
   const [leaveVoicemail, setLeaveVoicemail] = useState(campaign.leave_voicemail);
   const [cooldown, setCooldown] = useState(campaign.lead_cooldown_minutes);
-  const [backgroundNoise, setBackgroundNoise] = useState(campaign.background_noise ?? '');
   const [callingWindowStart, setCallingWindowStart] = useState(campaign.calling_window_start.slice(0, 5));
   const [callingWindowEnd, setCallingWindowEnd] = useState(campaign.calling_window_end.slice(0, 5));
   const [callingDays, setCallingDays] = useState<number[]>(campaign.calling_days);
@@ -313,7 +311,6 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
         voicemail_message: voicemailMessage || null,
         leave_voicemail: leaveVoicemail,
         lead_cooldown_minutes: cooldown,
-        background_noise: backgroundNoise || null,
         calling_window_start: callingWindowStart,
         calling_window_end: callingWindowEnd,
         calling_days: callingDays,
@@ -571,17 +568,6 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
             {LEAD_COOLDOWN_PRESETS.map((p) => (
               <option key={p.minutes} value={p.minutes}>
                 {p.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <Label>Background noise</Label>
-          <select className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm" value={backgroundNoise} onChange={(e) => setBackgroundNoise(e.target.value)} disabled={!canEdit}>
-            <option value="">Off</option>
-            {BACKGROUND_NOISE_OPTIONS.map((n) => (
-              <option key={n} value={n}>
-                {n}
               </option>
             ))}
           </select>

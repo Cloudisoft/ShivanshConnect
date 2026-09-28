@@ -135,6 +135,28 @@ const START_SPEAKING_PLAN = { waitSeconds: 0.4, smartEndpointingPlan: { provider
  * explicitly per explicit request: recordings for every call. */
 const ARTIFACT_PLAN = { recordingEnabled: true, recordingUseCustomStorageEnabled: false };
 
+/** Vapi's built-in office ambience (CreateAssistantDTO/AssistantOverrides
+ * backgroundSound: 'off' | 'office' | audio URL). */
+const BACKGROUND_SOUND = 'office';
+
+/** Appended to the per-call system prompt whenever the call has a
+ * transfer destination - the model must actually invoke the tool, not
+ * just announce it. */
+export const TRANSFER_TOOL_INSTRUCTION =
+  "\n\nCall transfer: when the caller should be transferred (they ask for a person, or your instructions say to transfer), say one short sentence such as \"Sure, transferring you now.\" and call the transferCall tool in that same reply. Never say you are transferring without calling transferCall, and never ask the caller to hold or wait first.";
+
+/** Vapi's real transferCall tool (CreateTransferCallToolDTO) for one
+ * server-resolved E.164 destination. Blind transfer, and no extra
+ * scripted line (message: '') - the assistant's own "transferring you
+ * now" is the only thing said before the caller is connected. */
+export function buildTransferTool(destinationE164: string): Record<string, unknown> {
+  return {
+    type: 'transferCall',
+    destinations: [{ type: 'number', number: destinationE164, message: '' }],
+    messages: [{ type: 'request-start', content: '', blocking: false }],
+  };
+}
+
 const BASELINE_CONVERSATION_INSTRUCTIONS = `Conversation style (always follow these, in addition to everything above):
 - Speak naturally, like a real person on the phone - contractions, brief pauses, natural phrasing. Never sound like you are reading a script verbatim.
 - Practice active listening: briefly acknowledge or react to what the caller just said before moving on to your next point. Never ignore a question or comment the caller made in order to continue a scripted line.
@@ -351,17 +373,10 @@ export class VapiProvider implements CallOrchestrationProvider {
     // leaves a call hung open indefinitely on a dead line).
     payload.silenceTimeoutSeconds = 30;
 
-    // Background denoising: Vapi's real assistant config exposes only a
-    // boolean `backgroundDenoisingEnabled` (Krisp-style noise removal) -
-    // there is no documented fine-grained "low/medium/high" level, unlike
-    // this platform's own campaigns.background_noise column ('off' |
-    // 'low' | 'medium' | 'high'). Any non-'off' value enables the real
-    // boolean knob; the level distinction itself is NOT forwarded because
-    // Vapi has no such parameter - fabricating one would be silently
-    // ignored or rejected by the real API.
-    if (config.backgroundNoise) {
-      payload.backgroundDenoisingEnabled = config.backgroundNoise !== 'off';
-    }
+    // Per explicit request: every campaign plays Vapi's office ambience
+    // behind the assistant (the campaign-level background-noise option was
+    // removed). Also sent per call in createCall()'s assistantOverrides.
+    payload.backgroundSound = BACKGROUND_SOUND;
 
     // Voicemail/answering-machine detection - real, currently-documented
     // Vapi feature (docs.vapi.ai/calls/voicemail-detection). Threads
@@ -518,7 +533,19 @@ export class VapiProvider implements CallOrchestrationProvider {
     // including ones placed with assistants published before they existed -
     // no republish needed.
     {
-      const assistantOverrides: Record<string, unknown> = { startSpeakingPlan: START_SPEAKING_PLAN, stopSpeakingPlan: STOP_SPEAKING_PLAN, artifactPlan: ARTIFACT_PLAN };
+      const assistantOverrides: Record<string, unknown> = {
+        startSpeakingPlan: START_SPEAKING_PLAN,
+        stopSpeakingPlan: STOP_SPEAKING_PLAN,
+        artifactPlan: ARTIFACT_PLAN,
+        backgroundSound: BACKGROUND_SOUND,
+      };
+      // Auto transfer: the assistant gets a real transferCall tool for this
+      // call's server-resolved destination (the campaign's transfer number,
+      // else the agent's). The old assistant-level forwardingPhoneNumber is
+      // not in Vapi's current API, so the model had nothing to call and
+      // only ever *said* it was transferring.
+      const transferDestination = params.transferDestinationE164 && /^\+[1-9]\d{6,14}$/.test(params.transferDestinationE164) ? params.transferDestinationE164 : null;
+      if (transferDestination) assistantOverrides['tools:append'] = [buildTransferTool(transferDestination)];
       if (params.firstMessageOverride) assistantOverrides.firstMessage = params.firstMessageOverride;
       if (params.systemPromptOverride) {
         // Vapi requires BOTH `provider` and `model` on the override's model
@@ -530,7 +557,7 @@ export class VapiProvider implements CallOrchestrationProvider {
         assistantOverrides.model = {
           provider: params.llmProvider ?? 'openai',
           model: params.llmModel ?? 'gpt-4o-mini',
-          messages: [{ role: 'system', content: params.systemPromptOverride }],
+          messages: [{ role: 'system', content: transferDestination ? `${params.systemPromptOverride}${TRANSFER_TOOL_INSTRUCTION}` : params.systemPromptOverride }],
         };
       }
       payload.assistantOverrides = assistantOverrides;
