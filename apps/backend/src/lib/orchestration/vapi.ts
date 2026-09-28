@@ -284,14 +284,23 @@ export class VapiProvider implements CallOrchestrationProvider {
       // NOT the fastest one available - Cartesia's default is an older
       // "sonic" model rather than the low-latency sonic-2 this platform's
       // own lib/voice/cartesia.ts already uses everywhere else (voice
-      // previews, cloning), and ElevenLabs' default is a quality-optimized
-      // model, not the latency-optimized Flash/Turbo ones. This is the
-      // single biggest lever on the pause between a caller finishing a
-      // sentence and the assistant's reply starting to play - explicitly
-      // requesting the fast model for whichever provider is configured.
+      // previews, cloning). Cartesia's sonic-2 is genuinely both its
+      // fastest AND its flagship-quality model, so no tradeoff there.
+      //
+      // ElevenLabs is a real tradeoff, and this used to default to its
+      // fastest tier (eleven_flash_v2_5) - a real production complaint
+      // ("client is complaining for low voice quality") traced directly
+      // to this: Flash noticeably sacrifices fidelity for the lowest
+      // possible latency, sounding more robotic than a live phone call
+      // conversation calls for. eleven_turbo_v2_5 is the documented
+      // middle tier - meaningfully better voice quality than Flash while
+      // still low-latency enough for real-time conversational use (unlike
+      // eleven_multilingual_v2, ElevenLabs' full-quality but
+      // noticeably-higher-latency model, which would reintroduce the slow-
+      // to-respond problem the original Flash choice was made to avoid).
       const fastModelByProvider: Record<string, string> = {
         cartesia: 'sonic-2',
-        elevenlabs: 'eleven_flash_v2_5',
+        elevenlabs: 'eleven_turbo_v2_5',
       };
       const fastModel = fastModelByProvider[config.voice.providerKey];
       if (fastModel) {

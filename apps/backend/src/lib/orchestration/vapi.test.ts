@@ -56,14 +56,17 @@ describe('VapiProvider', () => {
       maxTokens: 800,
       messages: [{ role: 'system', content: expect.stringContaining('You are a helpful sales agent.') }],
     });
-    // A fast, low-latency TTS model is requested explicitly (Bug: without
-    // this, Vapi falls back to each provider's quality-optimized default
-    // model instead of a latency-optimized one). The provider string is
-    // Vapi's own enum value ('11labs'), not our internal provider_key
-    // ('elevenlabs') - sending the internal key straight through got a
-    // real 400 from Vapi ("voice.provider must be one of the following
-    // values: ... 11labs ...").
-    expect(body.voice).toEqual({ provider: '11labs', voiceId: 'voice-123', model: 'eleven_flash_v2_5' });
+    // A fast TTS model is requested explicitly (Bug: without this, Vapi
+    // falls back to each provider's quality-optimized default model
+    // instead of a latency-optimized one) - eleven_turbo_v2_5 rather than
+    // eleven_flash_v2_5 (a real "low voice quality" production complaint
+    // traced to Flash's fidelity tradeoff; turbo is still low-latency
+    // enough for real-time conversation, just noticeably better quality).
+    // The provider string is Vapi's own enum value ('11labs'), not our
+    // internal provider_key ('elevenlabs') - sending the internal key
+    // straight through got a real 400 from Vapi ("voice.provider must be
+    // one of the following values: ... 11labs ...").
+    expect(body.voice).toEqual({ provider: '11labs', voiceId: 'voice-123', model: 'eleven_turbo_v2_5' });
     expect(body.maxDurationSeconds).toBe(600);
     expect(body.forwardingPhoneNumber).toBe('+14845550000');
     // Conversational-quality config (Bug 2): real, currently-documented
