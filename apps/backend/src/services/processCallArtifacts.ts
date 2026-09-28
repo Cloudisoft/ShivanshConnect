@@ -22,6 +22,7 @@
  */
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { getStorageAdapter } from '../lib/storage/index.js';
+import { encodeMp3 } from '../lib/audio/mp3.js';
 import {
   OrchestrationProviderError,
   OrchestrationProviderNotConfiguredError,
@@ -246,9 +247,22 @@ async function ingestRecording(supabase: Supabase, call: Record<string, any>, ar
     return;
   }
 
-  const format = inferFormat(artifacts.recordingUrl, res.headers.get('content-type'));
+  let format = inferFormat(artifacts.recordingUrl, res.headers.get('content-type'));
+  // Recordings are kept as high-quality MP3 (see lib/audio/mp3.ts): Vapi
+  // delivers WAV, which is ~10x larger. If ffmpeg is unavailable the
+  // original WAV is stored as-is rather than failing the recording.
+  let storedBuffer: Buffer = buffer;
+  if (format === 'wav') {
+    try {
+      storedBuffer = await encodeMp3(buffer);
+      format = 'mp3';
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Recording MP3 encode failed; storing WAV for call', call.id, err);
+    }
+  }
   const storage = getStorageAdapter();
-  const stored = await storage.putObject(`recordings/${call.organization_id}/${call.id}.${format}`, buffer, format === 'wav' ? 'audio/wav' : 'audio/mpeg');
+  const stored = await storage.putObject(`recordings/${call.organization_id}/${call.id}.${format}`, storedBuffer, format === 'wav' ? 'audio/wav' : 'audio/mpeg');
 
   await upsertByCallId(supabase, 'call_recordings', call.id, {
     organization_id: call.organization_id,
@@ -256,7 +270,7 @@ async function ingestRecording(supabase: Supabase, call: Record<string, any>, ar
     storage_path: stored.path,
     format,
     duration_seconds: call.duration_seconds ?? null,
-    size_bytes: buffer.length,
+    size_bytes: storedBuffer.length,
     status: 'ready',
     failure_reason: null,
   });
