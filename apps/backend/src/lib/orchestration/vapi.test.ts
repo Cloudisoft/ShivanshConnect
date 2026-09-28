@@ -177,7 +177,7 @@ describe('VapiProvider', () => {
     expect(body.metadata).toEqual({ internalCallId: 'internal-call-1', organizationId: 'org-1' });
     // Only the turn-taking plan - applied per call so it reaches
     // assistants published before it existed, without a republish.
-    expect(body.assistantOverrides).toEqual({ stopSpeakingPlan: { numWords: 2 } });
+    expect(body.assistantOverrides).toEqual({ stopSpeakingPlan: { numWords: 0 } });
   });
 
   it('createCall() sends real assistantOverrides.firstMessage/model.messages when a per-lead override is resolved (Bug 1)', async () => {
@@ -206,7 +206,7 @@ describe('VapiProvider', () => {
     // must be one of the following values: ...") even though neither was
     // ever sent at all - both must always be repeated alongside messages.
     expect(body.assistantOverrides).toEqual({
-      stopSpeakingPlan: { numWords: 2 },
+      stopSpeakingPlan: { numWords: 0 },
       firstMessage: 'Hi, am I speaking with Priya?',
       model: {
         provider: 'anthropic',

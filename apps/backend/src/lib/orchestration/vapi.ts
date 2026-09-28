@@ -103,15 +103,16 @@ function vapiWebhookUrl(): string | null {
  * tersely, and failing to recognize a voicemail greeting on its own as a
  * fallback when Vapi's own voicemailDetection doesn't fire. */
 /** Vapi's documented stopSpeakingPlan: how much caller speech it takes to
- * interrupt the assistant mid-sentence. Vapi's default (numWords: 0) stops
- * on any voice activity at all, so a one-word interjection ("oh", "okay",
- * "what?") or line noise cuts the assistant off mid-sentence. Production
- * transcripts showed exactly that - replies chopped into fragments ("I'm
- * calling to see whether you may" / "qualify for" / "free motor") and
- * callers asking the same question twice because they never heard a
- * complete answer. Requiring 2 words lets a real attempt to talk still
- * interrupt, while backchannels and noise no longer do. */
-const STOP_SPEAKING_PLAN = { numWords: 2 };
+ * interrupt the assistant mid-sentence. numWords: 0 (Vapi's own default)
+ * stops the assistant the instant the caller starts talking, like a real
+ * person would - explicitly requested ("it should cut off... I want to make
+ * calls natural") after a brief numWords: 2 experiment meant a one-word
+ * "wait"/"no" could no longer interrupt. Vapi's built-in default
+ * acknowledgement phrases still keep pure backchannels ("uh-huh", "okay")
+ * from cutting it off. Sent explicitly per call (not just left to the
+ * default) so any assistant published during that numWords: 2 window is
+ * overridden too. */
+const STOP_SPEAKING_PLAN = { numWords: 0 };
 
 const BASELINE_CONVERSATION_INSTRUCTIONS = `Conversation style (always follow these, in addition to everything above):
 - Speak naturally, like a real person on the phone - contractions, brief pauses, natural phrasing. Never sound like you are reading a script verbatim.
