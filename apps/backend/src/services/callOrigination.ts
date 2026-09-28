@@ -215,18 +215,41 @@ async function resolveCallPersonalization(
   // would either leave the literal "{{first_name}}" in the caller's ear,
   // per renderTemplate()'s own documented "never silently blank" rule,
   // or produce an awkward "Hi, am I speaking with ?"). Build a real,
-  // generic fallback instead: "Hi, my name is {voice} from {organization}.
-  // How are you doing today?" Uses the organization's name - never the
-  // campaign's or agent's: those are internal labels, and production calls
-  // were greeting people "from MBA Copy" (the campaign "MVA (copy)" read
-  // aloud).
-  const { data: org } = await supabase.from('organizations').select('name').eq('id', orgId).maybeSingle();
-  const companyName = org?.name?.trim() || null;
+  // generic fallback instead: "Hi, my name is {voice} calling from
+  // {campaign}. How are you doing today?" The campaign name is spoken
+  // with any duplicate marker stripped ("MVA (copy)", "MVA copy 2",
+  // "Copy of MVA" all read as "MVA") - calls were greeting people "from
+  // MBA Copy". Falls back to the organization's name, then no company.
+  let companyName: string | null = null;
+  if (campaignId) {
+    const { data } = await supabase.from('campaigns').select('name').eq('id', campaignId).eq('organization_id', orgId).maybeSingle();
+    companyName = spokenCampaignName(data?.name);
+  }
+  if (!companyName) {
+    const { data: org } = await supabase.from('organizations').select('name').eq('id', orgId).maybeSingle();
+    companyName = org?.name?.trim() || null;
+  }
 
   const firstMessage = companyName
-    ? `Hi, my name is ${voiceName} from ${companyName}. How are you doing today?`
+    ? `Hi, my name is ${voiceName} calling from ${companyName}. How are you doing today?`
     : `Hi, my name is ${voiceName}. How are you doing today?`;
   return { firstMessage, systemPrompt: `${renderedSystemPrompt}${ASK_CALLER_NAME_INSTRUCTION}` };
+}
+
+/** A campaign's name as it should be spoken to a caller: duplicate
+ * markers added when a campaign is copied are removed ("MVA (copy)",
+ * "MVA - Copy 3", "MVA copy2", "Copy of MVA", "MVA (2)" -> "MVA"). */
+export function spokenCampaignName(name: string | null | undefined): string | null {
+  let result = (name ?? '').trim().replace(/^copy\s+of\s+/i, '');
+  let previous: string;
+  do {
+    previous = result;
+    result = result
+      .replace(/[\s\-\u2013\u2014_]*[([]?\s*copy\s*\d*\s*[)\]]?\s*$/i, '')
+      .replace(/\s*[([]\s*\d+\s*[)\]]\s*$/, '')
+      .trim();
+  } while (result !== previous);
+  return result || null;
 }
 
 /** Resolves the transfer destination for this call: an explicit
