@@ -33,8 +33,11 @@ export const CONNECTED_DURATION_THRESHOLD_SECONDS = 8;
 
 /** ended_reason values meaning the phone rang but nobody picked up - its
  * own distinct disposition (NO_ANSWER), not the generic DISCONNECTED
- * bucket a real technical failure belongs in. */
-const NO_ANSWER_ENDED_REASONS = new Set(['no-answer', 'customer-did-not-answer']);
+ * bucket a real technical failure belongs in. 'dial_timeout' is
+ * dialTimeoutSweep.ts's own reason for a call that never connected to
+ * anyone at all within its ~80s window - per explicit request ("Failed =
+ * No answer"), that reads the same as a plain unanswered ring. */
+const NO_ANSWER_ENDED_REASONS = new Set(['no-answer', 'customer-did-not-answer', 'dial_timeout']);
 
 /** ended_reason values meaning the destination number itself is invalid/
  * disconnected - its own distinct disposition (NOT_IN_SERVICE), separate

@@ -93,3 +93,15 @@ export function dispositionTone(code: string): 'neutral' | 'success' | 'warning'
       return 'neutral';
   }
 }
+
+/** The call `status` column's display label for CDR/Live Monitor - per
+ * explicit request ("Failed = No answer"), a terminal 'failed' status
+ * always reads as "No Answer" rather than the raw, alarming-looking
+ * "failed" (the underlying calls.status/ended_reason values are unchanged -
+ * this is a display-only relabel, same pattern as dispositionTone()
+ * above). Every other status is shown with underscores turned to spaces
+ * (e.g. 'in_progress' -> "in progress"). */
+export function callStatusLabel(status: string): string {
+  if (status === 'failed') return 'No Answer';
+  return status.replace(/_/g, ' ');
+}
