@@ -114,6 +114,21 @@ function vapiWebhookUrl(): string | null {
  * overridden too. */
 const STOP_SPEAKING_PLAN = { numWords: 0 };
 
+/** Vapi's documented artifactPlan (verified against Vapi's own published
+ * OpenAPI spec, api.vapi.ai/api-json). Real production incident: 0 of
+ * 108 calls in a 3-hour window had a recording - every one failed with
+ * the recording URL returning 400 "InvalidArgument: Authorization". The
+ * org's Vapi account has a custom Cloudflare R2 storage credential
+ * configured, so Vapi uploaded every recording to that PRIVATE bucket and
+ * returned its raw, unsigned object URL, which nothing without the
+ * bucket's own keys can download. recordingUseCustomStorageEnabled: false
+ * makes Vapi keep recordings on its own storage (downloadable URLs) for
+ * our calls regardless of that credential; processCallArtifacts.ts then
+ * re-stores the bytes in this platform's own storage, so nothing depends
+ * on Vapi keeping them. recordingEnabled: true is Vapi's default, set
+ * explicitly per explicit request: recordings for every call. */
+const ARTIFACT_PLAN = { recordingEnabled: true, recordingUseCustomStorageEnabled: false };
+
 const BASELINE_CONVERSATION_INSTRUCTIONS = `Conversation style (always follow these, in addition to everything above):
 - Speak naturally, like a real person on the phone - contractions, brief pauses, natural phrasing. Never sound like you are reading a script verbatim.
 - Practice active listening: briefly acknowledge or react to what the caller just said before moving on to your next point. Never ignore a question or comment the caller made in order to continue a scripted line.
@@ -321,6 +336,7 @@ export class VapiProvider implements CallOrchestrationProvider {
     // humanlike instead of firing on the first micro-pause.
     payload.startSpeakingPlan = { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'vapi' } };
     payload.stopSpeakingPlan = STOP_SPEAKING_PLAN;
+    payload.artifactPlan = ARTIFACT_PLAN;
     // Real field: ends the call if the caller goes silent for this long
     // (Vapi default is 30s; set explicitly here so a campaign never
     // leaves a call hung open indefinitely on a dead line).
@@ -488,12 +504,12 @@ export class VapiProvider implements CallOrchestrationProvider {
     // an override - a plain call with neither leaves the assistant's own
     // stored firstMessage/system message untouched.
     //
-    // stopSpeakingPlan is always sent here too (not just on the stored
-    // assistant) so it applies to every call immediately, including ones
-    // placed with assistants published before it existed - no republish
-    // needed.
+    // stopSpeakingPlan/artifactPlan are always sent here too (not just on
+    // the stored assistant) so they apply to every call immediately,
+    // including ones placed with assistants published before they existed -
+    // no republish needed.
     {
-      const assistantOverrides: Record<string, unknown> = { stopSpeakingPlan: STOP_SPEAKING_PLAN };
+      const assistantOverrides: Record<string, unknown> = { stopSpeakingPlan: STOP_SPEAKING_PLAN, artifactPlan: ARTIFACT_PLAN };
       if (params.firstMessageOverride) assistantOverrides.firstMessage = params.firstMessageOverride;
       if (params.systemPromptOverride) {
         // Vapi requires BOTH `provider` and `model` on the override's model
