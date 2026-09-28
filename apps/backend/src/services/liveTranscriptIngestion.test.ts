@@ -1,11 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { createFakeSupabase } from '../test/fakeSupabase.js';
-import { hasLiveTranscriptSegments, ingestLiveTranscriptSegment } from './liveTranscriptIngestion.js';
+import { clearLiveTranscriptCache, hasLiveTranscriptSegments, ingestLiveTranscriptSegment } from './liveTranscriptIngestion.js';
 import { transcriptEventBus } from '../lib/transcriptEventBus.js';
 
 const CALL = { id: 'call-1', organization_id: 'org-A' };
 
 describe('ingestLiveTranscriptSegment (Phase 10)', () => {
+  // Every test below creates a fresh, empty fakeSupabase instance but
+  // reuses the same CALL.id - the module-level per-call cache
+  // (services/liveTranscriptIngestion.ts's transcriptCache, the
+  // performance fix that avoids a DB round trip on every utterance after
+  // the first) would otherwise leak stale state from one test into the
+  // next against that test's own fresh tables.
+  beforeEach(() => {
+    clearLiveTranscriptCache('call-1');
+  });
+
   it('creates the call_transcripts row on the first segment and assigns sequential segment_index values', async () => {
     const { supabase: rawSupabase, tables } = createFakeSupabase();
     const supabase = rawSupabase as any;

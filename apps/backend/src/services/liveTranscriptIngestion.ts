@@ -45,22 +45,59 @@ import { emitLiveTranscriptSegment } from '../lib/transcriptEventBus.js';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
-/** Finds this call's call_transcripts row, creating an honest `pending`
- * one if this is the very first live segment for the call (there is
- * nothing to mark 'ready' yet - the transcript is still being built; Phase
- * 9's own status semantics are unchanged, 'ready' is only ever set once
- * the call reaches a terminal state and processCallArtifacts confirms/
- * backfills the full transcript). */
-async function getOrCreateLiveTranscript(supabase: Supabase, call: Record<string, any>): Promise<Record<string, any>> {
+/** Per-call in-process cache of this live transcript's id, next segment
+ * index, and running full_text - performance fix for the dominant source
+ * of DB load on an active call: Vapi/pipecat deliver one webhook per
+ * finalized utterance, and every one of them used to cost 4 sequential
+ * round trips here alone (a SELECT to check the transcript row exists, a
+ * SELECT count(*) for the next segment_index, the actual INSERT, and an
+ * UPDATE for full_text) on top of the webhook receiver's own round trips -
+ * real production evidence: this was measurably contending with every
+ * other request (dashboard/campaigns/CDR) for the same DB connection pool
+ * during active campaigns. The header comment's own existing "writes for
+ * one call are strictly serialized" assumption (already relied on for the
+ * count-based segment_index scheme) applies exactly the same way here:
+ * within one backend process, this cache is safe. Entries are removed by
+ * clearLiveTranscriptCache() once callTerminalHandler.ts confirms the call
+ * reached a terminal status, so this never grows unbounded across process
+ * uptime. */
+const transcriptCache = new Map<string, { transcriptId: string; nextSegmentIndex: number; fullText: string | null }>();
+
+/** Drops this call's cached transcript state - called from
+ * callTerminalHandler.ts once a call reaches a terminal status, since no
+ * further live segments will ever arrive for it. */
+export function clearLiveTranscriptCache(callId: string): void {
+  transcriptCache.delete(callId);
+}
+
+/** Loads (creating if needed) this call's cache entry - the only path
+ * that ever hits the DB for the transcript row/segment count, and only
+ * once per call (a cache hit costs nothing). When a call_transcripts row
+ * already exists but wasn't cached yet (a process restart mid-call, or
+ * some other path created it first), seeds nextSegmentIndex from a real
+ * count query rather than assuming 0 - the one case where getting this
+ * wrong would corrupt segment ordering / hit the unique constraint. */
+async function loadOrCreateCacheEntry(supabase: Supabase, call: Record<string, any>): Promise<{ transcriptId: string; nextSegmentIndex: number; fullText: string | null }> {
+  const cached = transcriptCache.get(call.id);
+  if (cached) return cached;
+
   const { data: existing } = await supabase.from('call_transcripts').select('*').eq('call_id', call.id).maybeSingle();
-  if (existing) return existing;
+  if (existing) {
+    const { count } = await supabase.from('call_transcript_segments').select('id', { count: 'exact', head: true }).eq('transcript_id', existing.id);
+    const entry = { transcriptId: existing.id as string, nextSegmentIndex: count ?? 0, fullText: (existing.full_text as string | null) ?? null };
+    transcriptCache.set(call.id, entry);
+    return entry;
+  }
+
   const { data: created, error } = await supabase
     .from('call_transcripts')
     .insert({ call_id: call.id, organization_id: call.organization_id, status: 'pending', full_text: null })
     .select('*')
     .single();
   if (error) throw error;
-  return created;
+  const entry = { transcriptId: created.id as string, nextSegmentIndex: 0, fullText: null };
+  transcriptCache.set(call.id, entry);
+  return entry;
 }
 
 export interface IngestLiveSegmentInput {
@@ -84,18 +121,13 @@ export async function ingestLiveTranscriptSegment(
   const text = input.text.trim();
   if (!text) return null;
 
-  const transcript = await getOrCreateLiveTranscript(supabase, call);
-
-  const { count } = await supabase
-    .from('call_transcript_segments')
-    .select('id', { count: 'exact', head: true })
-    .eq('transcript_id', transcript.id);
-  const segmentIndex = count ?? 0;
+  const entry = await loadOrCreateCacheEntry(supabase, call);
+  const segmentIndex = entry.nextSegmentIndex;
 
   const { data: inserted, error } = await supabase
     .from('call_transcript_segments')
     .insert({
-      transcript_id: transcript.id,
+      transcript_id: entry.transcriptId,
       call_id: call.id,
       organization_id: call.organization_id,
       speaker: input.speaker,
@@ -111,8 +143,13 @@ export async function ingestLiveTranscriptSegment(
   // Keep full_text growing too, so a mid-call reconciliation read (or a
   // call that ends before this transcript is ever backfilled) still has
   // a real, non-empty full_text built purely from what was actually said.
-  const nextFullText = transcript.full_text ? `${transcript.full_text}\n${input.speaker === 'ai' ? 'AI' : 'Caller'}: ${text}` : `${input.speaker === 'ai' ? 'AI' : 'Caller'}: ${text}`;
-  await supabase.from('call_transcripts').update({ full_text: nextFullText }).eq('id', transcript.id);
+  const nextFullText = entry.fullText ? `${entry.fullText}\n${input.speaker === 'ai' ? 'AI' : 'Caller'}: ${text}` : `${input.speaker === 'ai' ? 'AI' : 'Caller'}: ${text}`;
+  await supabase.from('call_transcripts').update({ full_text: nextFullText }).eq('id', entry.transcriptId);
+
+  // Only committed to the cache once the writes above actually succeeded -
+  // a thrown error above must never advance the cached index/full_text
+  // past what's really in the database.
+  transcriptCache.set(call.id, { transcriptId: entry.transcriptId, nextSegmentIndex: segmentIndex + 1, fullText: nextFullText });
 
   emitLiveTranscriptSegment({
     callId: call.id,

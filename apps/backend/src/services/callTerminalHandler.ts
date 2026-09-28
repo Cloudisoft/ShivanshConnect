@@ -20,6 +20,7 @@ import { isTerminalCallStatus } from '../lib/callStateMachine.js';
 import { assignDispositionForCall } from './dispositionEngine.js';
 import { applyCallOutcomeToCampaignLead } from './campaignLeadDisposition.js';
 import { processCallArtifacts } from './processCallArtifacts.js';
+import { clearLiveTranscriptCache } from './liveTranscriptIngestion.js';
 import type { getSupabaseAdmin } from '../lib/supabase.js';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
@@ -45,6 +46,12 @@ export async function handleTerminalCall(supabase: Supabase, event: CallTransiti
     event.to,
     dispositionCode,
   );
+
+  // No further live 'transcript' webhooks will ever arrive for this call
+  // once it's terminal - drop its cached transcript state (services/
+  // liveTranscriptIngestion.ts's transcriptCache) so that cache never
+  // grows unbounded across the process's uptime.
+  clearLiveTranscriptCache(event.callId);
 
   // Phase 9: real transcript/recording ingestion + AI summary generation
   // (spec sections 21/22/23-partial). Deliberately NOT awaited here - it
