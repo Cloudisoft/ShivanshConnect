@@ -7,11 +7,14 @@
  * recording step for recent failed rows, a few at a time and newest
  * first, so every call in CDR ends up with a playable recording.
  *
+ * It also converts any recording still stored as WAV (saved before
+ * recordings were stored as MP3) to MP3.
+ *
  * Each call is attempted at most once per process, so a call that truly
  * has no recording (never connected) is not retried forever.
  */
 import { getSupabaseAdmin } from '../lib/supabase.js';
-import { reingestRecording } from './processCallArtifacts.js';
+import { convertStoredRecordingToMp3, reingestRecording } from './processCallArtifacts.js';
 
 const SWEEP_INTERVAL_MS = Number.parseInt(process.env.RECORDING_BACKFILL_SWEEP_INTERVAL_MS ?? '', 10) || 30 * 1000;
 const BATCH_SIZE = 5;
@@ -42,6 +45,20 @@ export async function runRecordingBackfillTick(): Promise<number> {
   for (const callId of batch) {
     attempted.add(callId);
     if (await reingestRecording(callId, { retry: false })) recovered += 1;
+  }
+
+  const { data: wavRows, error: wavError } = await supabase
+    .from('call_recordings')
+    .select('id')
+    .eq('status', 'ready')
+    .eq('format', 'wav')
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (wavError) throw wavError;
+  const wavBatch = (wavRows ?? []).map((r) => r.id as string).filter((id) => !attempted.has(id)).slice(0, BATCH_SIZE);
+  for (const id of wavBatch) {
+    attempted.add(id);
+    if (await convertStoredRecordingToMp3(id)) recovered += 1;
   }
   return recovered;
 }

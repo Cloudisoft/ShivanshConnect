@@ -33,7 +33,7 @@ import { uuidSchema } from '../schemas/common.js';
 import { createExportSchema, listCdrQuerySchema, searchTranscriptQuerySchema } from '../schemas/cdr.js';
 import { buildCdrRows, fetchCdrCallsPage, type CdrFilters } from '../services/cdrQuery.js';
 import { queueCdrExport } from '../services/cdrExport.js';
-import { reingestRecording } from '../services/processCallArtifacts.js';
+import { convertStoredRecordingToMp3, reingestRecording } from '../services/processCallArtifacts.js';
 import { getStorageAdapter, StorageObjectNotFoundError } from '../lib/storage/index.js';
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
@@ -200,6 +200,11 @@ export async function cdrRoutes(app: FastifyInstance): Promise<void> {
     }
     if (!recording || recording.status !== 'ready' || !recording.storage_path) {
       throw new ValidationError('No recording is available for this call yet.');
+    }
+    // Recordings are kept as MP3; convert (and keep) any older WAV now.
+    if (recording.format === 'wav' && (await convertStoredRecordingToMp3(recording.id))) {
+      ({ data: recording } = await supabase.from('call_recordings').select('*').eq('call_id', callId).maybeSingle());
+      if (!recording?.storage_path) throw new NotFoundError('This recording could not be found.');
     }
 
     const adapter = getStorageAdapter();
