@@ -12,7 +12,7 @@ const provider = {
 
 vi.mock('../lib/orchestration/resolveProvider.js', () => ({ resolveProviderForCall: async () => provider }));
 
-const { isVoicemailGreeting, alreadyLeavingMessage, handleVoicemailBackstop, checkForVoicemail, resetVoicemailWatches } = await import('./voicemailBackstop.js');
+const { isVoicemailGreeting, handleVoicemailBackstop, checkForVoicemail, resetVoicemailWatches } = await import('./voicemailBackstop.js');
 
 function seedCall(overrides: Record<string, unknown> = {}) {
   const call = {
@@ -58,50 +58,29 @@ describe('voicemailBackstop', () => {
     }
   });
 
-  it('knows when Vapi is already leaving the voicemail message', () => {
-    expect(alreadyLeavingMessage(['Hi, this is Ashton from Motor Vehicle Accident Helpline, please call us back.'], 'Hi, this is Ashton from Motor Vehicle Accident Helpline.')).toBe(true);
-    expect(alreadyLeavingMessage(['Hi Alex, how are you today?'], 'Hi, this is Ashton from Motor Vehicle Accident Helpline.')).toBe(false);
-    expect(alreadyLeavingMessage(['anything'], null)).toBe(false);
-  });
-
   it('marks the call as voicemail and hangs up when no message is configured', async () => {
     const call = seedCall();
     provider.getCall.mockResolvedValue({ status: 'in-progress', raw: {} });
-    expect(await handleVoicemailBackstop(fake.supabase as any, call.id, [])).toBe('ended');
+    expect(await handleVoicemailBackstop(fake.supabase as any, call.id)).toBe('ended');
     expect(provider.say).not.toHaveBeenCalled();
     expect(provider.endCall).toHaveBeenCalledWith('vapi-1');
     expect(fake.tables.call_events.some((e: any) => e.call_id === call.id && e.event_type === 'call.amd_detected')).toBe(true);
     expect(fake.tables.calls.find((c: any) => c.id === call.id)?.status).toBe('voicemail');
   });
 
-  it("leaves the campaign's voicemail message before hanging up", async () => {
-    vi.useFakeTimers();
-    try {
-      fake.tables.campaigns.push({ id: 'camp-1', voicemail_detection_enabled: true, leave_voicemail: true, voicemail_message: 'Please call us back.' });
-      const call = seedCall({ campaign_id: 'camp-1' });
-      provider.getCall.mockResolvedValue({ status: 'in-progress', raw: {} });
-      provider.say.mockResolvedValue(undefined);
-      const done = handleVoicemailBackstop(fake.supabase as any, call.id, []);
-      await vi.runAllTimersAsync();
-      expect(await done).toBe('ended');
-      expect(provider.say).toHaveBeenCalledWith('vapi-1', 'Please call us back.');
-      expect(provider.say.mock.invocationCallOrder[0]).toBeLessThan(provider.endCall.mock.invocationCallOrder[0]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('leaves a campaign with voicemail detection turned off alone', async () => {
-    fake.tables.campaigns.push({ id: 'camp-off', voicemail_detection_enabled: false, leave_voicemail: false, voicemail_message: null });
-    const call = seedCall({ campaign_id: 'camp-off' });
-    expect(await handleVoicemailBackstop(fake.supabase as any, call.id, [])).toBe('skipped');
-    expect(provider.endCall).not.toHaveBeenCalled();
+  it('never leaves a message, even when the campaign has one configured, and applies even with detection turned off', async () => {
+    fake.tables.campaigns.push({ id: 'camp-1', voicemail_detection_enabled: false, leave_voicemail: true, voicemail_message: 'Please call us back.' });
+    const call = seedCall({ campaign_id: 'camp-1' });
+    provider.getCall.mockResolvedValue({ status: 'in-progress', raw: {} });
+    expect(await handleVoicemailBackstop(fake.supabase as any, call.id)).toBe('ended');
+    expect(provider.say).not.toHaveBeenCalled();
+    expect(provider.endCall).toHaveBeenCalledWith('vapi-1');
   });
 
   it('does nothing once Vapi has already ended the call', async () => {
     const call = seedCall();
     provider.getCall.mockResolvedValue({ status: 'ended', raw: {} });
-    expect(await handleVoicemailBackstop(fake.supabase as any, call.id, [])).toBe('skipped');
+    expect(await handleVoicemailBackstop(fake.supabase as any, call.id)).toBe('skipped');
     expect(provider.endCall).not.toHaveBeenCalled();
   });
 

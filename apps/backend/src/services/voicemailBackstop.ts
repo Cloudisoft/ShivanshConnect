@@ -6,12 +6,12 @@
  * vapi.ts). This covers the calls it misses: when the other side's first
  * few lines are unmistakably a voicemail greeting ("please leave a message
  * after the tone", "the person you are trying to reach is not available"),
- * the backend records the call as voicemail and ends it - after leaving the
- * campaign's voicemail message, when the campaign has one.
+ * the backend records the call as voicemail and hangs up. Per explicit
+ * request ("just detect the VM and then drop the VM, nothing more") no
+ * message is ever left.
  *
  * Only the other side's first lines count, and only early in the call, so a
- * real conversation that later mentions voicemail is never cut off. A
- * campaign with voicemail detection turned off is left alone.
+ * real conversation that later mentions voicemail is never cut off.
  */
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { resolveProviderForCall } from '../lib/orchestration/resolveProvider.js';
@@ -37,16 +37,14 @@ const VOICEMAIL_GREETING = [
 const MAX_SECONDS_FROM_START = 45;
 /** How many of the other side's lines it looks at. */
 const MAX_CALLER_LINES = 3;
-/** Gives Vapi's own detector a moment to act first (it leaves the message
- * itself when it catches the voicemail). */
-const BACKSTOP_DELAY_MS = Number.parseInt(process.env.VOICEMAIL_BACKSTOP_DELAY_MS ?? '', 10) || 1500;
+/** Gives Vapi's own detector a moment to act first. */
+const BACKSTOP_DELAY_MS = Number.parseInt(process.env.VOICEMAIL_BACKSTOP_DELAY_MS ?? '', 10) || 500;
 
 const ACTIVE_STATUSES = new Set(['answered', 'in_progress']);
 
 interface CallWatch {
   callerLines: number;
   handled: boolean;
-  aiText: string[];
 }
 
 const watches = new Map<string, CallWatch>();
@@ -54,7 +52,7 @@ const watches = new Map<string, CallWatch>();
 function watchFor(callId: string): CallWatch {
   let w = watches.get(callId);
   if (!w) {
-    w = { callerLines: 0, handled: false, aiText: [] };
+    w = { callerLines: 0, handled: false };
     watches.set(callId, w);
     // A call never lasts this long in the watch window; drop the state.
     setTimeout(() => watches.delete(callId), 10 * 60_000).unref?.();
@@ -66,45 +64,11 @@ export function isVoicemailGreeting(text: string): boolean {
   return VOICEMAIL_GREETING.some((re) => re.test(text));
 }
 
-/** Rough speaking time for the voicemail message, so the call ends after it
- * has been said, not in the middle of it. */
-export function speakingTimeMs(text: string): number {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.round((words / 2.5) * 1000) + 2500;
-}
-
-function normalise(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-/** True when the assistant has already started saying the voicemail
- * message - Vapi's detector caught it and is leaving the message itself. */
-export function alreadyLeavingMessage(aiText: string[], message: string | null): boolean {
-  if (!message) return false;
-  const start = normalise(message).split(' ').slice(0, 5).join(' ');
-  if (!start) return false;
-  return aiText.some((t) => normalise(t).includes(start));
-}
-
-export async function handleVoicemailBackstop(supabase: Supabase, callId: string, aiText: string[]): Promise<'ended' | 'skipped'> {
+export async function handleVoicemailBackstop(supabase: Supabase, callId: string): Promise<'ended' | 'skipped'> {
   const { data: call } = await supabase.from('calls').select('*').eq('id', callId).maybeSingle();
   if (!call || !ACTIVE_STATUSES.has(call.status)) return 'skipped';
   const providerCallId = call.engine === 'vapi' ? call.vapi_call_id : call.pipecat_call_id;
   if (!providerCallId) return 'skipped';
-
-  let message: string | null = null;
-  if (call.campaign_id) {
-    const { data: campaign } = await supabase
-      .from('campaigns')
-      .select('voicemail_detection_enabled, leave_voicemail, voicemail_message')
-      .eq('id', call.campaign_id)
-      .maybeSingle();
-    if (campaign && campaign.voicemail_detection_enabled === false) return 'skipped';
-    if (campaign?.leave_voicemail && typeof campaign.voicemail_message === 'string' && campaign.voicemail_message.trim()) {
-      message = campaign.voicemail_message.trim();
-    }
-  }
-  if (alreadyLeavingMessage(aiText, message)) return 'skipped';
 
   const provider = await resolveProviderForCall(supabase, call);
   if (call.engine === 'vapi') {
@@ -123,16 +87,6 @@ export async function handleVoicemailBackstop(supabase: Supabase, callId: string
     await transitionCallState(supabase, call.id, 'voicemail', { detected_by: 'transcript_backstop' });
   }
 
-  const sayer = provider as unknown as { say?: (id: string, text: string) => Promise<void> };
-  if (message && typeof sayer.say === 'function') {
-    try {
-      await sayer.say(providerCallId, message);
-      await new Promise((resolve) => setTimeout(resolve, speakingTimeMs(message!)));
-    } catch {
-      // Could not leave the message - still hang up rather than keep
-      // talking to a recording.
-    }
-  }
   await provider.endCall(providerCallId);
   return 'ended';
 }
@@ -148,17 +102,14 @@ export function checkForVoicemail(
   if (call.direction && call.direction !== 'outbound') return;
   const w = watchFor(call.id);
   if (w.handled) return;
-  if (speaker === 'ai') {
-    w.aiText.push(text);
-    return;
-  }
+  if (speaker === 'ai') return;
   w.callerLines += 1;
   if (w.callerLines > MAX_CALLER_LINES) return;
   if (secondsFromStart != null && secondsFromStart > MAX_SECONDS_FROM_START) return;
   if (!isVoicemailGreeting(text)) return;
   w.handled = true;
   const timer = setTimeout(() => {
-    handleVoicemailBackstop(supabase, call.id, w.aiText)
+    handleVoicemailBackstop(supabase, call.id)
       .then((result) => {
         if (result === 'ended') {
           // eslint-disable-next-line no-console
