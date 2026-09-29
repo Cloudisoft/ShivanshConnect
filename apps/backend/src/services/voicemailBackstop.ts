@@ -76,15 +76,23 @@ export async function handleVoicemailBackstop(supabase: Supabase, callId: string
     if (live.status !== 'in-progress') return 'skipped';
   }
 
-  // Recorded first, so the call is disposed as VOICEMAIL however it ends.
-  await supabase.from('call_events').insert({
-    call_id: call.id,
-    organization_id: call.organization_id,
-    event_type: 'call.amd_detected',
-    payload: { amd: true, source: 'transcript_backstop' },
-  });
-  if (call.status === 'in_progress') {
-    await transitionCallState(supabase, call.id, 'voicemail', { detected_by: 'transcript_backstop' });
+  // Recorded first, so the call is disposed as VOICEMAIL however it ends -
+  // but never allowed to stop the hang-up below. (The transition context is
+  // written onto the calls row, so it must only carry real columns: an
+  // unknown one failed every backstop hang-up on 29 Sep.)
+  try {
+    await supabase.from('call_events').insert({
+      call_id: call.id,
+      organization_id: call.organization_id,
+      event_type: 'call.amd_detected',
+      payload: { amd: true, source: 'transcript_backstop' },
+    });
+    if (call.status === 'in_progress') {
+      await transitionCallState(supabase, call.id, 'voicemail');
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('voicemailBackstop: could not mark call as voicemail', call.id, err);
   }
 
   await provider.endCall(providerCallId);

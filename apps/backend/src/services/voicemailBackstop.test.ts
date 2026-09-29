@@ -66,6 +66,9 @@ describe('voicemailBackstop', () => {
     expect(provider.endCall).toHaveBeenCalledWith('vapi-1');
     expect(fake.tables.call_events.some((e: any) => e.call_id === call.id && e.event_type === 'call.amd_detected')).toBe(true);
     expect(fake.tables.calls.find((c: any) => c.id === call.id)?.status).toBe('voicemail');
+    // Only real columns are written onto the call (an unknown one made the
+    // real database reject the update and the hang-up never happened).
+    expect(Object.keys(fake.tables.calls.find((c: any) => c.id === call.id)!)).not.toContain('detected_by');
   });
 
   it('never leaves a message, even when the campaign has one configured, and applies even with detection turned off', async () => {
