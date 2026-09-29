@@ -138,3 +138,17 @@ describe('voicemailBackstop', () => {
     }
   });
 });
+
+describe('voicemailBackstop - call already ended by Vapi', () => {
+  it('treats "Not Active" as already handled, not an error', async () => {
+    provider.endCall.mockReset();
+    provider.getCall.mockReset();
+    fake.tables.campaigns.push({ id: 'camp-na', voicemail_detection_enabled: true, leave_voicemail: true, voicemail_message: 'Please call us back.' });
+    const call = seedCall({ campaign_id: 'camp-na' });
+    provider.getCall.mockResolvedValue({ status: 'in-progress', raw: {} });
+    provider.say.mockRejectedValue(new Error('Vapi say control message failed (400): {"error":"Call `x` Not Active."}'));
+    expect(await handleVoicemailBackstop(fake.supabase as any, call.id)).toBe('skipped');
+    expect(provider.endCall).not.toHaveBeenCalled();
+    provider.say.mockReset();
+  });
+});

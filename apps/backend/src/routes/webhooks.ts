@@ -162,6 +162,29 @@ function webhookErrorMessage(err: unknown): string {
   return 'Unknown webhook processing error.';
 }
 
+/** Keys of a Vapi status-update / end-of-call-report that are only bulk: the
+ * full transcript and message history, the whole assistant config (system
+ * prompt included) and the artifact bundle. Each event used to be stored
+ * with all of it twice (webhook_events and call_events), and a burst of
+ * calls ending together was enough to push the database into statement
+ * timeouts (29 Sep). Nothing reads them back - recordings/transcripts come
+ * from the provider's own API. */
+const BULKY_VAPI_KEYS = ['artifact', 'messages', 'messagesOpenAIFormatted', 'transcript', 'assistant', 'customer', 'phoneNumber', 'costBreakdown', 'costs'];
+
+export function compactVapiMessage(message: Record<string, any>): Record<string, any> {
+  if (!message || (message.type !== 'status-update' && message.type !== 'end-of-call-report')) return message;
+  const compact: Record<string, any> = { ...message };
+  for (const key of BULKY_VAPI_KEYS) delete compact[key];
+  if (compact.call && typeof compact.call === 'object') {
+    const { id, status, type, endedReason, startedAt, endedAt, phoneNumberId } = compact.call;
+    compact.call = { id, status, type, endedReason, startedAt, endedAt, phoneNumberId };
+  }
+  if (compact.analysis && typeof compact.analysis === 'object') {
+    compact.analysis = { summary: compact.analysis.summary, successEvaluation: compact.analysis.successEvaluation };
+  }
+  return compact;
+}
+
 async function markWebhookFailed(supabase: ReturnType<typeof getSupabaseAdmin>, webhookEventId: string, errorMessage: string): Promise<void> {
   const { data: updated } = await supabase
     .from('webhook_events')
@@ -270,7 +293,7 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       provider: 'vapi',
       eventId,
       eventType,
-      payload: body,
+      payload: { message: compactVapiMessage(message) },
       organizationId,
     });
     if (alreadyProcessed) {
@@ -301,7 +324,7 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       // reported slow loads specifically while calls were active and
       // transcripts were streaming in.
       if (eventType !== 'transcript') {
-        await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: eventType, payload: message, occurred_at: new Date().toISOString() });
+        await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: eventType, payload: compactVapiMessage(message), occurred_at: new Date().toISOString() });
       }
 
       switch (eventType) {

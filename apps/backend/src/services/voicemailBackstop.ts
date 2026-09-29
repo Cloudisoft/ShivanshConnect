@@ -85,6 +85,11 @@ export function alreadyLeavingMessage(aiText: string[], message: string | null):
   return start.length > 0 && aiText.some((t) => normalise(t).includes(start));
 }
 
+/** Vapi's answer when the call has already ended by the time we act. */
+function isCallAlreadyEnded(err: unknown): boolean {
+  return err instanceof Error && /not active/i.test(err.message);
+}
+
 export async function handleVoicemailBackstop(supabase: Supabase, callId: string, aiText: string[] = []): Promise<'ended' | 'skipped'> {
   const { data: call } = await supabase.from('calls').select('*').eq('id', callId).maybeSingle();
   if (!call || !ACTIVE_STATUSES.has(call.status)) return 'skipped';
@@ -131,12 +136,20 @@ export async function handleVoicemailBackstop(supabase: Supabase, callId: string
       await sayer.say(providerCallId, message);
       await new Promise((resolve) => setTimeout(resolve, speakingTimeMs(message!)));
     } catch (err) {
+      // Vapi's own detector usually gets there first and has already ended
+      // the call ("Not Active") - nothing left to do.
+      if (isCallAlreadyEnded(err)) return 'skipped';
       // Couldn't leave it - still hang up rather than keep talking to a recording.
       // eslint-disable-next-line no-console
       console.error('voicemailBackstop: could not leave the voicemail script', call.id, err);
     }
   }
-  await provider.endCall(providerCallId);
+  try {
+    await provider.endCall(providerCallId);
+  } catch (err) {
+    if (isCallAlreadyEnded(err)) return 'skipped';
+    throw err;
+  }
   return 'ended';
 }
 
