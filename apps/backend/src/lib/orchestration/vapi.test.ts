@@ -107,7 +107,7 @@ describe('VapiProvider', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.voicemailDetection).toEqual({
       provider: 'vapi',
-      backoffPlan: { startAtSeconds: 2, frequencySeconds: 2, maxRetries: 6 },
+      backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 },
       beepMaxAwaitSeconds: 20,
     });
     expect(body.voicemailMessage).toBe('Please call us back at 555-0100.');
@@ -130,7 +130,7 @@ describe('VapiProvider', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.voicemailDetection).toEqual({
       provider: 'vapi',
-      backoffPlan: { startAtSeconds: 2, frequencySeconds: 2, maxRetries: 6 },
+      backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 },
       beepMaxAwaitSeconds: 20,
     });
     expect(body.voicemailMessage).toBeUndefined();
@@ -211,7 +211,7 @@ describe('VapiProvider', () => {
     await provider.createCall({ ...base, voicemailDetection: { enabled: true, leaveVoicemail: false, message: 'Call us back.' } });
     await provider.createCall({ ...base, voicemailDetection: { enabled: false, leaveVoicemail: true, message: 'Call us back.' } });
     const [withMessage, hangUpOnly, off] = fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).assistantOverrides);
-    expect(withMessage.voicemailDetection).toEqual({ provider: 'vapi', backoffPlan: { startAtSeconds: 2, frequencySeconds: 2, maxRetries: 6 }, beepMaxAwaitSeconds: 20 });
+    expect(withMessage.voicemailDetection).toEqual({ provider: 'vapi', backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 }, beepMaxAwaitSeconds: 20 });
     expect(withMessage.voicemailMessage).toBe('Call us back.');
     expect(hangUpOnly.voicemailDetection).toBeDefined();
     expect(hangUpOnly.voicemailMessage).toBeUndefined();
