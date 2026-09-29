@@ -531,7 +531,11 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
           ? {
               enabled: params.callingRulesOverride.voicemail_detection_enabled,
               leaveVoicemail: params.callingRulesOverride.leave_voicemail,
-              message: params.callingRulesOverride.voicemail_message,
+              // {{agent_name}}, {{first_name}}... filled in for this call, like
+              // the AI's own opening - Vapi read the placeholders out literally.
+              message: params.callingRulesOverride.voicemail_message
+                ? renderTemplate(params.callingRulesOverride.voicemail_message, personalization.context)
+                : null,
             }
           : null,
       });

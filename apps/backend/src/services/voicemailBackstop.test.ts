@@ -152,3 +152,25 @@ describe('voicemailBackstop - call already ended by Vapi', () => {
     provider.say.mockReset();
   });
 });
+
+describe('voicemailBackstop - voicemail script placeholders', () => {
+  it('fills {{agent_name}} with the voice the call used', async () => {
+    provider.endCall.mockReset();
+    provider.say.mockReset();
+    provider.getCall.mockReset();
+    vi.useFakeTimers();
+    try {
+      (fake.tables as any).voices.push({ id: 'voice-ray', name: 'Ray - Conversationalist' });
+      fake.tables.campaigns.push({ id: 'camp-tpl', voicemail_detection_enabled: true, leave_voicemail: true, voicemail_message: 'Hi, this is {{agent_name}}. Please call us back.' });
+      const call = seedCall({ campaign_id: 'camp-tpl', voice_id: 'voice-ray' });
+      provider.getCall.mockResolvedValue({ status: 'in-progress', raw: {} });
+      provider.say.mockResolvedValue(undefined);
+      const done = handleVoicemailBackstop(fake.supabase as any, call.id);
+      await vi.runAllTimersAsync();
+      expect(await done).toBe('ended');
+      expect(provider.say).toHaveBeenCalledWith('vapi-1', 'Hi, this is Ray. Please call us back.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
