@@ -26,6 +26,8 @@ const CampaignDetailPage = lazyPage(() => import('./pages/CampaignDetailPage'), 
 const DialingSettingsPage = lazyPage(() => import('./pages/DialingSettingsPage'), (m) => m.DialingSettingsPage);
 const DispositionsPage = lazyPage(() => import('./pages/DispositionsPage'), (m) => m.DispositionsPage);
 const CallbacksPage = lazyPage(() => import('./pages/CallbacksPage'), (m) => m.CallbacksPage);
+const QueuesPage = lazyPage(() => import('./pages/QueuesPage'), (m) => m.QueuesPage);
+const InboundRoutesPage = lazyPage(() => import('./pages/InboundRoutesPage'), (m) => m.InboundRoutesPage);
 const CdrPage = lazyPage(() => import('./pages/CdrPage'), (m) => m.CdrPage);
 const LiveMonitorPage = lazyPage(() => import('./pages/LiveMonitorPage'), (m) => m.LiveMonitorPage);
 const UsersPage = lazyPage(() => import('./pages/UsersPage'), (m) => m.UsersPage);
@@ -75,6 +77,8 @@ export default function App(): JSX.Element {
             <Route path="/dialing-settings" element={<DialingSettingsPage />} />
             <Route path="/dispositions" element={<DispositionsPage />} />
             <Route path="/callbacks" element={<CallbacksPage />} />
+            <Route path="/queues" element={<QueuesPage />} />
+            <Route path="/inbound-routes" element={<InboundRoutesPage />} />
             <Route path="/cdr" element={<CdrPage />} />
             <Route path="/live-monitor" element={<LiveMonitorPage />} />
             <Route path="/users" element={<UsersPage />} />

@@ -158,6 +158,80 @@ export function buildTransferTool(destinationE164: string): Record<string, unkno
   };
 }
 
+/** Function tools answered by this backend's tool-calls webhook
+ * (services/toolCallHandler.ts). They had real handlers since Phase 8 but
+ * were never declared on any call, so the model could not use them:
+ * schedule_callback (the caller asks to be called back later) and
+ * request_dnc (the caller asks not to be called again). */
+export function buildCallControlTools(serverUrl: string | null): Record<string, unknown>[] {
+  const withServer = (tool: Record<string, unknown>) => (serverUrl ? { ...tool, server: { url: serverUrl } } : tool);
+  return [
+    withServer({
+      type: 'function',
+      function: {
+        name: 'schedule_callback',
+        description:
+          'Schedule a callback when the caller asks to be called back later. Agree on a specific date and time with the caller first and confirm it back to them, then call this.',
+        parameters: {
+          type: 'object',
+          properties: {
+            scheduled_at: {
+              type: 'string',
+              description: "The agreed callback time as an ISO 8601 timestamp with the caller's UTC offset, e.g. 2026-09-30T15:00:00-04:00.",
+            },
+            timezone: { type: 'string', description: "The caller's IANA timezone if known, e.g. America/New_York." },
+            reason: { type: 'string', description: 'Why they want a callback.' },
+            notes: { type: 'string', description: 'Anything else worth remembering for the callback.' },
+          },
+          required: ['scheduled_at'],
+        },
+      },
+      messages: [{ type: 'request-start', content: '', blocking: false }],
+    }),
+    withServer({
+      type: 'function',
+      function: {
+        name: 'request_dnc',
+        description: 'Use only when the caller explicitly asks not to be called again. Adds their number to the Do Not Call list.',
+        parameters: {
+          type: 'object',
+          properties: { reason: { type: 'string', description: 'What the caller said.' } },
+          required: [],
+        },
+      },
+      messages: [{ type: 'request-start', content: '', blocking: false }],
+    }),
+  ];
+}
+
+/** Saves the caller's details (inbound calls): creates or updates their
+ * lead record - see services/toolCallHandler.ts save_caller_details. */
+export function buildCallerDetailsTool(serverUrl: string | null): Record<string, unknown> {
+  const tool: Record<string, unknown> = {
+    type: 'function',
+    function: {
+      name: 'save_caller_details',
+      description:
+        "Save the caller's details as soon as you learn them: name, best phone number, email and the purpose of their call. Call it again whenever you learn more.",
+      parameters: {
+        type: 'object',
+        properties: {
+          first_name: { type: 'string' },
+          last_name: { type: 'string' },
+          phone: { type: 'string', description: 'Best number to reach them, if different from the number they are calling from.' },
+          email: { type: 'string' },
+          purpose: { type: 'string', description: 'Why they are calling, in a short sentence.' },
+          notes: { type: 'string' },
+        },
+        required: [],
+      },
+    },
+    messages: [{ type: 'request-start', content: '', blocking: false }],
+  };
+  if (serverUrl) tool.server = { url: serverUrl };
+  return tool;
+}
+
 /** Function tool the model calls to look things up in the campaign's
  * knowledge base mid-call. Answered synchronously by routes/webhooks.ts
  * (tool-calls -> services/toolCallHandler.ts search_knowledge_base). */
@@ -455,6 +529,49 @@ export class VapiProvider implements CallOrchestrationProvider {
     await this.request('GET', '/assistant?limit=1');
   }
 
+  /** A complete transient assistant for one inbound call, returned in
+   * response to Vapi's assistant-request webhook (see
+   * services/inboundCalls.ts). Same base as a stored assistant, with the
+   * call's own greeting/prompt and live tools; no voicemail detection
+   * (the caller dialed us). */
+  buildInboundAssistant(
+    config: AssistantConfig,
+    opts: { firstMessage: string; systemPrompt: string; transferDestinationE164: string | null; knowledgeBaseSearch: boolean },
+  ): Record<string, unknown> {
+    const payload = this.toVapiAssistantPayload({ ...config, voicemailDetection: null });
+    delete payload.voicemailDetection;
+    delete payload.voicemailMessage;
+    delete payload.forwardingPhoneNumber;
+    payload.firstMessage = opts.firstMessage;
+    payload.firstMessageMode = 'assistant-speaks-first';
+    const transfer = opts.transferDestinationE164 && /^\+[1-9]\d{6,14}$/.test(opts.transferDestinationE164) ? opts.transferDestinationE164 : null;
+    const serverUrl = vapiWebhookUrl();
+    const tools: Record<string, unknown>[] = [...buildCallControlTools(serverUrl), buildCallerDetailsTool(serverUrl)];
+    if (transfer) tools.push(buildTransferTool(transfer));
+    if (opts.knowledgeBaseSearch) tools.push(buildKnowledgeBaseTool(serverUrl));
+    const model = payload.model as Record<string, unknown>;
+    model.messages = [{ role: 'system', content: transfer ? `${opts.systemPrompt}${TRANSFER_TOOL_INSTRUCTION}` : opts.systemPrompt }];
+    model.tools = tools;
+    payload.startSpeakingPlan = START_SPEAKING_PLAN;
+    payload.stopSpeakingPlan = STOP_SPEAKING_PLAN;
+    payload.artifactPlan = ARTIFACT_PLAN;
+    payload.backgroundSound = BACKGROUND_SOUND;
+    return payload;
+  }
+
+  /** Points an imported number's inbound calls at this backend: Vapi asks
+   * our assistant-request webhook who should answer, and if that fails
+   * the call goes to fallbackE164 (a person) instead of being dropped. */
+  async configureInboundNumber(vapiPhoneNumberId: string, fallbackE164: string | null): Promise<void> {
+    const serverUrl = vapiWebhookUrl();
+    if (!serverUrl) throw new OrchestrationProviderError('BACKEND_PUBLIC_URL is not set - cannot route inbound calls to this backend.');
+    const body: Record<string, unknown> = { server: { url: serverUrl } };
+    if (fallbackE164 && /^\+[1-9]\d{6,14}$/.test(fallbackE164)) {
+      body.fallbackDestination = { type: 'number', number: fallbackE164, message: '' };
+    }
+    await this.request('PATCH', `/phone-number/${encodeURIComponent(vapiPhoneNumberId)}`, body);
+  }
+
   async createAssistant(config: AssistantConfig): Promise<AssistantResult> {
     const payload = this.toVapiAssistantPayload(config);
     const created = await this.request<{ id: string }>('POST', '/assistant', payload);
@@ -559,6 +676,8 @@ export class VapiProvider implements CallOrchestrationProvider {
       if (transferDestination) appendedTools.push(buildTransferTool(transferDestination));
       // The campaign's knowledge base, searchable live during the call.
       if (params.knowledgeBaseSearch) appendedTools.push(buildKnowledgeBaseTool(vapiWebhookUrl()));
+      // Callbacks and Do-Not-Call requests, on every call.
+      appendedTools.push(...buildCallControlTools(vapiWebhookUrl()));
       if (appendedTools.length > 0) assistantOverrides['tools:append'] = appendedTools;
       if (params.firstMessageOverride) assistantOverrides.firstMessage = params.firstMessageOverride;
       if (params.systemPromptOverride) {

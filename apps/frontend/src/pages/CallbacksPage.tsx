@@ -44,8 +44,8 @@ export function CallbacksPage(): JSX.Element {
         <div>
           <h1 className="text-2xl font-semibold text-ink-900">Callbacks</h1>
           <p className="mt-1 text-sm text-ink-500">
-            Scheduled follow-up calls - created manually or by the AI mid-call. A due callback overrides normal
-            cooldown and is dialed through the same campaign dispatcher as any other lead.
+            Scheduled follow-up calls - created manually or by the AI when a caller asks to be called back. The AI
+            calls each person back at the agreed time, within the campaign's calling hours.
           </p>
         </div>
         {canManage && (

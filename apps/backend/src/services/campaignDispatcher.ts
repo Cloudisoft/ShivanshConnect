@@ -28,7 +28,9 @@
  * `processCampaign()` concurrently, not just by trusting the guard.
  */
 import { getSupabaseAdmin } from '../lib/supabase.js';
-import { originateCall, resolveDefaultEngine } from './callOrigination.js';
+import { originateCall } from './callOrigination.js';
+import { loadCampaignCallContext } from './campaignCallContext.js';
+import { markDueCallbacksCompleted } from './callbackScheduler.js';
 import { effectiveConcurrency, evaluateLeadEligibility, getWorkerPoolCapacity } from './leadEligibility.js';
 import { findDncMatches } from '../lib/leadHelpers.js';
 import { callEventBus } from '../lib/callStateMachine.js';
@@ -168,6 +170,15 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
     workerPoolCapacity: getWorkerPoolCapacity(),
   });
   let capacity = effConcurrency - (activeCount ?? 0);
+  // Queue priority: people calling in are answered first - every live
+  // inbound call in the organization holds back one outbound dial.
+  const { count: inboundActive } = await supabase
+    .from('calls')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', orgId)
+    .eq('direction', 'inbound')
+    .in('status', ACTIVE_CALL_STATUSES);
+  capacity -= inboundActive ?? 0;
   const perMinuteLimit = campaign.calls_per_minute_limit ?? dialingSettings?.calls_per_minute ?? null;
   capacity = Math.min(capacity, perMinuteRemaining(campaign.id, perMinuteLimit));
   if (capacity <= 0) return { dispatched, skipped };
@@ -202,27 +213,9 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
   // providers, see migration 00000000000056), so each call in the loop
   // below rotates to the next one via nextPhoneNumberFromPool() rather
   // than every call this tick using the same fixed number.
-  let agentVersionRow: Record<string, any> | null = null;
-  let voiceOverride: { providerKey: string; providerVoiceId: string } | null = null;
-  let engine: 'vapi' | 'pipecat' = 'vapi';
-  if (version.ai_agent_version_id) {
-    const { data } = await supabase.from('ai_agent_versions').select('*').eq('id', version.ai_agent_version_id).maybeSingle();
-    agentVersionRow = data;
-  }
-  const { data: poolRows } = await supabase.from('campaign_phone_numbers').select('phone_numbers(*)').eq('campaign_id', campaign.id);
-  let phoneNumberPool: Record<string, any>[] = ((poolRows ?? []) as any[]).map((row) => row.phone_numbers).filter(Boolean);
-  if (phoneNumberPool.length === 0 && campaign.phone_number_id) {
-    // Legacy fallback: a campaign that predates the pool (or whose pool
-    // row was somehow never backfilled) still dials from its single
-    // configured number exactly as before.
-    const { data } = await supabase.from('phone_numbers').select('*').eq('id', campaign.phone_number_id).maybeSingle();
-    if (data) phoneNumberPool = [data];
-  }
-  if (version.voice_id) {
-    const { data } = await supabase.from('voices').select('provider_key, provider_voice_id').eq('id', version.voice_id).maybeSingle();
-    if (data) voiceOverride = { providerKey: data.provider_key, providerVoiceId: data.provider_voice_id };
-  }
-  engine = await resolveDefaultEngine(supabase, orgId);
+  const context = await loadCampaignCallContext(supabase, campaign, version);
+  if (!context) return { dispatched, skipped };
+  const { agentVersionRow, voiceOverride, phoneNumberPool, engine } = context;
 
   const now = new Date();
   for (const candidate of rows) {
@@ -283,21 +276,17 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
         leadId: lead.id,
         campaignId: campaign.id,
         createdBy: null,
-        transferDestinationOverride: version.transfer_number_e164 ?? campaign.transfer_number_e164 ?? null,
+        transferDestinationOverride: context.transferDestination,
         voiceOverride,
-        callingRulesOverride: callingRules
-          ? {
-              voicemail_detection_enabled: callingRules.voicemail_detection_enabled,
-              voicemail_message: callingRules.voicemail_message,
-              leave_voicemail: callingRules.leave_voicemail,
-              background_noise: callingRules.background_noise,
-            }
-          : null,
+        callingRulesOverride: context.callingRulesOverride,
         // The campaign's own script and knowledge base reach the call.
-        scriptIdOverride: version.script_id ?? null,
-        knowledgeBaseIdsOverride: version.knowledge_base_ids ?? [],
+        scriptIdOverride: context.scriptId,
+        knowledgeBaseIdsOverride: context.knowledgeBaseIds,
+        timezone: callingRules?.timezone ?? null,
       });
       await supabase.from('campaign_leads').update({ last_call_id: call.id }).eq('id', claimed.id);
+      // A due callback for this lead is being fulfilled by this call.
+      await markDueCallbacksCompleted(supabase, campaign.id, lead.id);
       dispatched += 1;
       recordDispatch(campaign.id);
     } catch (err) {
