@@ -46,6 +46,7 @@ import { OrchestrationProviderError, OrchestrationProviderNotConfiguredError } f
 import { campaignRoutes } from './routes/campaigns.js';
 import { dialingSettingsRoutes, campaignSettingsRoutes } from './routes/dialingSettings.js';
 import { startCampaignDispatcher } from './services/campaignDispatcher.js';
+import { releaseWorkerLease, waitForWorkerLease } from './lib/workerLease.js';
 import { startAnalyticsAggregator } from './services/analyticsAggregator.js';
 import { startCallReconciliation } from './services/callReconciliation.js';
 import { startDialTimeoutSweep } from './services/dialTimeoutSweep.js';
@@ -375,6 +376,27 @@ async function main() {
   const app = buildApp();
   try {
     await app.listen({ port: env.PORT, host: '0.0.0.0' });
+    // On shutdown (a deploy replacing this container): hand the worker
+    // lease over at once and close Live Monitor sockets, so viewers
+    // reconnect to the new container instead of staying on this one and
+    // missing every call it no longer hears about.
+    let stopping = false;
+    const shutdown = (signal: string) => {
+      if (stopping) return;
+      stopping = true;
+      app.log.info(`${signal} received - releasing worker lease and closing`);
+      setTimeout(() => process.exit(0), 10_000).unref();
+      void releaseWorkerLease()
+        .catch((err) => app.log.error({ err }, 'worker lease release failed'))
+        .then(() => app.close())
+        .finally(() => process.exit(0));
+    };
+    process.once('SIGTERM', () => shutdown('SIGTERM'));
+    process.once('SIGINT', () => shutdown('SIGINT'));
+    // Background workers run in one process only - see lib/workerLease.ts.
+    // This container serves requests right away but waits here while the
+    // old one is still running.
+    await waitForWorkerLease((msg) => app.log.info(msg));
     // Phase 7: starts the in-process campaign dispatch loop (see
     // services/campaignDispatcher.ts's header comment for exactly why
     // this is a setInterval loop today and how it maps onto a real
