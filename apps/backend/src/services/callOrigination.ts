@@ -18,7 +18,14 @@
  * provider's createCall() is ever invoked.
  */
 import { knowledgeBaseIdsForCall } from './callKnowledge.js';
-import { buildScriptSection, composeSystemPrompt, CONVERSATION_GUIDANCE, KNOWLEDGE_BASE_INSTRUCTION, personalityLines } from '../lib/callGuidance.js';
+import {
+  buildScriptSection,
+  buildTimeAndCallbackSection,
+  composeSystemPrompt,
+  CONVERSATION_GUIDANCE,
+  KNOWLEDGE_BASE_INSTRUCTION,
+  personalityLines,
+} from '../lib/callGuidance.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ValidationError } from '../lib/errors.js';
 import { writeAuditLog } from '../lib/audit.js';
@@ -142,7 +149,7 @@ export async function buildAssistantConfig(
  * shows Tina instead of Mitchell" bug) and by resolveCallPersonalization
  * (for {{agent_name}}), rather than each re-querying separately.
  */
-async function resolveActualVoice(
+export async function resolveActualVoice(
   supabase: Supabase,
   orgId: string,
   version: Record<string, any>,
@@ -303,6 +310,9 @@ export async function ensureVapiPhoneNumberImported(
         : await vapiProvider.importPhoneNumber({ provider: 'telnyx', e164: phoneNumber.phone_number, telnyxApiKey: (creds as { api_key: string }).api_key });
 
     await supabase.from('phone_numbers').update({ vapi_phone_number_id: imported.vapiPhoneNumberId }).eq('id', phoneNumber.id);
+    // A newly imported number also answers inbound calls straight away
+    // (services/inboundCalls.ts); best-effort - the periodic sync retries.
+    await vapiProvider.configureInboundNumber(imported.vapiPhoneNumberId, null).catch(() => undefined);
     return imported.vapiPhoneNumberId;
   }
 
@@ -342,6 +352,15 @@ export interface OriginateCallParams {
   /** Campaign version's knowledge_base_ids. Empty/omitted falls back to
    * the agent's own knowledge bases. */
   knowledgeBaseIdsOverride?: string[] | null;
+  /** Timezone the AI should use for "now" and callback times (the
+   * campaign's calling-rules timezone). Omitted: the organization's. */
+  timezone?: string | null;
+}
+
+/** The organization's own timezone (organizations.timezone), if set. */
+export async function organizationTimezone(supabase: Supabase, orgId: string): Promise<string | null> {
+  const { data } = await supabase.from('organizations').select('timezone').eq('id', orgId).maybeSingle();
+  return (data?.timezone as string | null) ?? null;
 }
 
 export interface CallScriptAndKnowledge {
@@ -410,6 +429,7 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
     ...personalityLines(version.personality),
     buildScriptSection(scriptAndKnowledge.scriptContent, personalization.context),
     scriptAndKnowledge.hasKnowledgeBase && engine === 'vapi' ? KNOWLEDGE_BASE_INSTRUCTION : null,
+    engine === 'vapi' ? buildTimeAndCallbackSection(params.timezone ?? (await organizationTimezone(supabase, orgId))) : null,
     CONVERSATION_GUIDANCE,
   ]);
 

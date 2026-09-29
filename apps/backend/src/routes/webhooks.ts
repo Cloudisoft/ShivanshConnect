@@ -1,3 +1,4 @@
+import { handleAssistantRequest } from '../services/inboundCalls.js';
 import { scheduleAutoTransferIfAnnounced } from '../services/autoTransfer.js';
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
@@ -167,6 +168,13 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
     // distinct real events of the same type on the same call don't
     // collide with each other.
     const eventId: string = message?.id ?? `${providerCallId ?? 'unknown'}:${eventType}:${message?.timestamp ?? Math.floor(Date.now() / 1000)}`;
+
+    // Inbound call: Vapi asks which assistant should answer - see
+    // services/inboundCalls.ts. Answered synchronously, before anything
+    // else (the caller is waiting on this response).
+    if (eventType === 'assistant-request') {
+      return reply.status(200).send(await handleAssistantRequest(supabase, message));
+    }
 
     let organizationId: string | null = null;
     let call: Record<string, any> | null = null;

@@ -52,10 +52,13 @@ import { startDialTimeoutSweep } from './services/dialTimeoutSweep.js';
 import { startNoCallerAudioSweep } from './services/noCallerAudioSweep.js';
 import { startRecordingBackfillSweep } from './services/recordingBackfillSweep.js';
 import { startVoiceCatalogSync } from './services/voiceCatalog.js';
+import { startCallbackDispatcher } from './services/callbackDispatcher.js';
+import { startInboundNumberSync } from './services/inboundCalls.js';
 import { runCallEndDataRepair } from './services/callEndDataRepair.js';
 import { dashboardRoutes, startDashboardWarmer } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { dispositionRoutes } from './routes/dispositions.js';
+import { queueRoutes } from './routes/queues.js';
 import { callbackRoutes } from './routes/callbacks.js';
 import { cdrRoutes } from './routes/cdr.js';
 import { exportRoutes } from './routes/exports.js';
@@ -184,6 +187,7 @@ export function buildApp() {
       api.register(dialingSettingsRoutes, { prefix: '/dialing-settings' });
       api.register(dispositionRoutes, { prefix: '/dispositions' });
       api.register(callbackRoutes, { prefix: '/callbacks' });
+      api.register(queueRoutes, { prefix: '/queues' });
       api.register(cdrRoutes, { prefix: '/cdr' });
       api.register(exportRoutes, { prefix: '/exports' });
       // Unauthenticated webhook receivers (external engines) vs the
@@ -417,6 +421,10 @@ async function main() {
     // Keeps every organization's dashboard pre-built so sign-in never waits
     // for it - see routes/dashboard.ts.
     startDashboardWarmer();
+    // Due AI callbacks are placed automatically - services/callbackDispatcher.ts.
+    startCallbackDispatcher();
+    // Every imported number answers inbound calls - services/inboundCalls.ts.
+    startInboundNumberSync();
     // One-off (self-limiting) repair for historical calls stuck with a
     // blank End Time/Duration by the status-update/end-of-call-report
     // race bug fixed in routes/webhooks.ts - see services/

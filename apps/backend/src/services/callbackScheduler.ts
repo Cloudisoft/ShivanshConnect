@@ -98,3 +98,15 @@ export async function createCallback(supabase: Supabase, input: CreateCallbackIn
 
   return { callback, campaignLeadUpdated };
 }
+
+/** Marks this lead's due callbacks (in this campaign) completed - called
+ * by the campaign dialer when it places a call that fulfils them. */
+export async function markDueCallbacksCompleted(supabase: Supabase, campaignId: string, leadId: string): Promise<void> {
+  await supabase
+    .from('callbacks')
+    .update({ status: 'completed' })
+    .eq('campaign_id', campaignId)
+    .eq('lead_id', leadId)
+    .in('status', ['scheduled', 'pending'])
+    .lte('scheduled_at', new Date(Date.now() + 60_000).toISOString());
+}

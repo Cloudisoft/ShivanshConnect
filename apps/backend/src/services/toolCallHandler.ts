@@ -21,6 +21,7 @@
  * An unrecognized function name is recorded (call_events) and ignored -
  * never crashes the webhook.
  */
+import { ensureLeadForCall, parseCallerDetails, saveCallerDetails } from './callerLead.js';
 import { getLlmProvider } from '../lib/llm/index.js';
 import { knowledgeBaseIdsForCall } from './callKnowledge.js';
 import { createCallback } from './callbackScheduler.js';
@@ -151,25 +152,53 @@ export async function processToolCalls(supabase: Supabase, call: Record<string, 
       if (toolCall.name === 'schedule_callback') {
         const args = toolCall.arguments;
         const scheduledAt = typeof args.scheduled_at === 'string' ? args.scheduled_at : null;
-        if (!scheduledAt || !call.lead_id) {
-          await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: 'tool_call.invalid_args', payload: { tool: 'schedule_callback', args, reason: !call.lead_id ? 'call has no associated lead' : 'missing scheduled_at' } });
+        // An inbound caller we don't know yet gets a lead now - a callback
+        // needs someone to call back.
+        const leadId = scheduledAt ? await ensureLeadForCall(supabase, call) : call.lead_id;
+        if (!scheduledAt || !leadId) {
+          await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: 'tool_call.invalid_args', payload: { tool: 'schedule_callback', args, reason: !leadId ? 'call has no associated lead' : 'missing scheduled_at' } });
+          if (toolCall.id) {
+            results.push({ toolCallId: toolCall.id, result: !scheduledAt ? 'Not scheduled: agree on a specific date and time first.' : "Not scheduled: I don't have a phone number for this caller." });
+          }
           skipped += 1;
           continue;
         }
-        await createCallback(supabase, {
-          organizationId: call.organization_id,
-          leadId: call.lead_id,
-          campaignId: call.campaign_id ?? null,
-          phoneE164: call.customer_number,
-          scheduledAt,
-          timezone: typeof args.timezone === 'string' ? args.timezone : undefined,
-          reason: typeof args.reason === 'string' ? args.reason : null,
-          notes: typeof args.notes === 'string' ? args.notes : null,
-          assignedTo: 'ai',
-          sourceCallId: call.id,
-          createdBy: null,
-        });
-        handled += 1;
+        let answer: string;
+        try {
+          const { callback } = await createCallback(supabase, {
+            organizationId: call.organization_id,
+            leadId,
+            campaignId: call.campaign_id ?? null,
+            phoneE164: call.customer_number,
+            scheduledAt,
+            timezone: typeof args.timezone === 'string' ? args.timezone : undefined,
+            reason: typeof args.reason === 'string' ? args.reason : null,
+            notes: typeof args.notes === 'string' ? args.notes : null,
+            assignedTo: 'ai',
+            sourceCallId: call.id,
+            createdBy: null,
+          });
+          answer = `Callback scheduled for ${callback.scheduled_at}.`;
+          handled += 1;
+        } catch (err) {
+          // e.g. a time in the past - tell the model so it can re-confirm.
+          answer = `Not scheduled: ${err instanceof Error ? err.message : 'could not save the callback.'} Confirm a future date and time with the caller and try again.`;
+          await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: 'tool_call.error', payload: { tool: 'schedule_callback', args, error: answer } });
+          skipped += 1;
+        }
+        if (toolCall.id) results.push({ toolCallId: toolCall.id, result: answer });
+      } else if (toolCall.name === 'save_caller_details') {
+        let answer: string;
+        try {
+          answer = await saveCallerDetails(supabase, call, parseCallerDetails(toolCall.arguments));
+          handled += 1;
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error('save_caller_details failed for call', call.id, err);
+          answer = "Couldn't save the details right now - carry on with the call.";
+          skipped += 1;
+        }
+        if (toolCall.id) results.push({ toolCallId: toolCall.id, result: answer });
       } else if (toolCall.name === 'search_knowledge_base') {
         const query = typeof toolCall.arguments.query === 'string' ? toolCall.arguments.query : '';
         let answer: string;
@@ -185,6 +214,7 @@ export async function processToolCalls(supabase: Supabase, call: Record<string, 
       } else if (toolCall.name === 'request_dnc') {
         const reason = typeof toolCall.arguments.reason === 'string' ? toolCall.arguments.reason : null;
         await handleDncRequest(supabase, call, reason);
+        if (toolCall.id) results.push({ toolCallId: toolCall.id, result: 'Done - they will not be called again.' });
         handled += 1;
       } else {
         await supabase.from('call_events').insert({ call_id: call.id, organization_id: call.organization_id, event_type: 'tool_call.unrecognized', payload: { name: toolCall.name } });

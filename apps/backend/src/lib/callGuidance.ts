@@ -70,3 +70,42 @@ export function composeSystemPrompt(parts: Array<string | null | undefined>): st
     .filter((p) => p.length > 0)
     .join('\n\n');
 }
+
+/** "2026-09-29T00:05:00-04:00"-style local timestamp for `at` in `timeZone`. */
+function isoWithOffset(at: Date, timeZone: string): string {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(at)
+      .map((p) => [p.type, p.value]),
+  ) as Record<string, string>;
+  const localAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+  const offsetMin = Math.round((localAsUtc - Math.floor(at.getTime() / 1000) * 1000) / 60000);
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  const offset = `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${offset}`;
+}
+
+/** Current date/time for the call plus the callback rule - the model needs
+ * "now" to turn "tomorrow at 3" into a real timestamp for schedule_callback. */
+export function buildTimeAndCallbackSection(timeZone: string | null | undefined, at: Date = new Date()): string {
+  let tz = timeZone || 'America/New_York';
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+  } catch {
+    tz = 'America/New_York';
+  }
+  const spoken = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(at);
+  return `Current date and time: ${spoken} (${tz}; ISO ${isoWithOffset(at, tz)}).
+
+Callbacks: if the caller can't talk now or asks to be called back later, agree on a specific day and time, say it back to confirm ("So Thursday at 3 in the afternoon, your time?"), then call schedule_callback with scheduled_at as an ISO 8601 timestamp including the UTC offset (use ${tz} unless they tell you otherwise). Once it's scheduled, thank them and end the call politely. If they ask not to be called again, call request_dnc and end the call politely.`;
+}

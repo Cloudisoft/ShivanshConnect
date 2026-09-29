@@ -179,12 +179,15 @@ describe('VapiProvider', () => {
     expect(body.metadata).toEqual({ internalCallId: 'internal-call-1', organizationId: 'org-1' });
     // Only the turn-taking plan - applied per call so it reaches
     // assistants published before it existed, without a republish.
-    expect(body.assistantOverrides).toEqual({
+    const { 'tools:append': tools, ...overrides } = body.assistantOverrides;
+    expect(overrides).toEqual({
       startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } },
       stopSpeakingPlan: { numWords: 0 },
       artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false },
       backgroundSound: 'office',
     });
+    // Callbacks and Do-Not-Call requests are available on every call.
+    expect(tools.map((t: any) => t.function?.name ?? t.type)).toEqual(['schedule_callback', 'request_dnc']);
   });
 
   it('createCall() sends real assistantOverrides.firstMessage/model.messages when a per-lead override is resolved (Bug 1)', async () => {
@@ -212,7 +215,8 @@ describe('VapiProvider', () => {
     // `provider` or `model` fails 400 ("assistantOverrides.model.<field>
     // must be one of the following values: ...") even though neither was
     // ever sent at all - both must always be repeated alongside messages.
-    expect(body.assistantOverrides).toEqual({
+    const { 'tools:append': _tools, ...overrides } = body.assistantOverrides;
+    expect(overrides).toEqual({
       startSpeakingPlan: { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } },
       stopSpeakingPlan: { numWords: 0 },
       artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false },
@@ -243,13 +247,11 @@ describe('VapiProvider', () => {
     });
 
     const overrides = JSON.parse(fetchMock.mock.calls[0][1].body).assistantOverrides;
-    expect(overrides['tools:append']).toEqual([
-      {
-        type: 'transferCall',
-        destinations: [{ type: 'number', number: '+14845559999', message: '' }],
-        messages: [{ type: 'request-start', content: '', blocking: false }],
-      },
-    ]);
+    expect(overrides['tools:append'].find((t: any) => t.type === 'transferCall')).toEqual({
+      type: 'transferCall',
+      destinations: [{ type: 'number', number: '+14845559999', message: '' }],
+      messages: [{ type: 'request-start', content: '', blocking: false }],
+    });
     expect(overrides.model.messages[0].content).toContain('You are a helpful sales agent.');
     expect(overrides.model.messages[0].content).toContain('call the transferCall tool');
   });
@@ -273,9 +275,8 @@ describe('VapiProvider', () => {
     });
 
     const overrides = JSON.parse(fetchMock.mock.calls[0][1].body).assistantOverrides;
-    expect(overrides['tools:append']).toHaveLength(1);
-    expect(overrides['tools:append'][0].type).toBe('function');
-    expect(overrides['tools:append'][0].function.name).toBe('search_knowledge_base');
+    const kbTool = overrides['tools:append'].find((t: any) => t.function?.name === 'search_knowledge_base');
+    expect(kbTool.type).toBe('function');
     expect(overrides.model.temperature).toBe(0.4);
   });
 
@@ -296,7 +297,7 @@ describe('VapiProvider', () => {
     });
 
     const overrides = JSON.parse(fetchMock.mock.calls[0][1].body).assistantOverrides;
-    expect(overrides['tools:append']).toBeUndefined();
+    expect(overrides['tools:append'].some((t: any) => t.type === 'transferCall')).toBe(false);
     expect(overrides.model.messages[0].content).toBe('You are a helpful sales agent.');
   });
 
