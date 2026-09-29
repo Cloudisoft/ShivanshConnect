@@ -15,6 +15,7 @@ import {
 import { useVoiceProviders } from '../../hooks/useVoiceProviders';
 import { Alert, Badge, Button, Card, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
+import { FilterBar, FilterSearch, FilterSelect, hasActiveFilters } from '../../components/FilterBar';
 
 const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000/api/v1').replace(/\/api\/v1\/?$/, '');
 
@@ -233,13 +234,22 @@ function ImportByIdModal({ providerKeys, onClose }: { providerKeys: VoiceProvide
 export function VoicesTab(): JSX.Element {
   const { hasPermission } = useAuth();
   const canManage = hasPermission('voices.manage');
-  const [filters, setFilters] = useState<VoiceFilters>({});
+  const [filters, setFiltersState] = useState<VoiceFilters>({});
+  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [showImportById, setShowImportById] = useState(false);
 
-  const voicesQuery = useVoices(filters);
+  const voicesQuery = useVoices(filters, page);
+  const pagination = voicesQuery.data?.pagination;
+  // A filter change starts from page 1 and drops any selection made under
+  // the previous filters.
+  function setFilters(change: (f: VoiceFilters) => VoiceFilters) {
+    setFiltersState(change);
+    setPage(1);
+    setSelected(new Set());
+  }
   const providersQuery = useVoiceProviders();
   const bulkDelete = useBulkDeleteVoices();
   const voices = voicesQuery.data?.data ?? [];
@@ -298,31 +308,37 @@ export function VoicesTab(): JSX.Element {
         </Alert>
       )}
 
-      <div className="mt-4 flex flex-wrap gap-2 text-xs">
-        <select
-          className="rounded-md border border-ink-300 bg-white px-2 py-1"
-          value={filters.provider_key ?? ''}
-          onChange={(e) => setFilters((f) => ({ ...f, provider_key: (e.target.value || undefined) as VoiceProviderKey | undefined }))}
-        >
-          <option value="">All providers</option>
-          {Object.entries(VOICE_PROVIDER_LABELS).map(([key, label]) => (
-            <option key={key} value={key}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          className="rounded-md border border-ink-300 bg-white px-2 py-1"
-          value={filters.gender ?? ''}
-          onChange={(e) => setFilters((f) => ({ ...f, gender: e.target.value || undefined }))}
-        >
-          <option value="">Any gender</option>
-          <option value="male">Male</option>
-          <option value="female">Female</option>
-          <option value="neutral">Neutral</option>
-          <option value="unknown">Unknown</option>
-        </select>
-      </div>
+      <FilterBar active={hasActiveFilters(filters)} onClear={() => setFilters(() => ({}))}>
+        <FilterSearch label="Search" placeholder="Voice name or ID..." value={filters.search} onChange={(v) => setFilters((f) => ({ ...f, search: v }))} />
+        <FilterSelect
+          label="Provider"
+          allLabel="All providers"
+          value={filters.provider_key}
+          onChange={(v) => setFilters((f) => ({ ...f, provider_key: v as VoiceProviderKey | undefined }))}
+          options={Object.entries(VOICE_PROVIDER_LABELS).map(([key, label]) => ({ value: key, label }))}
+        />
+        <FilterSelect
+          label="Type"
+          allLabel="All voices"
+          value={filters.is_cloned}
+          onChange={(v) => setFilters((f) => ({ ...f, is_cloned: v as VoiceFilters['is_cloned'] }))}
+          options={[{ value: 'true', label: 'Cloned only' }, { value: 'false', label: 'Not cloned' }]}
+        />
+        <FilterSelect
+          label="Gender"
+          allLabel="Any gender"
+          value={filters.gender}
+          onChange={(v) => setFilters((f) => ({ ...f, gender: v }))}
+          options={[{ value: 'male', label: 'Male' }, { value: 'female', label: 'Female' }, { value: 'neutral', label: 'Neutral' }, { value: 'unknown', label: 'Unknown' }]}
+        />
+        <FilterSelect
+          label="Status"
+          allLabel="Active"
+          value={filters.status}
+          onChange={(v) => setFilters((f) => ({ ...f, status: v }))}
+          options={[{ value: 'inactive', label: 'Hidden' }]}
+        />
+      </FilterBar>
 
       {canManage && selected.size > 0 && (
         <Card className="mt-4 flex flex-wrap items-center justify-between gap-3 !p-3">
@@ -361,7 +377,9 @@ export function VoicesTab(): JSX.Element {
 
       {!voicesQuery.isLoading && voices.length === 0 && (
         <Card className="mt-6 py-12 text-center text-sm text-ink-500">
-          No voices registered yet. Sync a connected provider's catalog, or clone a voice, to get started.
+          {hasActiveFilters(filters)
+            ? 'No voices match these filters.'
+            : "No voices registered yet. Sync a connected provider's catalog, or clone a voice, to get started."}
         </Card>
       )}
 
@@ -432,6 +450,22 @@ export function VoicesTab(): JSX.Element {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {pagination && pagination.total_pages > 1 && (
+        <div className="mt-4 flex items-center justify-between text-sm text-ink-600">
+          <span>
+            Page {pagination.page} of {pagination.total_pages} ({pagination.total} voices)
+          </span>
+          <div className="flex gap-2">
+            <Button variant="secondary" disabled={page <= 1} onClick={() => { setPage((p) => p - 1); setSelected(new Set()); }}>
+              Previous
+            </Button>
+            <Button variant="secondary" disabled={page >= pagination.total_pages} onClick={() => { setPage((p) => p + 1); setSelected(new Set()); }}>
+              Next
+            </Button>
+          </div>
         </div>
       )}
     </div>

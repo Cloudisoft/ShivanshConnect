@@ -297,6 +297,7 @@ export function createFakeSupabase() {
   seedDispositions();
 
   function matchesClause(actual: any, op: string, value: any): boolean {
+    if (op.startsWith('not:')) return !matchesClause(actual, op.slice(4), value);
     switch (op) {
       case 'eq':
         return actual === value;
@@ -309,7 +310,7 @@ export function createFakeSupabase() {
         return String(actual ?? '').toLowerCase().includes(pattern);
       }
       case 'is':
-        return value === 'null' ? actual === null || actual === undefined : actual === value;
+        return value === 'null' || value === null ? actual === null || actual === undefined : actual === value;
       case 'gte':
         return actual >= value;
       case 'gt':
@@ -665,6 +666,11 @@ export function createFakeSupabase() {
 
     is(field: string, value: any): this {
       this.filters.push([field, 'is', value]);
+      return this;
+    }
+
+    not(field: string, op: string, value: any): this {
+      this.filters.push([field, `not:${op}`, value]);
       return this;
     }
 

@@ -20,6 +20,7 @@ export const listVoicesQuerySchema = paginationSchema.extend({
   gender: z.enum(['male', 'female', 'neutral', 'unknown']).optional(),
   status: z.enum(['active', 'inactive']).optional(),
   is_cloned: z.enum(['true', 'false']).optional(),
+  search: z.string().trim().max(100).optional(),
 });
 export type ListVoicesQuery = z.infer<typeof listVoicesQuerySchema>;
 

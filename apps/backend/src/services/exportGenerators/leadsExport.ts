@@ -9,17 +9,13 @@
  */
 import { getSupabaseAdmin } from '../../lib/supabase.js';
 import type { ExportColumn } from './writers.js';
+import { applyLeadFilters, type LeadFilter } from '../leadFilters.js';
 import { queueExportJob, scheduleExportJob } from './runner.js';
 import type { ExportRecord, ExportType } from '@shivanshconnect/shared';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
-export interface LeadsExportFilters {
-  lead_list_id?: string | null;
-  status?: string;
-  is_dnc?: boolean;
-  search?: string;
-}
+export type LeadsExportFilters = LeadFilter;
 
 const BASE_COLUMNS: Array<{ key: string; header: string }> = [
   { key: 'first_name', header: 'First Name' },
@@ -46,16 +42,8 @@ const BASE_COLUMNS: Array<{ key: string; header: string }> = [
 const LEAD_SELECT_COLUMNS =
   'id, lead_list_id, first_name, last_name, phone_original, phone_normalized, email, address, city, state, zip, country, status, attempts, last_called_at, last_disposition, next_callback_at, is_dnc, dnc_reason, custom_fields, created_at';
 
-function applyLeadFilters(builder: any, orgId: string, filters: LeadsExportFilters): any {
-  let b = builder.eq('organization_id', orgId);
-  if (filters.lead_list_id) b = b.eq('lead_list_id', filters.lead_list_id);
-  if (filters.status) b = b.eq('status', filters.status);
-  if (filters.is_dnc !== undefined) b = b.eq('is_dnc', filters.is_dnc);
-  if (filters.search) {
-    const term = filters.search;
-    b = b.or(`first_name.ilike.%${term}%,last_name.ilike.%${term}%,phone_normalized.ilike.%${term}%,email.ilike.%${term}%`);
-  }
-  return b;
+function applyExportFilters(builder: any, orgId: string, filters: LeadsExportFilters): any {
+  return applyLeadFilters(builder.eq('organization_id', orgId), filters);
 }
 
 /** Streams every matching lead in bounded pages (never one in-memory
@@ -82,7 +70,7 @@ async function fetchAllLeadRows(
   // eslint-disable-next-line no-constant-condition
   while (true) {
     let builder = supabase.from('leads').select(LEAD_SELECT_COLUMNS);
-    builder = applyLeadFilters(builder, orgId, filters);
+    builder = applyExportFilters(builder, orgId, filters);
     builder = builder.order('created_at', { ascending: false }).range(page * PAGE, page * PAGE + PAGE - 1);
     // eslint-disable-next-line no-await-in-loop
     const { data, error } = await builder;

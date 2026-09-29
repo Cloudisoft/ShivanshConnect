@@ -23,6 +23,8 @@ export interface CdrFilters {
   phone?: string;
   lead_id?: string;
   status?: string;
+  direction?: 'inbound' | 'outbound';
+  min_talk_seconds?: number;
 }
 
 const CALL_COLUMNS =
@@ -59,6 +61,8 @@ function applyCommonFilters(builder: any, orgId: string, filters: CdrFilters): a
   if (filters.lead_id) b = b.eq('lead_id', filters.lead_id);
   if (filters.status) b = b.eq('status', filters.status);
   if (filters.phone) b = b.ilike('customer_number', `%${filters.phone}%`);
+  if (filters.direction) b = b.eq('direction', filters.direction);
+  if (filters.min_talk_seconds) b = b.gte('talk_duration_seconds', filters.min_talk_seconds);
   return b;
 }
 

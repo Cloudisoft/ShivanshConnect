@@ -14,6 +14,7 @@ import {
 } from '../../hooks/usePhoneNumbers';
 import { Alert, Badge, Button, Card } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
+import { FilterBar, FilterSearch, FilterSelect, hasActiveFilters } from '../../components/FilterBar';
 import { ImportNumberModal } from '../../components/phoneNumbers/ImportNumberModal';
 
 function CapabilityBadges({ capabilities }: { capabilities: PhoneNumber['capabilities'] }): JSX.Element {
@@ -136,13 +137,19 @@ function DeleteNumberButton({ number }: { number: PhoneNumber }): JSX.Element {
 export function NumbersTab(): JSX.Element {
   const { hasPermission } = useAuth();
   const canManage = hasPermission('numbers.manage');
-  const [filters, setFilters] = useState<PhoneNumberFilters>({});
+  const [filters, setFiltersState] = useState<PhoneNumberFilters>({});
   const [showImport, setShowImport] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
 
   const numbersQuery = usePhoneNumbers(filters);
+  // Drop any selection made under the previous filters.
+  function setFilters(change: (f: PhoneNumberFilters) => PhoneNumberFilters) {
+    setFiltersState(change);
+    setSelected(new Set());
+    setConfirmingBulkDelete(false);
+  }
   const providersQuery = useTelephonyProviders();
   const bulkAction = usePhoneNumberBulkAction();
   const numbers = numbersQuery.data?.data ?? [];
@@ -211,30 +218,43 @@ export function NumbersTab(): JSX.Element {
         </div>
       )}
 
-      <div className="mt-4 flex flex-wrap gap-2 text-xs">
-        <select
-          className="rounded-md border border-ink-300 bg-white px-2 py-1"
-          value={filters.provider_key ?? ''}
-          onChange={(e) => setFilters((f) => ({ ...f, provider_key: (e.target.value || undefined) as TelephonyProviderKey | undefined }))}
-        >
-          <option value="">All providers</option>
-          {Object.entries(TELEPHONY_PROVIDER_LABELS).map(([key, label]) => (
-            <option key={key} value={key}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          className="rounded-md border border-ink-300 bg-white px-2 py-1"
-          value={filters.status ?? ''}
-          onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value || undefined }))}
-        >
-          <option value="">Any status</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-          <option value="releasing">Releasing</option>
-        </select>
-      </div>
+      <FilterBar active={hasActiveFilters(filters)} onClear={() => setFilters(() => ({}))}>
+        <FilterSearch label="Search" placeholder="Number or name..." value={filters.search} onChange={(v) => setFilters((f) => ({ ...f, search: v }))} />
+        <FilterSelect
+          label="Provider"
+          allLabel="All providers"
+          value={filters.provider_key}
+          onChange={(v) => setFilters((f) => ({ ...f, provider_key: v as TelephonyProviderKey | undefined }))}
+          options={Object.entries(TELEPHONY_PROVIDER_LABELS).map(([key, label]) => ({ value: key, label }))}
+        />
+        <FilterSelect
+          label="Status"
+          allLabel="Any status"
+          value={filters.status}
+          onChange={(v) => setFilters((f) => ({ ...f, status: v }))}
+          options={[{ value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }, { value: 'releasing', label: 'Releasing' }]}
+        />
+        <FilterSelect
+          label="Agent"
+          allLabel="Any agent"
+          value={filters.unassigned ? '__unassigned' : filters.assigned_agent_id}
+          onChange={(v) =>
+            setFilters((f) => ({
+              ...f,
+              assigned_agent_id: v && v !== '__unassigned' ? v : undefined,
+              unassigned: v === '__unassigned' ? 'true' : undefined,
+            }))
+          }
+          options={[{ value: '__unassigned', label: 'Not assigned' }, ...agents.map((a) => ({ value: a.id, label: a.name }))]}
+        />
+        <FilterSelect
+          label="Inbound"
+          allLabel="Any"
+          value={filters.inbound}
+          onChange={(v) => setFilters((f) => ({ ...f, inbound: v as PhoneNumberFilters['inbound'] }))}
+          options={[{ value: 'answering', label: 'AI answering' }, { value: 'not_set_up', label: 'Not set up yet' }]}
+        />
+      </FilterBar>
 
       {canManage && selected.size > 0 && (
         <Card className="mt-4 flex flex-wrap items-center justify-between gap-3 !p-3">
@@ -294,7 +314,9 @@ export function NumbersTab(): JSX.Element {
 
       {!numbersQuery.isLoading && numbers.length === 0 && (
         <Card className="mt-6 py-12 text-center text-sm text-ink-500">
-          No phone numbers registered yet. Click "Import" to sync from a connected provider or declare a BYON number.
+          {hasActiveFilters(filters)
+            ? 'No phone numbers match these filters.'
+            : 'No phone numbers registered yet. Click "Import" to sync from a connected provider or declare a BYON number.'}
         </Card>
       )}
 

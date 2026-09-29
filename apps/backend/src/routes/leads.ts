@@ -17,6 +17,7 @@ import { findDncMatches, findExistingLeadPhones, isOnDncList } from '../lib/lead
 import { writeAuditLog } from '../lib/audit.js';
 import { AUDIT_ACTIONS } from '@shivanshconnect/shared';
 import { queueLeadsExport } from '../services/exportGenerators/leadsExport.js';
+import { applyLeadFilters, type LeadFilter } from '../services/leadFilters.js';
 
 const LEAD_COLUMNS =
   'id, organization_id, lead_list_id, first_name, last_name, phone_original, phone_normalized, country_code, email, address, city, state, zip, country, status, attempts, last_called_at, last_disposition, next_callback_at, is_dnc, dnc_reason, custom_fields, created_at, updated_at';
@@ -33,17 +34,7 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     const supabase = getSupabaseAdmin();
     const orgId = req.user!.organizationId;
 
-    let builder = supabase.from('leads').select(LEAD_COLUMNS, { count: 'exact' }).eq('organization_id', orgId);
-    if (query.lead_list_id) builder = builder.eq('lead_list_id', query.lead_list_id);
-    if (query.status) builder = builder.eq('status', query.status);
-    if (query.is_dnc !== undefined) builder = builder.eq('is_dnc', query.is_dnc);
-    if (query.search) {
-      const digitsOnly = query.search.replace(/\D/g, '');
-      const term = digitsOnly.length >= 3 ? digitsOnly : query.search;
-      builder = builder.or(
-        `first_name.ilike.%${term}%,last_name.ilike.%${term}%,phone_normalized.ilike.%${term}%,email.ilike.%${term}%`,
-      );
-    }
+    let builder = applyLeadFilters(supabase.from('leads').select(LEAD_COLUMNS, { count: 'exact' }).eq('organization_id', orgId), query);
 
     const from = (query.page - 1) * query.page_size;
     const to = from + query.page_size - 1;
@@ -497,14 +488,7 @@ export async function resolveLeadIds(
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    let q = supabase.from('leads').select('id').eq('organization_id', orgId);
-    if (filter.lead_list_id) q = q.eq('lead_list_id', filter.lead_list_id as string);
-    if (filter.status) q = q.eq('status', filter.status as string);
-    if (filter.is_dnc !== undefined) q = q.eq('is_dnc', filter.is_dnc as boolean);
-    if (filter.search) {
-      const term = filter.search as string;
-      q = q.or(`first_name.ilike.%${term}%,last_name.ilike.%${term}%,phone_normalized.ilike.%${term}%`);
-    }
+    let q = applyLeadFilters(supabase.from('leads').select('id').eq('organization_id', orgId), filter as LeadFilter);
     q = q.order('id', { ascending: true }).range(page * PAGE, page * PAGE + PAGE - 1);
 
     const { data, error } = await q;

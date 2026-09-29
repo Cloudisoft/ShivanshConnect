@@ -74,7 +74,14 @@ export const listPhoneNumbersQuerySchema = paginationSchema.extend({
   provider_key: telephonyProviderKeySchema.optional(),
   status: z.enum(['active', 'inactive', 'releasing']).optional(),
   assigned_agent_id: uuidSchema.optional(),
-  unassigned: z.coerce.boolean().optional(),
+  unassigned: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  /** Number or friendly name contains this text. */
+  search: z.string().trim().max(100).optional(),
+  /** "answering": set up to answer inbound calls with the AI. */
+  inbound: z.enum(['answering', 'not_set_up']).optional(),
 });
 export type ListPhoneNumbersQuery = z.infer<typeof listPhoneNumbersQuerySchema>;
 

@@ -76,6 +76,10 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     if (query.language) builder = builder.eq('language', query.language);
     if (query.gender) builder = builder.eq('gender', query.gender);
     if (query.is_cloned) builder = builder.eq('is_cloned', query.is_cloned === 'true');
+    if (query.search) {
+      const term = query.search.replace(/[%,()*\\]/g, ' ').trim();
+      if (term) builder = builder.or(`name.ilike.%${term}%,provider_voice_id.ilike.%${term}%`);
+    }
     // Hidden (inactive) voices are only listed when explicitly asked for -
     // see services/voiceCatalog.ts.
     builder = builder.eq('status', query.status ?? 'active');

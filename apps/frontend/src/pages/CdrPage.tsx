@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Download, FileText, History, Loader2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
@@ -6,12 +6,14 @@ import { useCdrList, useCreateCdrExport, fetchRecordingObjectUrl, type CdrFilter
 import { useExportHistory } from '../hooks/useExports';
 import { useCampaigns } from '../hooks/useCampaigns';
 import { useAgents } from '../hooks/useAgents';
-import { Badge, Button, Card, Input, Label } from '../components/ui';
+import { useDispositions } from '../hooks/useDispositions';
+import { FilterBar, FilterDate, FilterSearch, FilterSelect, dayToIso, hasActiveFilters } from '../components/FilterBar';
+import { Badge, Button, Card } from '../components/ui';
 import { CallDetailDrawer } from '../components/cdr/CallDetailDrawer';
 import { ExportTrigger } from '../components/exports/ExportTrigger';
 import { ExportHistoryList } from '../components/exports/ExportHistoryList';
 import { ApiClientError } from '../lib/apiClient';
-import { dispositionTone, callStatusLabel, type CallStatus } from '@shivanshconnect/shared';
+import { CALL_STATUSES, dispositionTone, callStatusLabel } from '@shivanshconnect/shared';
 
 /** Direct one-click download straight from the list row, no need to open
  * the detail drawer first. The backend route requires an Authorization
@@ -70,11 +72,25 @@ const STATUS_TONE: Record<string, 'neutral' | 'success' | 'warning' | 'danger'> 
  * recording/summary); an export button queues a real background job and
  * a small history panel tracks it to completion.
  */
+function sentenceCase(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+type CdrView = Omit<CdrFilters, 'date_from' | 'date_to'> & { from_day?: string; to_day?: string };
+
 export function CdrPage(): JSX.Element {
   const { hasPermission } = useAuth();
   const canExport = hasPermission('cdr.export');
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<CdrFilters>({});
+  const [view, setView] = useState<CdrView>({});
+  const updateView = useCallback((change: (v: CdrView) => CdrView) => {
+    setPage(1);
+    setView(change);
+  }, []);
+  const filters = useMemo<CdrFilters>(() => {
+    const { from_day, to_day, ...rest } = view;
+    return { ...rest, date_from: dayToIso(from_day), date_to: dayToIso(to_day, true) };
+  }, [view]);
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedCallId, setSelectedCallId] = useState<string | null>(() => searchParams.get('call'));
   const [showExportHistory, setShowExportHistory] = useState(false);
@@ -100,6 +116,8 @@ export function CdrPage(): JSX.Element {
   const campaigns = campaignsQuery.data?.data ?? [];
   const agentsQuery = useAgents(1, 100);
   const agents = agentsQuery.data?.data ?? [];
+  const dispositionsQuery = useDispositions(1, 100);
+  const dispositions = dispositionsQuery.data?.data ?? [];
 
   const cdrQuery = useCdrList(page, 25, filters);
   const rows = cdrQuery.data?.data ?? [];
@@ -125,70 +143,33 @@ export function CdrPage(): JSX.Element {
         )}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-end gap-3">
-        <div>
-          <Label htmlFor="cdr_campaign">Campaign</Label>
-          <select
-            id="cdr_campaign"
-            className="rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
-            value={filters.campaign_id ?? ''}
-            onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, campaign_id: e.target.value || undefined })); }}
-          >
-            <option value="">All campaigns</option>
-            {campaigns.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <Label htmlFor="cdr_agent">AI Agent</Label>
-          <select
-            id="cdr_agent"
-            className="rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
-            value={filters.ai_agent_id ?? ''}
-            onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, ai_agent_id: e.target.value || undefined })); }}
-          >
-            <option value="">All agents</option>
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <Label htmlFor="cdr_status">Status</Label>
-          <select
-            id="cdr_status"
-            className="rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
-            value={filters.status ?? ''}
-            onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, status: (e.target.value || undefined) as CallStatus | undefined })); }}
-          >
-            <option value="">All statuses</option>
-            {['completed', 'failed', 'transferred', 'dnc', 'cancelled', 'transfer_failed'].map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <Label htmlFor="cdr_phone">Phone</Label>
-          <Input id="cdr_phone" placeholder="+1..." onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, phone: e.target.value || undefined })); }} />
-        </div>
-        <div>
-          <Label htmlFor="cdr_from">From</Label>
-          <Input id="cdr_from" type="date" onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, date_from: e.target.value ? new Date(e.target.value).toISOString() : undefined })); }} />
-        </div>
-        <div>
-          <Label htmlFor="cdr_to">To</Label>
-          <Input id="cdr_to" type="date" onChange={(e) => { setPage(1); setFilters((f) => ({ ...f, date_to: e.target.value ? new Date(e.target.value).toISOString() : undefined })); }} />
-        </div>
-      </div>
+      <FilterBar active={hasActiveFilters(view)} onClear={() => updateView(() => ({}))}>
+        <FilterSearch label="Phone" placeholder="Number contains..." value={view.phone} onChange={(v) => updateView((f) => ({ ...f, phone: v }))} className="min-w-[160px]" />
+        <FilterSelect label="Campaign" allLabel="All campaigns" value={view.campaign_id} onChange={(v) => updateView((f) => ({ ...f, campaign_id: v }))} options={campaigns.map((c) => ({ value: c.id, label: c.name }))} />
+        <FilterSelect label="AI Agent" allLabel="All agents" value={view.ai_agent_id} onChange={(v) => updateView((f) => ({ ...f, ai_agent_id: v }))} options={agents.map((a) => ({ value: a.id, label: a.name }))} />
+        <FilterSelect label="Direction" allLabel="Inbound & outbound" value={view.direction} onChange={(v) => updateView((f) => ({ ...f, direction: v }))} options={[{ value: 'outbound', label: 'Outbound' }, { value: 'inbound', label: 'Inbound' }]} />
+        <FilterSelect label="Status" allLabel="All statuses" value={view.status} onChange={(v) => updateView((f) => ({ ...f, status: v }))} options={CALL_STATUSES.map((st) => ({ value: st, label: sentenceCase(callStatusLabel(st)) }))} />
+        <FilterSelect label="Disposition" allLabel="All dispositions" value={view.disposition} onChange={(v) => updateView((f) => ({ ...f, disposition: v }))} options={dispositions.map((d) => ({ value: d.code, label: d.name }))} />
+        <FilterSelect
+          label="Talk time"
+          allLabel="Any length"
+          value={view.min_talk_seconds}
+          onChange={(v) => updateView((f) => ({ ...f, min_talk_seconds: v }))}
+          options={[{ value: '1', label: 'Connected (any talk)' }, { value: '30', label: '30 sec or more' }, { value: '60', label: '1 min or more' }, { value: '180', label: '3 min or more' }]}
+        />
+        <FilterDate label="From" value={view.from_day} onChange={(v) => updateView((f) => ({ ...f, from_day: v }))} />
+        <FilterDate label="To" value={view.to_day} onChange={(v) => updateView((f) => ({ ...f, to_day: v }))} />
+      </FilterBar>
 
       {cdrQuery.isLoading && <p className="mt-8 text-sm text-ink-500">Loading calls...</p>}
 
       {!cdrQuery.isLoading && rows.length === 0 && (
         <Card className="mt-8 flex flex-col items-center justify-center py-16 text-center">
           <FileText className="h-10 w-10 text-ink-300" />
-          <p className="mt-3 text-sm font-medium text-ink-700">No calls found</p>
-          <p className="mt-1 text-sm text-ink-500">Calls placed through campaigns or manually will show up here.</p>
+          <p className="mt-3 text-sm font-medium text-ink-700">{hasActiveFilters(view) ? 'No calls match these filters' : 'No calls found'}</p>
+          <p className="mt-1 text-sm text-ink-500">
+            {hasActiveFilters(view) ? 'Try widening the dates or clearing a filter.' : 'Calls placed through campaigns or manually will show up here.'}
+          </p>
         </Card>
       )}
 

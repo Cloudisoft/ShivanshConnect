@@ -2,13 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { LeadBulkActionType, LeadFilter, LeadListRow, LeadStatus, LeadWithLists } from '@shivanshconnect/shared';
 import { api } from '../lib/apiClient';
 
-export interface LeadsQuery {
+export interface LeadsQuery extends Omit<LeadFilter, 'lead_list_id'> {
   page: number;
   page_size?: number;
   lead_list_id?: string;
   status?: LeadStatus;
-  is_dnc?: boolean;
-  search?: string;
   sort_by?: string;
   sort_dir?: 'asc' | 'desc';
 }
@@ -21,6 +19,11 @@ function toParams(query: LeadsQuery): string {
   if (query.status) params.set('status', query.status);
   if (query.is_dnc !== undefined) params.set('is_dnc', String(query.is_dnc));
   if (query.search) params.set('search', query.search);
+  if (query.state) params.set('state', query.state);
+  if (query.called) params.set('called', query.called);
+  if (query.has_callback) params.set('has_callback', 'true');
+  if (query.created_from) params.set('created_from', query.created_from);
+  if (query.created_to) params.set('created_to', query.created_to);
   if (query.sort_by) params.set('sort_by', query.sort_by);
   if (query.sort_dir) params.set('sort_dir', query.sort_dir);
   return params.toString();

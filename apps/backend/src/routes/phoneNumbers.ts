@@ -95,6 +95,14 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
     if (query.status) builder = builder.eq('status', query.status);
     if (query.assigned_agent_id) builder = builder.eq('assigned_agent_id', query.assigned_agent_id);
     if (query.unassigned) builder = builder.is('assigned_agent_id', null);
+    if (query.search) {
+      const raw = query.search.replace(/[%,()*\\]/g, ' ').trim();
+      const digits = raw.replace(/\D/g, '');
+      const term = digits.length >= 3 ? digits : raw;
+      if (term) builder = builder.or(`phone_number.ilike.%${term}%,friendly_name.ilike.%${raw}%`);
+    }
+    if (query.inbound === 'answering') builder = builder.not('vapi_phone_number_id', 'is', null);
+    if (query.inbound === 'not_set_up') builder = builder.is('vapi_phone_number_id', null);
 
     const from = (query.page - 1) * query.page_size;
     const to = from + query.page_size - 1;
