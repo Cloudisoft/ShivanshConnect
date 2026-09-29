@@ -11,7 +11,7 @@ vi.mock('./callOrigination.js', async (importOriginal) => ({
 }));
 
 const fake = createFakeSupabase();
-const { dispatchCallback, runCallbackDispatchTick } = await import('./callbackDispatcher.js');
+const { dispatchCallback, recoverStuckCallbacks, runCallbackDispatchTick } = await import('./callbackDispatcher.js');
 
 const orgId = randomUUID();
 const agentId = randomUUID();
@@ -130,5 +130,41 @@ describe('callbackDispatcher - overdue callbacks', () => {
     const row = fake.tables.callbacks.find((c: any) => c.id === callback.id)!;
     expect(row.status).toBe('failed');
     expect(row.notes).toContain('Missed');
+  });
+});
+
+describe('callbackDispatcher - never stuck in "calling"', () => {
+  beforeEach(() => {
+    originateCall.mockReset();
+    originateCall.mockResolvedValue({ call: { id: 'call-1' } });
+  });
+
+  it('hands the callback back (scheduled) when something unexpected fails after claiming it', async () => {
+    const { callback } = seed();
+    // The campaign set-up can't be loaded mid-dispatch.
+    fake.tables.campaigns.length = 0;
+    fake.tables.calls.length = 0;
+    (fake.tables as any).campaigns = new Proxy([], { get: () => { throw new Error('db down'); } });
+    const result = await dispatchCallback(fake.supabase as any, callback);
+    (fake.tables as any).campaigns = [];
+    expect(result).toBe('waiting');
+    expect(originateCall).not.toHaveBeenCalled();
+    expect(fake.tables.callbacks.find((c: any) => c.id === callback.id)!.status).toBe('scheduled');
+  });
+
+  it('recovers callbacks left in "calling" by a restart: done if a call was placed, otherwise rescheduled', async () => {
+    const { callback, leadId } = seed();
+    const old = new Date(Date.now() - 20 * 60_000).toISOString();
+    const placed = { ...callback, id: randomUUID(), status: 'calling', updated_at: old };
+    const notPlaced = { ...callback, id: randomUUID(), lead_id: randomUUID(), status: 'calling', updated_at: old };
+    const recent = { ...callback, id: randomUUID(), status: 'calling', updated_at: new Date().toISOString() };
+    fake.tables.callbacks.push(placed, notPlaced, recent);
+    fake.tables.calls.push({ id: 'call-9', organization_id: orgId, lead_id: leadId, created_at: new Date(Date.now() - 19 * 60_000).toISOString() });
+
+    expect(await recoverStuckCallbacks(fake.supabase as any)).toBe(2);
+    const status = (id: string) => fake.tables.callbacks.find((c: any) => c.id === id)!.status;
+    expect(status(placed.id)).toBe('completed');
+    expect(status(notPlaced.id)).toBe('scheduled');
+    expect(status(recent.id)).toBe('calling');
   });
 });

@@ -48,7 +48,8 @@ async function setStatus(supabase: Supabase, callbackId: string, status: string,
     const existing = (data?.notes as string | null)?.trim();
     update.notes = (existing ? `${existing}\n${note}` : note).slice(0, 4000);
   }
-  await supabase.from('callbacks').update(update).eq('id', callbackId);
+  const { error } = await supabase.from('callbacks').update(update).eq('id', callbackId);
+  if (error) throw error;
 }
 
 /** Places one due callback. Returns what happened (for logging/tests). */
@@ -66,6 +67,25 @@ export async function dispatchCallback(supabase: Supabase, callback: Record<stri
   const release = async () => {
     await supabase.from('callbacks').update({ status: originalStatus }).eq('id', callback.id);
   };
+  try {
+    return await dispatchClaimedCallback(supabase, callback, now, release);
+  } catch (err) {
+    // Anything unexpected after the claim used to leave the callback in
+    // 'calling' forever (never placed, never marked failed). Hand it back
+    // so the next tick tries again, and say why in the logs.
+    await release().catch(() => undefined);
+    // eslint-disable-next-line no-console
+    console.error('callbackDispatcher: callback', callback.id, 'errored, will retry -', err instanceof Error ? err.message : err);
+    return 'waiting';
+  }
+}
+
+async function dispatchClaimedCallback(
+  supabase: Supabase,
+  callback: Record<string, any>,
+  now: Date,
+  release: () => Promise<void>,
+): Promise<'placed' | 'waiting' | 'skipped' | 'failed' | 'cancelled'> {
 
   const orgId = callback.organization_id as string;
   const { data: lead } = await supabase.from('leads').select('id, phone_normalized, is_dnc').eq('id', callback.lead_id).maybeSingle();
@@ -201,6 +221,8 @@ export async function runCallbackDispatchTick(now: Date = new Date()): Promise<n
     await setStatus(supabase, cb.id as string, 'failed', 'Missed: more than 3 days overdue, so it was not called automatically. Reschedule it if still needed.');
   }
 
+  await recoverStuckCallbacks(supabase, now);
+
   const { data, error } = await supabase
     .from('callbacks')
     .select('*')
@@ -216,6 +238,30 @@ export async function runCallbackDispatchTick(now: Date = new Date()): Promise<n
     if ((await dispatchCallback(supabase, callback, now)) === 'placed') placed += 1;
   }
   return placed;
+}
+
+const STUCK_CALLING_MS = 10 * 60_000;
+
+/** A callback left in 'calling' (the server restarted mid-dispatch) is
+ * resolved: if a call to that lead was placed since, it is done;
+ * otherwise it goes back to 'scheduled' to be called. */
+export async function recoverStuckCallbacks(supabase: Supabase, now: Date = new Date()): Promise<number> {
+  const { data: stuck } = await supabase
+    .from('callbacks')
+    .select('id, lead_id, updated_at')
+    .eq('status', 'calling')
+    .lt('updated_at', new Date(now.getTime() - STUCK_CALLING_MS).toISOString())
+    .limit(50);
+  for (const cb of stuck ?? []) {
+    const since = new Date(new Date(cb.updated_at as string).getTime() - 60_000).toISOString();
+    const { data: calls } = await supabase.from('calls').select('id').eq('lead_id', cb.lead_id).gte('created_at', since).limit(1);
+    if (calls && calls.length > 0) {
+      await setStatus(supabase, cb.id as string, 'completed', `Called back (call ${calls[0].id}).`);
+    } else {
+      await supabase.from('callbacks').update({ status: 'scheduled' }).eq('id', cb.id).eq('status', 'calling');
+    }
+  }
+  return stuck?.length ?? 0;
 }
 
 let handle: ReturnType<typeof setInterval> | null = null;

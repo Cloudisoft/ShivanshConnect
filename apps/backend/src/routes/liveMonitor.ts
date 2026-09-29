@@ -256,7 +256,12 @@ export async function liveMonitorActionRoutes(app: FastifyInstance): Promise<voi
     try {
       await provider.transferCall(providerCallId, body.destination_e164);
     } catch (err) {
+      // The transfer didn't happen, so the caller is still talking to the
+      // AI: record the failure, then put the call back to in_progress -
+      // otherwise it sat in 'transfer_pending' until the call ended.
       await supabase.from('calls').update({ transfer_status: 'failed' }).eq('id', call.id);
+      const failed = await transitionCallState(supabase, call.id, 'transfer_failed', { transfer_status: 'failed' });
+      if (failed.applied) await transitionCallState(supabase, call.id, 'in_progress');
       throw err;
     }
 
