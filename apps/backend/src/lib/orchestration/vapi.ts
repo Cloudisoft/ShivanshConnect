@@ -124,6 +124,29 @@ const STOP_SPEAKING_PLAN = { numWords: 0 };
  * jumped in, so the caller never got to finish saying their name and the
  * assistant asked for it again ("asking for the name again and again, not
  * listening"). Sent per call too, so it applies without a republish. */
+/** Voicemail detection, per report: "calls don't detect VMs properly and
+ * keep talking with VM". Was OpenAI's transcript-based detector, which only
+ * decides once enough words have been transcribed and first checked 2.5s
+ * in; Vapi's own detector listens to the audio itself (greeting cadence,
+ * beep) and is Vapi's recommended provider. It now checks from 2s and every
+ * 2s after, for about 12s - a voicemail greeting is caught while it is
+ * still playing. When it fires Vapi leaves `voicemailMessage` (after the
+ * beep) if the campaign has one, and otherwise hangs up. Voicemails it
+ * still misses are caught from the transcript by
+ * services/voicemailBackstop.ts. */
+export const VOICEMAIL_DETECTION_PLAN = {
+  provider: 'vapi',
+  backoffPlan: { startAtSeconds: 2, frequencySeconds: 2, maxRetries: 6 },
+  beepMaxAwaitSeconds: 20,
+};
+
+export function voicemailSettings(vm: AssistantConfig['voicemailDetection'] | undefined): Record<string, unknown> {
+  if (!vm?.enabled) return {};
+  const settings: Record<string, unknown> = { voicemailDetection: VOICEMAIL_DETECTION_PLAN };
+  if (vm.leaveVoicemail && vm.message?.trim()) settings.voicemailMessage = vm.message.trim();
+  return settings;
+}
+
 const START_SPEAKING_PLAN = { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } };
 
 /** Vapi's documented artifactPlan (verified against Vapi's own published
@@ -476,44 +499,9 @@ export class VapiProvider implements CallOrchestrationProvider {
     // removed). Also sent per call in createCall()'s assistantOverrides.
     payload.backgroundSound = BACKGROUND_SOUND;
 
-    // Voicemail/answering-machine detection - real, currently-documented
-    // Vapi feature (docs.vapi.ai/calls/voicemail-detection). Threads
-    // Phase 7's campaign calling-rules columns
-    // (voicemail_detection_enabled/voicemail_message/leave_voicemail)
-    // through to the actual provider payload for the first time - until
-    // this fix they were stored in the DB and snapshotted onto the
-    // campaign version but never once reached the Vapi assistant.
-    //
-    // Uses the 'openai' detection provider with type: 'transcript' rather
-    // than the plain 'vapi' (audio-pattern-only) default: audio-only
-    // detection is exactly what produces this feature's most common real
-    // complaint - a long recorded IVR menu prompt gets misread as a live
-    // person (or a real voicemail greeting isn't recognized at all), and
-    // the assistant ends up "conversing" with a recording instead of
-    // either leaving a message or navigating the menu tersely. OpenAI's
-    // transcript-based detector instead reads what's actually being said
-    // ("please leave a message after the tone" vs "press 1 for sales") to
-    // tell voicemail, IVR, and a live human apart - a real accuracy
-    // improvement, not a tuning tweak. backoffPlan/beepMaxAwaitSeconds use
-    // Vapi's own documented recommended defaults for this provider.
-    if (config.voicemailDetection?.enabled) {
-      payload.voicemailDetection = {
-        provider: 'openai',
-        type: 'transcript',
-        backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 3, maxRetries: 6 },
-        beepMaxAwaitSeconds: 15,
-      };
-      // Vapi's real behavior: when voicemailDetection fires, it
-      // automatically plays `voicemailMessage` if one is set - there is
-      // no separate documented "hang up instead of leaving a message"
-      // switch. leaveVoicemail=false is honestly mapped to "detect it
-      // (so the call still gets disposed as answering-machine) but don't
-      // configure a message to leave" rather than inventing a hangup
-      // parameter Vapi doesn't document.
-      if (config.voicemailDetection.leaveVoicemail && config.voicemailDetection.message) {
-        payload.voicemailMessage = config.voicemailDetection.message;
-      }
-    }
+    // Voicemail/answering-machine detection from the campaign's calling
+    // rules - see voicemailSettings(). Also sent per call in createCall().
+    Object.assign(payload, voicemailSettings(config.voicemailDetection));
     // The transfer destination itself is never sent here as a free-form
     // AI-chosen value - it is exposed to the assistant only as a
     // server-controlled tool target that createCall()/transferCall()
@@ -686,6 +674,7 @@ export class VapiProvider implements CallOrchestrationProvider {
         // applies without republishing every agent.
         endCallFunctionEnabled: true,
         silenceTimeoutSeconds: SILENCE_TIMEOUT_SECONDS,
+        ...voicemailSettings(params.voicemailDetection),
       };
       // Auto transfer: the assistant gets a real transferCall tool for this
       // call's server-resolved destination (the campaign's transfer number,
