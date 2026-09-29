@@ -68,6 +68,34 @@ describe('ingestLiveTranscriptSegment (Phase 10)', () => {
     expect(await hasLiveTranscriptSegments(supabase, 'call-1')).toBe(true);
   });
 
+  it('lines arriving at the same moment all get stored, each with its own segment_index (none lost)', async () => {
+    const { supabase: rawSupabase, tables } = createFakeSupabase();
+    const supabase = rawSupabase as any;
+    const results = await Promise.all(
+      ['One.', 'Two.', 'Three.', 'Four.'].map((text, i) => ingestLiveTranscriptSegment(supabase, CALL, { speaker: i % 2 ? 'caller' : 'ai', text, startMs: i * 1000, endMs: null })),
+    );
+    expect(results.map((r) => r?.segment_index).sort()).toEqual([0, 1, 2, 3]);
+    expect(tables.call_transcripts.filter((t: any) => t.call_id === 'call-1')).toHaveLength(1);
+    expect(tables.call_transcript_segments.filter((s: any) => s.call_id === 'call-1')).toHaveLength(4);
+  });
+
+  it('pushes the line to Live Monitor before it is written to the database', async () => {
+    const { supabase: rawSupabase, tables } = createFakeSupabase();
+    const supabase = rawSupabase as any;
+    await ingestLiveTranscriptSegment(supabase, CALL, { speaker: 'ai', text: 'Warm-up.', startMs: 0, endMs: null });
+    let storedWhenEmitted = -1;
+    const handler = () => {
+      storedWhenEmitted = tables.call_transcript_segments.filter((s: any) => s.call_id === 'call-1').length;
+    };
+    transcriptEventBus.on('segment', handler);
+    try {
+      await ingestLiveTranscriptSegment(supabase, CALL, { speaker: 'caller', text: 'Right away.', startMs: 1000, endMs: null });
+    } finally {
+      transcriptEventBus.off('segment', handler);
+    }
+    expect(storedWhenEmitted).toBe(1); // only the earlier line was stored yet
+  });
+
   it('emits a TRANSCRIPT_UPDATED-feeding segment event on transcriptEventBus for exactly this call/org', async () => {
     const { supabase: rawSupabase } = createFakeSupabase();
     const supabase = rawSupabase as any;
