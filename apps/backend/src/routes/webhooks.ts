@@ -17,21 +17,35 @@ import { vapiRoleToSpeaker } from '../lib/orchestration/vapi.js';
 import { emitLiveTranscriptPartial } from '../lib/transcriptEventBus.js';
 import { markCallHungUp } from '../lib/callHangupSignal.js';
 
-/** vapi call id -> our call's id/org, for the partial-transcript fast
- * path below: Vapi sends many partials per utterance, so each one must not
- * cost a DB lookup (and they were each written to webhook_events too). */
-const partialCallCache = new Map<string, { id: string; organizationId: string; at: number }>();
-const PARTIAL_CACHE_TTL_MS = 10 * 60_000;
+/** vapi call id -> our call row, for the transcript fast path below: Vapi
+ * sends a webhook for every partial and final utterance, so each one must
+ * not cost a DB lookup plus a webhook_events write before it reaches Live
+ * Monitor (that made each line show up 1-3s late). Only id/org/engine/
+ * transfer fields are used from it, which don't change during a call. */
+const transcriptCallCache = new Map<string, { call: Record<string, any>; at: number }>();
+const TRANSCRIPT_CACHE_TTL_MS = 10 * 60_000;
 
-async function callForPartial(supabase: ReturnType<typeof getSupabaseAdmin>, vapiCallId: string): Promise<{ id: string; organizationId: string } | null> {
-  const hit = partialCallCache.get(vapiCallId);
-  if (hit && Date.now() - hit.at < PARTIAL_CACHE_TTL_MS) return hit;
-  const { data } = await supabase.from('calls').select('id, organization_id').eq('vapi_call_id', vapiCallId).maybeSingle();
+async function callForTranscript(supabase: ReturnType<typeof getSupabaseAdmin>, vapiCallId: string): Promise<Record<string, any> | null> {
+  const hit = transcriptCallCache.get(vapiCallId);
+  if (hit && Date.now() - hit.at < TRANSCRIPT_CACHE_TTL_MS) return hit.call;
+  const { data } = await supabase.from('calls').select('*').eq('vapi_call_id', vapiCallId).maybeSingle();
   if (!data) return null;
-  if (partialCallCache.size > 2000) partialCallCache.clear();
-  const entry = { id: data.id as string, organizationId: data.organization_id as string, at: Date.now() };
-  partialCallCache.set(vapiCallId, entry);
-  return entry;
+  if (transcriptCallCache.size > 2000) transcriptCallCache.clear();
+  transcriptCallCache.set(vapiCallId, { call: data, at: Date.now() });
+  return data;
+}
+
+/** Finished utterances already handled - a redelivered webhook must not add
+ * the same line twice (these skip the webhook_events dedupe). */
+const seenFinals = new Map<string, number>();
+function isDuplicateFinal(key: string): boolean {
+  const now = Date.now();
+  if (seenFinals.size > 5000) {
+    for (const [k, at] of seenFinals) if (now - at > TRANSCRIPT_CACHE_TTL_MS) seenFinals.delete(k);
+  }
+  if (seenFinals.has(key)) return true;
+  seenFinals.set(key, now);
+  return false;
 }
 
 /**
@@ -198,11 +212,30 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
     // Words still being spoken: pushed straight to Live Monitor so the
     // transcript moves as people talk. Never stored (the 'final' version of
     // the same utterance is), so it skips the webhook_events record.
-    if (eventType === 'transcript' && message.transcriptType !== 'final') {
+    // Finished utterances take the same fast path: straight to storage and
+    // Live Monitor, deduped in memory instead of through webhook_events.
+    if (eventType === 'transcript') {
       const speaker = vapiRoleToSpeaker(message.role);
-      if (providerCallId && speaker && typeof message.transcript === 'string' && message.transcript.trim()) {
-        const live = await callForPartial(supabase, providerCallId);
-        if (live) emitLiveTranscriptPartial({ callId: live.id, organizationId: live.organizationId, speaker, text: message.transcript.trim() });
+      const text = typeof message.transcript === 'string' ? message.transcript.trim() : '';
+      if (providerCallId && speaker && text) {
+        const call = await callForTranscript(supabase, providerCallId);
+        if (call && message.transcriptType !== 'final') {
+          emitLiveTranscriptPartial({ callId: call.id, organizationId: call.organization_id, speaker, text });
+        } else if (call && !isDuplicateFinal(`${providerCallId}|${speaker}|${message.secondsFromStart ?? ''}|${text}`)) {
+          try {
+            await ingestLiveTranscriptSegment(supabase, call, {
+              speaker,
+              text,
+              startMs: Math.max(0, Math.round((message.secondsFromStart ?? 0) * 1000)),
+              endMs: null,
+            });
+            // "Transferring you now" must actually transfer - see
+            // services/autoTransfer.ts.
+            scheduleAutoTransferIfAnnounced(supabase, call, speaker, text);
+          } catch (err) {
+            req.log.error({ err, callId: call.id }, 'Live transcript segment could not be stored');
+          }
+        }
       }
       return reply.status(200).send({ received: true });
     }
@@ -304,30 +337,8 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
           });
           break;
         }
-        case 'transcript': {
-          // Phase 10: real-time transcript ingestion. Vapi delivers a
-          // 'transcript' message per utterance as it's generated, marked
-          // `transcriptType: 'partial'` while still being refined and
-          // `'final'` exactly once when that utterance is complete - only
-          // 'final' is ever persisted, so a stream of interim deltas for
-          // the SAME utterance never produces more than one segment (see
-          // services/liveTranscriptIngestion.ts's header comment).
-          if (message.transcriptType === 'final' && typeof message.transcript === 'string') {
-            const speaker = vapiRoleToSpeaker(message.role);
-            if (speaker) {
-              await ingestLiveTranscriptSegment(supabase, call, {
-                speaker,
-                text: message.transcript,
-                startMs: Math.max(0, Math.round((message.secondsFromStart ?? 0) * 1000)),
-                endMs: null,
-              });
-              // "Transferring you now" must actually transfer - see
-              // services/autoTransfer.ts.
-              scheduleAutoTransferIfAnnounced(supabase, call, speaker, message.transcript);
-            }
-          }
-          break;
-        }
+        // 'transcript' (partial and final) is handled by the fast path at
+        // the top of this handler and never reaches this switch.
         case 'tool-calls': {
           // Phase 8: real tool-call handling (spec 17/53/60) -
           // schedule_callback / request_dnc, see services/toolCallHandler.ts.

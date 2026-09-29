@@ -308,7 +308,12 @@ describe('Phase 10: Live Monitor supervisor actions', () => {
     expect(fake.tables.webhook_events.length).toBe(eventsBefore);
     expect(fake.tables.call_transcript_segments.some((s: any) => s.call_id === call.id)).toBe(false);
 
-    await webhook({ type: 'transcript', transcriptType: 'final', role: 'user', transcript: 'Yes I was in an accident last week.' });
+    const finalMessage = { type: 'transcript', transcriptType: 'final', role: 'user', transcript: 'Yes I was in an accident last week.', secondsFromStart: 4.2 };
+    await webhook(finalMessage);
+    // A redelivery of the same finished line is not stored twice, and
+    // finished lines skip the webhook_events log too (fast path).
+    await webhook(finalMessage);
+    expect(fake.tables.webhook_events.length).toBe(eventsBefore);
     const transcript = await app.inject({ method: 'GET', url: `/api/v1/calls/${call.id}/transcript`, headers: { authorization: `Bearer ${adminToken}` } });
     expect(transcript.statusCode).toBe(200);
     expect(transcript.json().data.map((s: any) => [s.speaker, s.text])).toEqual([['caller', 'Yes I was in an accident last week.']]);

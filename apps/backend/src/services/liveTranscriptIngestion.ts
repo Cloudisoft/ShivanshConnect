@@ -121,8 +121,32 @@ export async function ingestLiveTranscriptSegment(
   const text = input.text.trim();
   if (!text) return null;
 
-  const entry = await loadOrCreateCacheEntry(supabase, call);
+  await getCacheEntry(supabase, call);
+  const entry = transcriptCache.get(call.id)!;
+  // Reserved synchronously (no await in between), so two lines arriving at
+  // the same moment can never take the same segment_index - they used to
+  // both read the same count and one was lost on the unique constraint.
   const segmentIndex = entry.nextSegmentIndex;
+  entry.nextSegmentIndex = segmentIndex + 1;
+  const nextFullText = entry.fullText ? `${entry.fullText}\n${input.speaker === 'ai' ? 'AI' : 'Caller'}: ${text}` : `${input.speaker === 'ai' ? 'AI' : 'Caller'}: ${text}`;
+  entry.fullText = nextFullText;
+
+  // Live Monitor gets the line NOW, before the database writes below (that
+  // ordering made every line appear 1-3s late). It is keyed by
+  // segment_index, so the stored row replaces this one on the next reload.
+  emitLiveTranscriptSegment({
+    callId: call.id,
+    organizationId: call.organization_id,
+    segment: {
+      id: `live-${call.id}-${segmentIndex}`,
+      call_id: call.id,
+      segment_index: segmentIndex,
+      speaker: input.speaker,
+      start_ms: input.startMs,
+      end_ms: input.endMs,
+      text,
+    },
+  });
 
   const { data: inserted, error } = await supabase
     .from('call_transcript_segments')
@@ -143,29 +167,25 @@ export async function ingestLiveTranscriptSegment(
   // Keep full_text growing too, so a mid-call reconciliation read (or a
   // call that ends before this transcript is ever backfilled) still has
   // a real, non-empty full_text built purely from what was actually said.
-  const nextFullText = entry.fullText ? `${entry.fullText}\n${input.speaker === 'ai' ? 'AI' : 'Caller'}: ${text}` : `${input.speaker === 'ai' ? 'AI' : 'Caller'}: ${text}`;
+  // (A failed write above leaves a gap in segment_index - harmless, order
+  // is still correct.)
   await supabase.from('call_transcripts').update({ full_text: nextFullText }).eq('id', entry.transcriptId);
 
-  // Only committed to the cache once the writes above actually succeeded -
-  // a thrown error above must never advance the cached index/full_text
-  // past what's really in the database.
-  transcriptCache.set(call.id, { transcriptId: entry.transcriptId, nextSegmentIndex: segmentIndex + 1, fullText: nextFullText });
-
-  emitLiveTranscriptSegment({
-    callId: call.id,
-    organizationId: call.organization_id,
-    segment: {
-      id: inserted.id,
-      call_id: call.id,
-      segment_index: inserted.segment_index,
-      speaker: inserted.speaker,
-      start_ms: inserted.start_ms,
-      end_ms: inserted.end_ms,
-      text: inserted.text,
-    },
-  });
-
   return inserted;
+}
+
+/** One in-flight load per call, so the first lines of a call arriving
+ * together never create two call_transcripts rows. */
+const entryLoads = new Map<string, Promise<unknown>>();
+
+async function getCacheEntry(supabase: Supabase, call: Record<string, any>): Promise<void> {
+  if (transcriptCache.has(call.id)) return;
+  let load = entryLoads.get(call.id);
+  if (!load) {
+    load = loadOrCreateCacheEntry(supabase, call).finally(() => entryLoads.delete(call.id));
+    entryLoads.set(call.id, load);
+  }
+  await load;
 }
 
 /** True when at least one live segment already exists for this call -
