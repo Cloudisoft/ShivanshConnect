@@ -312,5 +312,20 @@ describe('Phase 10: Live Monitor supervisor actions', () => {
     const transcript = await app.inject({ method: 'GET', url: `/api/v1/calls/${call.id}/transcript`, headers: { authorization: `Bearer ${adminToken}` } });
     expect(transcript.statusCode).toBe(200);
     expect(transcript.json().data.map((s: any) => [s.speaker, s.text])).toEqual([['caller', 'Yes I was in an accident last week.']]);
+
+    // The line drops: off Live Monitor at once (CALL_ENDED), while the
+    // call row waits for end-of-call-report to set its real outcome.
+    const { registerLiveMonitorSubscriber } = await import('./ws/liveMonitorBroadcaster.js');
+    const { fetchActiveCallsSnapshot } = await import('./services/liveMonitorQuery.js');
+    const events: any[] = [];
+    const unsubscribe = registerLiveMonitorSubscriber(fake.supabase as any, call.organization_id, (e) => events.push(e));
+    expect((await fetchActiveCallsSnapshot(fake.supabase as any, call.organization_id)).some((c) => c.id === call.id)).toBe(true);
+    await webhook({ type: 'status-update', status: 'ended' });
+    unsubscribe();
+    expect(events).toContainEqual(expect.objectContaining({ type: 'CALL_ENDED', call_id: call.id }));
+    expect((await fetchActiveCallsSnapshot(fake.supabase as any, call.organization_id)).some((c) => c.id === call.id)).toBe(false);
+    const row = fake.tables.calls.find((c: any) => c.id === call.id)!;
+    expect(['completed', 'transferred']).not.toContain(row.status);
+    expect(row.ended_at ?? null).toBeNull();
   });
 });

@@ -8,6 +8,7 @@
  */
 import { LIVE_MONITOR_ACTIVE_STATUSES, type LiveMonitorActiveCall } from '@shivanshconnect/shared';
 import type { getSupabaseAdmin } from '../lib/supabase.js';
+import { isCallHungUp } from '../lib/callHangupSignal.js';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
@@ -93,5 +94,6 @@ export async function fetchActiveCallsSnapshot(supabase: Supabase, organizationI
     .eq('organization_id', organizationId)
     .in('status', [...LIVE_MONITOR_ACTIVE_STATUSES]);
   if (error) throw error;
-  return buildLiveMonitorActiveCalls(supabase, data ?? []);
+  // A call that already hung up (its end report still on the way) is not live.
+  return buildLiveMonitorActiveCalls(supabase, (data ?? []).filter((c: any) => !isCallHungUp(c.id)));
 }
