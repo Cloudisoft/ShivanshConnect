@@ -20,8 +20,7 @@ import { ok } from '../lib/response.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { uuidSchema } from '../schemas/common.js';
 import { ACTIVE_CALL_STATUSES } from '../services/campaignDispatcher.js';
-import { loadCampaignCallContext } from '../services/campaignCallContext.js';
-import { campaignForNumber, configureInboundNumbers } from '../services/inboundCalls.js';
+import { configureInboundNumbers } from '../services/inboundCalls.js';
 
 const updateRouteSchema = z.object({ assigned_campaign_id: uuidSchema.nullable() });
 
@@ -108,29 +107,48 @@ export async function queueRoutes(app: FastifyInstance): Promise<void> {
   app.get('/inbound-routes', { preHandler: requirePermission('campaigns.view') }, async (req) => {
     const supabase = getSupabaseAdmin();
     const orgId = req.user!.organizationId;
-    const { data: numbers } = await supabase
-      .from('phone_numbers')
-      .select('*')
-      .eq('organization_id', orgId)
-      .eq('status', 'active')
-      .order('created_at', { ascending: true });
-    const routes = await Promise.all(
-      (numbers ?? []).map(async (pn: any) => {
-        const campaign = await campaignForNumber(supabase, pn);
-        const context = campaign ? await loadCampaignCallContext(supabase, campaign) : null;
-        return {
-          phone_number_id: pn.id,
-          phone_number: pn.phone_number,
-          friendly_name: pn.friendly_name ?? null,
-          provider_key: pn.provider_key,
-          answering: Boolean(pn.vapi_phone_number_id),
-          assigned_campaign_id: pn.assigned_campaign_id ?? null,
-          answered_by_campaign: campaign ? { id: campaign.id, name: campaign.name, status: campaign.status } : null,
-          fallback_number: context?.transferDestination ?? null,
-        };
-      }),
-    );
-    return ok(routes);
+    // Four batched lookups for every number at once (was several queries
+    // per number) - same routing rule as inboundCalls.campaignForNumber:
+    // assigned campaign, else a running campaign dialing from the number,
+    // else the most recently updated one dialing from it.
+    const [{ data: numbers }, { data: campaigns }] = await Promise.all([
+      supabase.from('phone_numbers').select('id, phone_number, friendly_name, provider_key, vapi_phone_number_id, assigned_campaign_id, created_at').eq('organization_id', orgId).eq('status', 'active').order('created_at', { ascending: true }),
+      supabase.from('campaigns').select('id, name, status, current_version_id, transfer_number_e164, updated_at').eq('organization_id', orgId).order('updated_at', { ascending: false }),
+    ]);
+    const numberIds = (numbers ?? []).map((n: any) => n.id);
+    const versionIds = (campaigns ?? []).map((c: any) => c.current_version_id).filter(Boolean);
+    const [{ data: pool }, { data: versions }] = await Promise.all([
+      numberIds.length ? supabase.from('campaign_phone_numbers').select('campaign_id, phone_number_id').in('phone_number_id', numberIds) : Promise.resolve({ data: [] as any[] }),
+      versionIds.length ? supabase.from('campaign_versions').select('id, transfer_number_e164').in('id', versionIds) : Promise.resolve({ data: [] as any[] }),
+    ]);
+
+    const campaignById = new Map((campaigns ?? []).map((c: any) => [c.id, c]));
+    const versionTransfer = new Map((versions ?? []).map((v: any) => [v.id, v.transfer_number_e164 as string | null]));
+    const poolByNumber = new Map<string, any[]>();
+    for (const row of pool ?? []) {
+      const campaign = campaignById.get(row.campaign_id);
+      if (!campaign) continue;
+      const list = poolByNumber.get(row.phone_number_id) ?? [];
+      list.push(campaign);
+      poolByNumber.set(row.phone_number_id, list);
+    }
+
+    const routes = (numbers ?? []).map((pn: any) => {
+      const assigned = pn.assigned_campaign_id ? campaignById.get(pn.assigned_campaign_id) : null;
+      const dialing = [...(poolByNumber.get(pn.id) ?? [])].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+      const campaign = assigned ?? dialing.find((c) => c.status === 'running') ?? dialing[0] ?? null;
+      return {
+        phone_number_id: pn.id,
+        phone_number: pn.phone_number,
+        friendly_name: pn.friendly_name ?? null,
+        provider_key: pn.provider_key,
+        answering: Boolean(pn.vapi_phone_number_id),
+        assigned_campaign_id: pn.assigned_campaign_id ?? null,
+        answered_by_campaign: campaign ? { id: campaign.id, name: campaign.name, status: campaign.status } : null,
+        fallback_number: campaign ? (versionTransfer.get(campaign.current_version_id) ?? campaign.transfer_number_e164 ?? null) : null,
+      };
+    });
+    return ok({ routes, campaigns: (campaigns ?? []).map((c: any) => ({ id: c.id, name: c.name, status: c.status })) });
   });
 
   app.patch('/inbound-routes/:phoneNumberId', { preHandler: requirePermission('numbers.manage') }, async (req) => {

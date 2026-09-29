@@ -1,6 +1,5 @@
 import { Alert, Badge, Card } from '../components/ui';
 import { useAuth } from '../hooks/useAuth';
-import { useCampaigns } from '../hooks/useCampaigns';
 import { useInboundRoutes, useUpdateInboundRoute } from '../hooks/useQueues';
 import { ApiClientError } from '../lib/apiClient';
 
@@ -15,10 +14,9 @@ export function InboundRoutesPage(): JSX.Element {
   const { hasPermission } = useAuth();
   const canEdit = hasPermission('numbers.manage');
   const routesQuery = useInboundRoutes();
-  const campaignsQuery = useCampaigns(1, 100);
-  const campaigns = campaignsQuery.data?.data ?? [];
   const updateRoute = useUpdateInboundRoute();
-  const routes = routesQuery.data ?? [];
+  const routes = routesQuery.data?.routes ?? [];
+  const campaigns = routesQuery.data?.campaigns ?? [];
 
   return (
     <div>
@@ -36,7 +34,7 @@ export function InboundRoutesPage(): JSX.Element {
       )}
 
       <Card className="mt-6 p-0">
-        {routesQuery.isLoading ? (
+        {routesQuery.isLoading && !routesQuery.data ? (
           <p className="p-5 text-sm text-ink-500">Loading numbers...</p>
         ) : routes.length === 0 ? (
           <p className="p-5 text-sm text-ink-500">No phone numbers yet. Add one on the DIDs page.</p>

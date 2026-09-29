@@ -88,7 +88,8 @@ describe('Queues API', () => {
     expect(own.statusCode).toBe(200);
 
     const routes = await app.inject({ method: 'GET', url: '/api/v1/queues/inbound-routes', headers: { authorization: `Bearer ${token}` } });
-    const route = routes.json().data.find((r: any) => r.phone_number_id === phoneId);
+    const route = routes.json().data.routes.find((r: any) => r.phone_number_id === phoneId);
+    expect(routes.json().data.campaigns.map((c: any) => c.name)).toEqual(['Own']);
     expect(route.assigned_campaign_id).toBe(ownCampaign);
     expect(route.answered_by_campaign.name).toBe('Own');
     expect(route.answering).toBe(false);
