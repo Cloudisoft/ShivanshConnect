@@ -31,7 +31,10 @@ export class SwrCache<T> {
     const age = entry ? Date.now() - entry.computedAt : Number.POSITIVE_INFINITY;
     if (entry && age < this.freshMs) return entry.value;
     if (entry && age < this.maxStaleMs) {
-      void this.refresh(key, compute).catch(() => undefined);
+      // The stale value is still served; a failed background refresh is
+      // logged (not swallowed) so a dashboard stuck on old numbers shows up.
+      // eslint-disable-next-line no-console
+      void this.refresh(key, compute).catch((err) => console.error('swrCache: background refresh failed', key, err instanceof Error ? err.message : err));
       return entry.value;
     }
     return this.refresh(key, compute);

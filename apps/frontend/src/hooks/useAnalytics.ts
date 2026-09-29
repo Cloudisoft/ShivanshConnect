@@ -19,6 +19,13 @@ function periodParams(value: PeriodFilterValue): string {
   return params.toString();
 }
 
+/** A custom period needs both dates; until the second one is picked the
+ * request would only be rejected (422), so it isn't sent and the last
+ * numbers stay on screen. */
+function periodReady(value: PeriodFilterValue): boolean {
+  return value.period !== 'custom' || Boolean(value.date_from && value.date_to);
+}
+
 // The dashboard paints its last-seen numbers immediately (initialData,
 // marked stale so it refetches right away) instead of a loading state -
 // see lib/persistedQuery.ts.
@@ -27,6 +34,8 @@ export function useDashboardMetrics(period: PeriodFilterValue) {
   const key = `dashboard:metrics:${periodParams(period)}`;
   return useQuery({
     queryKey: ['dashboard', 'metrics', period],
+    enabled: periodReady(period),
+    placeholderData: (prev) => prev,
     queryFn: async () => {
       const data = await api.get<DashboardMetrics>(`/dashboard?${periodParams(period)}`);
       writePersisted(key, ownerId, data);
@@ -43,6 +52,8 @@ export function useDashboardCharts(period: PeriodFilterValue) {
   const key = `dashboard:charts:${periodParams(period)}`;
   return useQuery({
     queryKey: ['dashboard', 'charts', period],
+    enabled: periodReady(period),
+    placeholderData: (prev) => prev,
     queryFn: async () => {
       const data = await api.get<DashboardCharts>(`/dashboard/charts?${periodParams(period)}`);
       writePersisted(key, ownerId, data);
@@ -58,7 +69,8 @@ export function useCampaignAnalytics(campaignId: string | undefined, period: Per
   return useQuery({
     queryKey: ['analytics', 'campaign', campaignId, period],
     queryFn: () => api.get<CampaignAnalytics>(`/analytics/campaigns/${campaignId}?${periodParams(period)}`),
-    enabled: Boolean(campaignId),
+    enabled: Boolean(campaignId) && periodReady(period),
+    placeholderData: (prev) => prev,
   });
 }
 
@@ -66,5 +78,7 @@ export function useAgentAnalytics(period: PeriodFilterValue) {
   return useQuery({
     queryKey: ['analytics', 'agents', period],
     queryFn: () => api.get<AgentAnalytics[]>(`/analytics/agents?${periodParams(period)}`),
+    enabled: periodReady(period),
+    placeholderData: (prev) => prev,
   });
 }

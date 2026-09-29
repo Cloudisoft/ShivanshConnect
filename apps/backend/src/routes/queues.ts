@@ -167,7 +167,7 @@ export async function queueRoutes(app: FastifyInstance): Promise<void> {
     const { error } = await supabase.from('phone_numbers').update({ assigned_campaign_id: body.assigned_campaign_id }).eq('id', phoneNumberId);
     if (error) throw error;
     // The fallback number follows the answering campaign's transfer number.
-    void configureInboundNumbers(orgId).catch(() => undefined);
+    void configureInboundNumbers(orgId).catch((err) => req.log.error({ err, orgId }, 'Inbound fallback update after route change failed'));
     return ok({ phone_number_id: phoneNumberId, assigned_campaign_id: body.assigned_campaign_id });
   });
 }

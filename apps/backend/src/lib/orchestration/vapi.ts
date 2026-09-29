@@ -56,6 +56,8 @@
  */
 
 import { CONVERSATION_GUIDANCE, personalityLines } from '../callGuidance.js';
+
+const VAPI_REQUEST_TIMEOUT_MS = 20_000;
 import {
   type AssistantConfig,
   type AssistantResult,
@@ -366,6 +368,9 @@ export class VapiProvider implements CallOrchestrationProvider {
         method,
         headers: this.headers(apiKey),
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        // A hung Vapi request used to hold the caller (a dispatcher tick,
+        // a supervisor's click) open until the platform's own 30s cutoff.
+        signal: AbortSignal.timeout(VAPI_REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
       throw new OrchestrationProviderError(`Failed to reach the Vapi API (${method} ${path}).`, err);
