@@ -40,7 +40,7 @@ import {
   organizationTimezone,
   resolveActualVoice,
   resolveCallScriptAndKnowledge,
-  spokenCampaignName,
+  campaignIntroName,
 } from './callOrigination.js';
 import { loadCampaignCallContext } from './campaignCallContext.js';
 
@@ -181,7 +181,7 @@ export async function handleAssistantRequest(supabase: Supabase, message: Record
     ]);
     const timeZone = campaignContext?.callingRules?.timezone ?? timezoneFromOrg ?? 'America/New_York';
     const voiceName = spokenVoiceName(actualVoice.name) ?? 'your assistant';
-    const campaignLabel = campaign ? spokenCampaignName(campaign.name) : null;
+    const campaignLabel = campaign ? campaignIntroName(campaign) : null;
     const company = campaignLabel ?? ((orgRow.data?.name as string | undefined)?.trim() || null);
 
     const promptContext: PromptVariableContext = {

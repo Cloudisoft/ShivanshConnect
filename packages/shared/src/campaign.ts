@@ -76,6 +76,8 @@ export interface Campaign {
   organization_id: string;
   name: string;
   description: string | null;
+  /** How the AI introduces the company on calls; null = the campaign name. */
+  intro_name: string | null;
   status: CampaignStatus;
   timezone: string;
   calling_window_start: string;

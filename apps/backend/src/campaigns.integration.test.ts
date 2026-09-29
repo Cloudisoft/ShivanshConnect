@@ -340,6 +340,14 @@ describe('Phase 7: campaign engine end-to-end', () => {
     const startRes = await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/start`, headers: { authorization: `Bearer ${token}` } });
     expect(startRes.json().data.status).toBe('running');
 
+    // The introduction name can change while running (read per call);
+    // other configuration still needs a pause first.
+    const introWhileRunning = await app.inject({ method: 'PATCH', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` }, payload: { intro_name: 'Motor Vehicle Accident Helpline' } });
+    expect(introWhileRunning.statusCode).toBe(200);
+    expect(introWhileRunning.json().data.intro_name).toBe('Motor Vehicle Accident Helpline');
+    const otherWhileRunning = await app.inject({ method: 'PATCH', url: `/api/v1/campaigns/${campaign.id}`, headers: { authorization: `Bearer ${token}` }, payload: { concurrency_limit: 4 } });
+    expect(otherWhileRunning.statusCode).toBe(422);
+
     // Never restartable while still running - /stop or /pause first.
     const restartWhileRunning = await app.inject({ method: 'POST', url: `/api/v1/campaigns/${campaign.id}/restart`, headers: { authorization: `Bearer ${token}` } });
     expect(restartWhileRunning.statusCode).toBe(422);
