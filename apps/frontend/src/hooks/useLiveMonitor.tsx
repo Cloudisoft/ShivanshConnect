@@ -87,11 +87,21 @@ function useLiveMonitorConnection(): LiveMonitorState {
   useEffect(() => {
     closedByUsRef.current = false;
 
+    // True when the last attempt closed without ever opening - the server
+    // refuses the upgrade (401) when the token has expired, and a browser
+    // WebSocket can't see that status, so it used to retry the same stale
+    // token forever and Live Monitor never updated again.
+    let lastAttemptFailed = false;
+
     async function connect() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      let session = (await supabase.auth.getSession()).data.session;
+      const expiresSoon = session?.expires_at != null && session.expires_at * 1000 - Date.now() < 60_000;
+      if (lastAttemptFailed || expiresSoon) {
+        const refreshed = await supabase.auth.refreshSession().catch(() => null);
+        if (refreshed?.data.session) session = refreshed.data.session;
+      }
       if (!session?.access_token || closedByUsRef.current) return;
+      let opened = false;
 
       setState((s) => ({ ...s, status: s.status === 'connecting' ? 'connecting' : 'reconnecting' }));
       const ws = new WebSocket(`${wsBaseUrl()}/live-monitor/stream?token=${encodeURIComponent(session.access_token)}`);
@@ -105,6 +115,8 @@ function useLiveMonitorConnection(): LiveMonitorState {
       }, 10000);
 
       ws.onopen = () => {
+        opened = true;
+        lastAttemptFailed = false;
         retryDelayRef.current = 1000;
         lastMessageAtRef.current = Date.now();
         setState((s) => ({ ...s, status: 'open' }));
@@ -183,6 +195,7 @@ function useLiveMonitorConnection(): LiveMonitorState {
       ws.onclose = () => {
         clearInterval(watchdog);
         wsRef.current = null;
+        if (!opened) lastAttemptFailed = true;
         if (closedByUsRef.current) {
           setState((s) => ({ ...s, status: 'closed' }));
           return;

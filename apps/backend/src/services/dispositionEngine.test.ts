@@ -110,3 +110,27 @@ describe('dispositionEngine.decideDisposition - the deterministic rules engine',
     expect(decision.reason.length).toBeGreaterThan(0);
   });
 });
+
+describe('decideDisposition - outcome names match what happened (29 Sep request)', () => {
+  const base = { status: 'completed' as const, endedReason: null, durationSeconds: 0, amdDetected: false, transferStatus: null, dncRequested: false };
+  it('voicemail is VOICEMAIL', () => {
+    expect(decideDisposition({ ...base, endedReason: 'voicemail', durationSeconds: 12 }).code).toBe('VOICEMAIL');
+  });
+  it('a real conversation is CALL_CONNECTED, even when it ended on silence or an error', () => {
+    expect(decideDisposition({ ...base, endedReason: 'customer-ended-call', durationSeconds: 60 }).code).toBe('CALL_CONNECTED');
+    expect(decideDisposition({ ...base, endedReason: 'silence-timed-out', durationSeconds: 95 }).code).toBe('CALL_CONNECTED');
+    expect(decideDisposition({ ...base, endedReason: 'pipeline-error-openai-llm-failed', durationSeconds: 120 }).code).toBe('CALL_CONNECTED');
+  });
+  it('picking up and hanging up straight away is HUNG_UP', () => {
+    expect(decideDisposition({ ...base, endedReason: 'customer-ended-call', durationSeconds: 3 }).code).toBe('HUNG_UP');
+  });
+  it('nobody picking up is NO_ANSWER', () => {
+    expect(decideDisposition({ ...base, endedReason: 'customer-did-not-answer', durationSeconds: 25 }).code).toBe('NO_ANSWER');
+    expect(decideDisposition({ ...base, status: 'failed', endedReason: 'dial_timeout' }).code).toBe('NO_ANSWER');
+  });
+  it('any technical failure or a silent line without a conversation is DISCONNECTED', () => {
+    for (const reason of ['twilio-failed-to-connect-call', 'call.start.error-get-transport', 'pipeline-error-openai-llm-failed', 'silence-timed-out', 'customer-busy']) {
+      expect(decideDisposition({ ...base, endedReason: reason, durationSeconds: 4 }).code).toBe('DISCONNECTED');
+    }
+  });
+});
