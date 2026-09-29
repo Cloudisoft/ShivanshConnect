@@ -131,7 +131,8 @@ const STOP_SPEAKING_PLAN = { numWords: 0 };
  * beep) and is Vapi's recommended provider. It checks from 2.5s and every
  * 2.5s after (Vapi rejects anything under 2.5s with a 400, which failed
  * every campaign call on 29 Sep 18:18-18:30 UTC), for about 15s - a
- * voicemail greeting is caught while it is still playing. When it fires the call is hung up. Voicemails it
+ * voicemail greeting is caught while it is still playing. When it fires Vapi leaves
+ * the campaign's voicemail script after the beep, or hangs up without one. Voicemails it
  * still misses are caught from the transcript by
  * services/voicemailBackstop.ts. */
 export const VOICEMAIL_DETECTION_PLAN = {
@@ -140,15 +141,16 @@ export const VOICEMAIL_DETECTION_PLAN = {
   beepMaxAwaitSeconds: 20,
 };
 
-/** Per explicit request: "just detect the VM and then drop the VM, nothing
- * more". Every campaign call detects voicemail and hangs up the moment it
- * is detected - no voicemail message is ever left (Vapi hangs up on
- * detection when no voicemailMessage is set), whatever the campaign's old
- * voicemail settings say. Calls outside a campaign (vm null) are left as
- * they were. */
+/** Every campaign call detects voicemail. When the campaign has a voicemail
+ * script ("leave VM after a beep as per VM script"), Vapi waits for the beep
+ * (up to beepMaxAwaitSeconds) and speaks it, then hangs up; without one it
+ * hangs up as soon as the voicemail is detected. Calls outside a campaign
+ * (vm null) are left as they were. */
 export function voicemailSettings(vm: AssistantConfig['voicemailDetection'] | undefined): Record<string, unknown> {
   if (!vm) return {};
-  return { voicemailDetection: VOICEMAIL_DETECTION_PLAN };
+  const settings: Record<string, unknown> = { voicemailDetection: VOICEMAIL_DETECTION_PLAN };
+  if (vm.leaveVoicemail && vm.message?.trim()) settings.voicemailMessage = vm.message.trim();
+  return settings;
 }
 
 const START_SPEAKING_PLAN = { waitSeconds: 0.4, smartEndpointingPlan: { provider: 'livekit' } };

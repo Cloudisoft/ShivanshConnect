@@ -151,23 +151,24 @@ export async function cdrRoutes(app: FastifyInstance): Promise<void> {
     if (error) throw error;
     if (!call || call.organization_id !== orgId) throw new NotFoundError('Call not found.');
 
-    const [row] = await buildCdrRows(supabase, orgId, [call]);
-
-    const [{ data: transcript }, { data: recording }, { data: summary }] = await Promise.all([
+    // Everything below only needs the call, so it runs at once instead of
+    // one query after another (call details were a chain of 5+ round trips).
+    // Segments are looked up by call_id, which they carry, rather than
+    // waiting for the transcript row first.
+    const [[row], { data: transcript }, { data: recording }, { data: summary }, { data: segmentRows }] = await Promise.all([
+      buildCdrRows(supabase, orgId, [call]),
       supabase.from('call_transcripts').select('*').eq('call_id', callId).maybeSingle(),
       supabase.from('call_recordings').select('*').eq('call_id', callId).maybeSingle(),
       supabase.from('call_summaries').select('*').eq('call_id', callId).maybeSingle(),
-    ]);
-
-    let segments: Record<string, any>[] = [];
-    if (transcript) {
-      const { data } = await supabase
+      supabase
         .from('call_transcript_segments')
-        .select('id, speaker, segment_index, start_ms, end_ms, text')
-        .eq('transcript_id', transcript.id)
-        .order('segment_index', { ascending: true });
-      segments = data ?? [];
-    }
+        .select('id, speaker, segment_index, start_ms, end_ms, text, transcript_id')
+        .eq('call_id', callId)
+        .order('segment_index', { ascending: true }),
+    ]);
+    const segments = transcript
+      ? (segmentRows ?? []).filter((seg: Record<string, any>) => seg.transcript_id === transcript.id).map(({ transcript_id: _t, ...seg }: Record<string, any>) => seg)
+      : [];
 
     return ok({
       ...row,

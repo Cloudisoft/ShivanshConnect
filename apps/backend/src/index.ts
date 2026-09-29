@@ -396,6 +396,11 @@ async function main() {
     // Background workers run in one process only - see lib/workerLease.ts.
     // This container serves requests right away but waits here while the
     // old one is still running.
+    // Read-only and per-process (it fills this process's own dashboard
+    // cache), so every container runs it - a new container waiting for the
+    // lease used to build the dashboard from scratch on the first request
+    // after login.
+    startDashboardWarmer();
     await waitForWorkerLease((msg) => app.log.info(msg));
     // Phase 7: starts the in-process campaign dispatch loop (see
     // services/campaignDispatcher.ts's header comment for exactly why
@@ -439,10 +444,10 @@ async function main() {
     startRecordingBackfillSweep();
     // English-Cartesia-only voice catalog with clean names - see
     // services/voiceCatalog.ts.
-    startVoiceCatalogSync();
-    // Keeps every organization's dashboard pre-built so sign-in never waits
-    // for it - see routes/dashboard.ts.
-    startDashboardWarmer();
+    // Heavy one-offs (voice catalog rewrite, historical repair against Vapi)
+    // are staggered: all of them firing the moment a container took over,
+    // on top of live calls, made every page slow for minutes (29 Sep).
+    setTimeout(startVoiceCatalogSync, 5 * 60_000).unref();
     // Due AI callbacks are placed automatically - services/callbackDispatcher.ts.
     startCallbackDispatcher();
     // Every imported number answers inbound calls - services/inboundCalls.ts.
@@ -453,7 +458,7 @@ async function main() {
     // callEndDataRepair.ts's header. Runs once at boot, never blocks
     // startup (fire-and-forget, logs its own errors) - same "not started
     // by buildApp() itself" reasoning as every other scheduler above.
-    void runCallEndDataRepair();
+    setTimeout(() => void runCallEndDataRepair(), 2 * 60_000).unref();
   } catch (err) {
     app.log.error(err);
     process.exit(1);
