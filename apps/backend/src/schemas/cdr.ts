@@ -26,7 +26,13 @@ export type SearchTranscriptQuery = z.infer<typeof searchTranscriptQuerySchema>;
 // POST /cdr/export
 export const createExportSchema = z.object({
   type: z.enum(['cdr_csv', 'cdr_xlsx']),
-  filters: listCdrQuerySchema.omit({ page: true, page_size: true }).default({}),
+  filters: listCdrQuerySchema
+    .omit({ page: true, page_size: true })
+    .extend({
+      /** Export only these calls (rows ticked in the CDR list). */
+      call_ids: z.array(uuidSchema).min(1).max(5000).optional(),
+    })
+    .default({}),
 });
 export type CreateExportInput = z.infer<typeof createExportSchema>;
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createFakeSupabase } from '../test/fakeSupabase.js';
-import { buildCdrRows, fetchCdrCallsPage } from './cdrQuery.js';
+import { buildCdrRows, fetchCdrCallsPage, iterateAllCdrRows } from './cdrQuery.js';
 
 /** Seeds a minimal but realistic set of rows across every table
  * buildCdrRows() joins against, for one organization plus one call each
@@ -67,6 +67,16 @@ describe('cdrQuery.fetchCdrCallsPage / buildCdrRows', () => {
     const { calls, count } = await fetchCdrCallsPage(supabase as any, orgId, {}, 1, 20);
     expect(count).toBe(2);
     expect(calls.every((c) => c.organization_id === orgId)).toBe(true);
+  });
+
+  it('exports exactly the ticked calls (call_ids), still scoped to the organization', async () => {
+    const { supabase, orgId, call2, otherCall } = seed();
+    const exported: string[] = [];
+    const total = await iterateAllCdrRows(supabase as any, orgId, { call_ids: [call2.id, otherCall.id] }, async (rows) => {
+      exported.push(...rows.map((r) => r.call_id));
+    });
+    expect(total).toBe(1);
+    expect(exported).toEqual([call2.id]);
   });
 
   it('filters by status', async () => {

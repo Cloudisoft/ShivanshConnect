@@ -8,6 +8,7 @@ import {
   useDeletePhoneNumber,
   usePhoneNumberBulkAction,
   usePhoneNumbers,
+  phoneNumberFilterBody,
   useSyncNumberWithVapi,
   useUpdatePhoneNumber,
   type PhoneNumberFilters,
@@ -15,6 +16,8 @@ import {
 import { Alert, Badge, Button, Card } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
 import { FilterBar, FilterSearch, FilterSelect, hasActiveFilters } from '../../components/FilterBar';
+import { RowCheckbox, SelectPageCheckbox, SelectionBar } from '../../components/SelectionBar';
+import { useRowSelection } from '../../hooks/useRowSelection';
 import { ImportNumberModal } from '../../components/phoneNumbers/ImportNumberModal';
 
 function CapabilityBadges({ capabilities }: { capabilities: PhoneNumber['capabilities'] }): JSX.Element {
@@ -139,15 +142,16 @@ export function NumbersTab(): JSX.Element {
   const canManage = hasPermission('numbers.manage');
   const [filters, setFiltersState] = useState<PhoneNumberFilters>({});
   const [showImport, setShowImport] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
 
-  const numbersQuery = usePhoneNumbers(filters);
-  // Drop any selection made under the previous filters.
+  const numbersQuery = usePhoneNumbers(filters, page);
+  const pagination = numbersQuery.data?.pagination;
+  // The selection hook drops any selection made under other filters.
   function setFilters(change: (f: PhoneNumberFilters) => PhoneNumberFilters) {
     setFiltersState(change);
-    setSelected(new Set());
+    setPage(1);
     setConfirmingBulkDelete(false);
   }
   const providersQuery = useTelephonyProviders();
@@ -157,28 +161,20 @@ export function NumbersTab(): JSX.Element {
   const agents = agentsQuery.data?.data ?? [];
   const agentNameById = new Map(agents.map((a) => [a.id, a.name]));
 
-  function toggleNumber(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleAll() {
-    setSelected((prev) => (prev.size === numbers.length ? new Set() : new Set(numbers.map((n) => n.id))));
-  }
+  const selection = useRowSelection(numbers.map((n) => n.id), filters);
+  const selectedCount = selection.allMatching ? pagination?.total ?? 0 : selection.selected.size;
+  const selectionBody = () =>
+    selection.allMatching ? { filter: phoneNumberFilterBody(filters) } : { phone_number_ids: Array.from(selection.selected) };
 
   function resetSelection() {
-    setSelected(new Set());
+    selection.clear();
     setConfirmingBulkDelete(false);
   }
 
   async function handleBulkDelete() {
     setBulkError(null);
     try {
-      await bulkAction.mutateAsync({ phone_number_ids: Array.from(selected), action: 'delete' });
+      await bulkAction.mutateAsync({ ...selectionBody(), action: 'delete' });
       resetSelection();
     } catch (err) {
       setBulkError(err instanceof ApiClientError ? err.message : 'Could not delete the selected numbers.');
@@ -188,7 +184,7 @@ export function NumbersTab(): JSX.Element {
   async function handleBulkAssign(agentId: string) {
     setBulkError(null);
     try {
-      await bulkAction.mutateAsync({ phone_number_ids: Array.from(selected), action: 'assign_agent', assigned_agent_id: agentId || null });
+      await bulkAction.mutateAsync({ ...selectionBody(), action: 'assign_agent', assigned_agent_id: agentId || null });
       resetSelection();
     } catch (err) {
       setBulkError(err instanceof ApiClientError ? err.message : 'Could not reassign the selected numbers.');
@@ -256,17 +252,8 @@ export function NumbersTab(): JSX.Element {
         />
       </FilterBar>
 
-      {canManage && selected.size > 0 && (
-        <Card className="mt-4 flex flex-wrap items-center justify-between gap-3 !p-3">
-          <div className="flex items-center gap-3 text-sm text-ink-700">
-            <span>
-              <strong>{selected.size}</strong> selected
-            </span>
-            <button type="button" className="text-xs text-ink-500 underline" onClick={resetSelection}>
-              Clear selection
-            </button>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
+      {canManage && (
+        <SelectionBar selection={selection} pageCount={numbers.length} total={pagination?.total ?? numbers.length} noun="numbers">
             <select
               className="rounded-md border border-ink-300 bg-white px-2 py-1.5 text-sm"
               defaultValue=""
@@ -288,7 +275,7 @@ export function NumbersTab(): JSX.Element {
             </select>
             {confirmingBulkDelete ? (
               <>
-                <span className="text-xs text-ink-600">Delete {selected.size} number(s)?</span>
+                <span className="text-xs text-ink-600">Delete {selectedCount} number(s)?</span>
                 <Button variant="danger" disabled={bulkAction.isPending} onClick={handleBulkDelete}>
                   {bulkAction.isPending ? 'Deleting...' : 'Confirm'}
                 </Button>
@@ -301,8 +288,7 @@ export function NumbersTab(): JSX.Element {
                 <Trash2 className="h-4 w-4" /> Delete selected
               </Button>
             )}
-          </div>
-        </Card>
+        </SelectionBar>
       )}
       {bulkError && (
         <div className="mt-3">
@@ -327,12 +313,7 @@ export function NumbersTab(): JSX.Element {
               <tr>
                 {canManage && (
                   <th className="px-4 py-2">
-                    <input
-                      type="checkbox"
-                      checked={numbers.length > 0 && selected.size === numbers.length}
-                      onChange={toggleAll}
-                      aria-label="Select all phone numbers"
-                    />
+                    <SelectPageCheckbox selection={selection} label="Select all phone numbers on this page" />
                   </th>
                 )}
                 <th className="px-4 py-2">Number</th>
@@ -350,7 +331,7 @@ export function NumbersTab(): JSX.Element {
                 <tr key={number.id}>
                   {canManage && (
                     <td className="px-4 py-3">
-                      <input type="checkbox" checked={selected.has(number.id)} onChange={() => toggleNumber(number.id)} aria-label={`Select ${number.phone_number}`} />
+                      <RowCheckbox selection={selection} id={number.id} label={`Select ${number.phone_number}`} />
                     </td>
                   )}
                   <td className="px-4 py-3 font-mono text-ink-800">
@@ -391,6 +372,21 @@ export function NumbersTab(): JSX.Element {
       )}
 
       {showImport && <ImportNumberModal providers={providersQuery.data ?? []} onClose={() => setShowImport(false)} />}
+      {pagination && pagination.total_pages > 1 && (
+        <div className="mt-4 flex items-center justify-between text-sm text-ink-600">
+          <span>
+            Page {pagination.page} of {pagination.total_pages} ({pagination.total} numbers)
+          </span>
+          <div className="flex gap-2">
+            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+              Previous
+            </Button>
+            <Button variant="secondary" disabled={page >= pagination.total_pages} onClick={() => setPage((p) => p + 1)}>
+              Next
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

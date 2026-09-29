@@ -4,6 +4,9 @@ import { VOICE_PROVIDER_LABELS, type Voice, type VoiceProviderKey } from '@shiva
 import { useAuth } from '../../hooks/useAuth';
 import {
   useBulkDeleteVoices,
+  useBulkUpdateVoices,
+  voiceFilterBody,
+  type VoiceSelection,
   useDeleteVoice,
   useImportVoicesById,
   usePreviewVoice,
@@ -16,6 +19,8 @@ import { useVoiceProviders } from '../../hooks/useVoiceProviders';
 import { Alert, Badge, Button, Card, Label } from '../../components/ui';
 import { ApiClientError } from '../../lib/apiClient';
 import { FilterBar, FilterSearch, FilterSelect, hasActiveFilters } from '../../components/FilterBar';
+import { RowCheckbox, SelectPageCheckbox, SelectionBar } from '../../components/SelectionBar';
+import { useRowSelection } from '../../hooks/useRowSelection';
 
 const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000/api/v1').replace(/\/api\/v1\/?$/, '');
 
@@ -236,46 +241,46 @@ export function VoicesTab(): JSX.Element {
   const canManage = hasPermission('voices.manage');
   const [filters, setFiltersState] = useState<VoiceFilters>({});
   const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [showImportById, setShowImportById] = useState(false);
 
   const voicesQuery = useVoices(filters, page);
   const pagination = voicesQuery.data?.pagination;
-  // A filter change starts from page 1 and drops any selection made under
-  // the previous filters.
+  // A filter change starts from page 1 (the selection hook drops any
+  // selection made under the previous filters).
   function setFilters(change: (f: VoiceFilters) => VoiceFilters) {
     setFiltersState(change);
     setPage(1);
-    setSelected(new Set());
   }
   const providersQuery = useVoiceProviders();
   const bulkDelete = useBulkDeleteVoices();
+  const bulkUpdate = useBulkUpdateVoices();
   const voices = voicesQuery.data?.data ?? [];
   const connectedProviders = (providersQuery.data ?? []).filter((p) => p.status === 'connected');
-
-  function toggleVoice(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleAll() {
-    setSelected((prev) => (prev.size === voices.length ? new Set() : new Set(voices.map((v) => v.id))));
-  }
+  const selection = useRowSelection(voices.map((v) => v.id), filters);
+  const selectedCount = selection.allMatching ? pagination?.total ?? 0 : selection.selected.size;
+  const selectionBody = (): VoiceSelection =>
+    selection.allMatching ? { filter: voiceFilterBody(filters) } : { voice_ids: Array.from(selection.selected) };
 
   async function handleBulkDelete() {
     setBulkError(null);
     try {
-      await bulkDelete.mutateAsync(Array.from(selected));
-      setSelected(new Set());
+      await bulkDelete.mutateAsync(selectionBody());
+      selection.clear();
       setConfirmingBulkDelete(false);
     } catch (err) {
       setBulkError(err instanceof ApiClientError ? err.message : 'Could not delete the selected voices.');
+    }
+  }
+
+  async function handleBulkCloned(isCloned: boolean) {
+    setBulkError(null);
+    try {
+      await bulkUpdate.mutateAsync({ ...selectionBody(), is_cloned: isCloned });
+      selection.clear();
+    } catch (err) {
+      setBulkError(err instanceof ApiClientError ? err.message : 'Could not update the selected voices.');
     }
   }
 
@@ -340,32 +345,30 @@ export function VoicesTab(): JSX.Element {
         />
       </FilterBar>
 
-      {canManage && selected.size > 0 && (
-        <Card className="mt-4 flex flex-wrap items-center justify-between gap-3 !p-3">
-          <div className="flex items-center gap-3 text-sm text-ink-700">
-            <span>
-              <strong>{selected.size}</strong> selected
-            </span>
-            <button type="button" className="text-xs text-ink-500 underline" onClick={() => setSelected(new Set())}>
-              Clear selection
-            </button>
-          </div>
+      {canManage && (
+        <SelectionBar selection={selection} pageCount={voices.length} total={pagination?.total ?? voices.length} noun="voices">
+          <Button variant="secondary" disabled={bulkUpdate.isPending} onClick={() => handleBulkCloned(true)}>
+            Mark cloned
+          </Button>
+          <Button variant="secondary" disabled={bulkUpdate.isPending} onClick={() => handleBulkCloned(false)}>
+            Unmark cloned
+          </Button>
           {confirmingBulkDelete ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-ink-600">Delete {selected.size} voice(s)?</span>
+            <>
+              <span className="text-xs text-ink-600">Delete {selectedCount} voice(s)?</span>
               <Button variant="danger" disabled={bulkDelete.isPending} onClick={handleBulkDelete}>
                 {bulkDelete.isPending ? 'Deleting...' : 'Confirm'}
               </Button>
               <Button variant="ghost" onClick={() => setConfirmingBulkDelete(false)}>
                 Cancel
               </Button>
-            </div>
+            </>
           ) : (
             <Button variant="danger" onClick={() => setConfirmingBulkDelete(true)}>
               <Trash2 className="h-4 w-4" /> Delete selected
             </Button>
           )}
-        </Card>
+        </SelectionBar>
       )}
       {bulkError && (
         <div className="mt-3">
@@ -390,12 +393,7 @@ export function VoicesTab(): JSX.Element {
               <tr>
                 {canManage && (
                   <th className="px-4 py-2">
-                    <input
-                      type="checkbox"
-                      checked={voices.length > 0 && selected.size === voices.length}
-                      onChange={toggleAll}
-                      aria-label="Select all voices"
-                    />
+                    <SelectPageCheckbox selection={selection} label="Select all voices on this page" />
                   </th>
                 )}
                 <th className="px-4 py-2">Provider</th>
@@ -413,7 +411,7 @@ export function VoicesTab(): JSX.Element {
                 <tr key={voice.id}>
                   {canManage && (
                     <td className="px-4 py-3">
-                      <input type="checkbox" checked={selected.has(voice.id)} onChange={() => toggleVoice(voice.id)} aria-label={`Select ${voice.name}`} />
+                      <RowCheckbox selection={selection} id={voice.id} label={`Select ${voice.name}`} />
                     </td>
                   )}
                   <td className="px-4 py-3">
@@ -459,10 +457,10 @@ export function VoicesTab(): JSX.Element {
             Page {pagination.page} of {pagination.total_pages} ({pagination.total} voices)
           </span>
           <div className="flex gap-2">
-            <Button variant="secondary" disabled={page <= 1} onClick={() => { setPage((p) => p - 1); setSelected(new Set()); }}>
+            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
               Previous
             </Button>
-            <Button variant="secondary" disabled={page >= pagination.total_pages} onClick={() => { setPage((p) => p + 1); setSelected(new Set()); }}>
+            <Button variant="secondary" disabled={page >= pagination.total_pages} onClick={() => setPage((p) => p + 1)}>
               Next
             </Button>
           </div>
