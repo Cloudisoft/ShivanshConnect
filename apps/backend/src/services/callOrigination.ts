@@ -223,8 +223,8 @@ async function resolveCallPersonalization(
   // organization's name.
   let companyName: string | null = null;
   if (campaignId) {
-    const { data } = await supabase.from('campaigns').select('name').eq('id', campaignId).eq('organization_id', orgId).maybeSingle();
-    companyName = spokenCampaignName(data?.name);
+    const { data } = await supabase.from('campaigns').select('name, intro_name').eq('id', campaignId).eq('organization_id', orgId).maybeSingle();
+    companyName = campaignIntroName(data);
   }
   if (!companyName) {
     const { data: org } = await supabase.from('organizations').select('name').eq('id', orgId).maybeSingle();
@@ -248,13 +248,15 @@ export function buildOpeningInstruction(firstMessage: string, voiceName: string,
   const lines = [
     '',
     '',
-    'How this call opens - follow it exactly:',
-    `1. You have ALREADY said: "${firstMessage}" Do not say it again. Wait for their reply.`,
-    `2. When they answer (for example "I'm fine, how are you?"), reply briefly and warmly - "I'm fine, thanks!" (say how you are only if they asked) - and in the same breath introduce yourself: "${intro}." Then go straight into the call script.`,
+    'How this call opens:',
+    `- You have ALREADY said: "${firstMessage}" Don't say it again - wait for their reply.`,
+    `- The usual flow: they answer ("I'm fine, how are you?"), you reply briefly and warmly ("I'm fine, thanks!" - say how you are only if they asked) and in the same breath introduce yourself as "${intro}", then move into the call script.`,
+    `- Always introduce yourself with exactly that name ("${intro}"), never an abbreviation or a different company or person name.`,
+    "- Adapt to how they actually respond instead of forcing the flow: if they ask who's calling or what it's about, introduce yourself and give the reason right away; if they sound busy, acknowledge it and offer to call back at a better time; if they're short or skip the small talk, skip it too and get to the point.",
   ];
   if (firstName) {
     lines.push(
-      `3. If they say they are not ${firstName}, or that there is no ${firstName} there, say: "Oh, I'm sorry about that - may I know who I'm speaking with?" Then carry on with the person on the line, using their name.`,
+      `- If they say they are not ${firstName}, or that there is no ${firstName} there, say: "Oh, I'm sorry about that - may I know who I'm speaking with?" Then carry on with the person on the line, using their name.`,
     );
   }
   lines.push(
@@ -277,6 +279,14 @@ export function spokenCampaignName(name: string | null | undefined): string | nu
       .trim();
   } while (result !== previous);
   return result || null;
+}
+
+/** How the AI names the company on a campaign's calls: the campaign's
+ * "Introduce as" name (e.g. "Motor Vehicle Accident Helpline"), else its
+ * name without copy markers. */
+export function campaignIntroName(campaign: { name?: string | null; intro_name?: string | null } | null | undefined): string | null {
+  const intro = campaign?.intro_name?.trim();
+  return intro || spokenCampaignName(campaign?.name);
 }
 
 /** Resolves the transfer destination for this call: an explicit

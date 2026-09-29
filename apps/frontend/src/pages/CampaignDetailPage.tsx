@@ -243,6 +243,8 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const [scriptId, setScriptId] = useState(v?.script_id ?? '');
   const [kbIds, setKbIds] = useState<string[]>(v?.knowledge_base_ids ?? []);
   const [transferNumber, setTransferNumber] = useState(campaign.transfer_number_e164 ?? '');
+  const [introName, setIntroName] = useState(campaign.intro_name ?? '');
+  const [introSaved, setIntroSaved] = useState(false);
   const [voicemailEnabled, setVoicemailEnabled] = useState(campaign.voicemail_detection_enabled);
   const [voicemailMessage, setVoicemailMessage] = useState(campaign.voicemail_message ?? '');
   const [leaveVoicemail, setLeaveVoicemail] = useState(campaign.leave_voicemail);
@@ -321,6 +323,16 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
       });
     } catch (err) {
       setError(describeApiError(err, 'Failed to save campaign fields.'));
+    }
+  }
+
+  async function handleSaveIntroName() {
+    setError(null);
+    try {
+      await updateCampaign.mutateAsync({ id: campaign.id, intro_name: introName.trim() || null });
+      setIntroSaved(true);
+    } catch (err) {
+      setError(describeApiError(err, 'Failed to save the introduction name.'));
     }
   }
 
@@ -507,6 +519,29 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
               .
             </p>
           )}
+        </div>
+        <div>
+          <Label>Introduce as</Label>
+          <div className="flex gap-2">
+            <Input
+              value={introName}
+              onChange={(e) => {
+                setIntroName(e.target.value);
+                setIntroSaved(false);
+              }}
+              placeholder={campaign.name}
+              maxLength={200}
+              disabled={!canEdit}
+            />
+            {canEdit && (
+              <Button variant="secondary" onClick={handleSaveIntroName} disabled={updateCampaign.isPending || introName.trim() === (campaign.intro_name ?? '')}>
+                {introSaved ? 'Saved' : 'Save'}
+              </Button>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-ink-500">
+            The AI says "this is {'{voice}'} from <strong>{introName.trim() || campaign.name}</strong>". Leave empty to use the campaign name. Takes effect on the next call, even while running.
+          </p>
         </div>
         <div>
           <Label>Script</Label>

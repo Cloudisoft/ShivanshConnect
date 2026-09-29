@@ -132,7 +132,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     const prompt: string = params.systemPromptOverride;
     expect(prompt).toContain('You are a helpful sales agent. Reach out to priya@acme.example if needed.');
     expect(prompt).toContain('You have ALREADY said: "Hi Priya, how are you today?"');
-    expect(prompt).toContain('introduce yourself: "this is your assistant from Acme Sales Co."');
+    expect(prompt).toContain('introduce yourself as "this is your assistant from Acme Sales Co"');
     expect(prompt).toContain("If they say they are not Priya, or that there is no Priya there, say: \"Oh, I'm sorry about that - may I know who I'm speaking with?\"");
     // The name is known - never asked again.
     expect(prompt).not.toContain('politely ask for their name');
@@ -206,7 +206,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     // truth for who the caller hears introduce themselves as.
     expect(params.systemPromptOverride).toContain('You are Sarah, a helpful sales agent.');
     expect(params.firstMessageOverride).toBe('Hi Priya, how are you today?');
-    expect(params.systemPromptOverride).toContain('"this is Sarah from Acme Sales Co."');
+    expect(params.systemPromptOverride).toContain('"this is Sarah from Acme Sales Co"');
   });
 
   it('a campaign voice override wins over the agent version\'s own default voice for {{agent_name}} too', async () => {
@@ -240,7 +240,37 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     expect(params.systemPromptOverride).toContain('You are Override Voice.');
     expect(params.firstMessageOverride).toBe('Hi Priya, how are you today?');
     // Introduced with the campaign's name.
-    expect(params.systemPromptOverride).toContain('"this is Override Voice from Fall Outreach."');
+    expect(params.systemPromptOverride).toContain('"this is Override Voice from Fall Outreach"');
+  });
+
+  it("a campaign's Introduce-as name (e.g. the full form of MVA) is what the AI introduces itself with", async () => {
+    const { createCall } = fakeVapiProvider();
+    fake.tables.ai_agent_versions[0].vapi_assistant_id = 'asst_existing';
+    const voiceId = randomUUID();
+    fake.tables.voices.push({ id: voiceId, organization_id: orgId, provider_key: 'elevenlabs', provider_voice_id: 'ashton-1', name: 'ashton' });
+    fake.tables.ai_agent_versions[0].voice_id = voiceId;
+    const leadId = randomUUID();
+    fake.tables.leads.push({ id: leadId, organization_id: orgId, first_name: 'Alex', phone_normalized: '+14845552222', custom_fields: {} });
+    const campaignId = randomUUID();
+    fake.tables.campaigns.push({ id: campaignId, organization_id: orgId, name: 'MVA (copy)', intro_name: 'Motor Vehicle Accident Helpline' });
+
+    await originateCall({
+      organizationId: orgId,
+      engine: 'vapi',
+      agent: { id: agentId },
+      version: fake.tables.ai_agent_versions[0],
+      phoneNumber: fake.tables.phone_numbers[0],
+      customerNumber: '+14845552222',
+      leadId,
+      campaignId,
+      createdBy: null,
+    });
+
+    const params = createCall.mock.calls[0][0];
+    expect(params.firstMessageOverride).toBe('Hi Alex, how are you today?');
+    expect(params.systemPromptOverride).toContain('introduce yourself as "this is ashton from Motor Vehicle Accident Helpline"');
+    expect(params.systemPromptOverride).toContain('never an abbreviation');
+    expect(params.systemPromptOverride).toContain('Adapt to how they actually respond');
   });
 
   it('an unnamed lead gets the generic fallback greeting with the real voice + campaign name, not the named template', async () => {
@@ -279,7 +309,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     const params = createCall.mock.calls[0][0];
     expect(params.firstMessageOverride).toBe('Hi, how are you doing today?');
     expect(params.systemPromptOverride).toContain('You are a helpful sales agent.');
-    expect(params.systemPromptOverride).toContain('"this is Sarah from Fall Outreach."');
+    expect(params.systemPromptOverride).toContain('"this is Sarah from Fall Outreach"');
     expect(params.systemPromptOverride).toContain('politely ask for their name');
     expect(params.systemPromptOverride).not.toContain('If they say they are not');
   });
@@ -303,7 +333,7 @@ describe('originateCall - per-lead personalization (Bug 1) and campaign config f
     const params = createCall.mock.calls[0][0];
     // No campaign -> the organization's name.
     expect(params.firstMessageOverride).toBe('Hi, how are you doing today?');
-    expect(params.systemPromptOverride).toContain('"this is your assistant from Acme Sales Co."');
+    expect(params.systemPromptOverride).toContain('"this is your assistant from Acme Sales Co"');
   });
 
   it('originateCall() invokes createCall() with the correct assistantOverrides for a named lead (integration)', async () => {

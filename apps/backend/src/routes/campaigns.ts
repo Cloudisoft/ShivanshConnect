@@ -323,7 +323,10 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     const supabase = getSupabaseAdmin();
     const orgId = req.user!.organizationId;
     const existing = await getOwnedCampaign(supabase, id, orgId);
-    if (existing.status === 'running') {
+    // Only the introduction name may change while running - it's read per
+    // call, so the next call simply uses the new name.
+    const onlyIntroName = Object.keys(body).every((k) => k === 'intro_name');
+    if (existing.status === 'running' && !onlyIntroName) {
       throw new ValidationError('Pause this campaign before editing its configuration.');
     }
 
@@ -364,6 +367,7 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
         organization_id: orgId,
         name: `${existing.name} (copy)`,
         description: existing.description,
+        intro_name: existing.intro_name ?? null,
         status: 'draft',
         timezone: existing.timezone,
         calling_window_start: existing.calling_window_start,

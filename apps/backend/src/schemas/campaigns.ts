@@ -16,6 +16,15 @@ const weekdaySchema = z.number().int().min(1).max(7);
 export const createCampaignSchema = z.object({
   name: z.string().trim().min(1).max(200),
   description: z.string().trim().max(2000).optional().nullable(),
+  /** How the AI introduces the company on calls ("Motor Vehicle Accident
+   * Helpline"); empty = the campaign name. */
+  intro_name: z
+    .string()
+    .trim()
+    .max(200)
+    .nullable()
+    .optional()
+    .transform((v) => (v ? v : null)),
   timezone: z.string().trim().min(1).max(100).default('America/New_York'),
   calling_window_start: timeSchema.default('09:00'),
   calling_window_end: timeSchema.default('18:00'),
