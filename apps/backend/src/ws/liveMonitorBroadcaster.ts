@@ -19,6 +19,7 @@
  */
 import type { CallTransitionEvent } from '../lib/callStateMachine.js';
 import { callEventBus } from '../lib/callStateMachine.js';
+import type { CallHungUpEvent } from '../lib/callHangupSignal.js';
 import { transcriptEventBus, type LiveTranscriptPartialEvent, type LiveTranscriptSegmentEvent } from '../lib/transcriptEventBus.js';
 import { mapTransitionToLiveMonitorEventType } from './liveMonitorEvents.js';
 import { buildLiveMonitorActiveCalls } from '../services/liveMonitorQuery.js';
@@ -100,12 +101,28 @@ export function registerLiveMonitorSubscriber(
     });
   };
 
+  // Hung up (status-update 'ended'): off Live Monitor immediately, not
+  // only once the end-of-call-report makes the call terminal.
+  const onHungUp = (event: CallHungUpEvent) => {
+    if (event.organizationId !== organizationId) return; // cross-org isolation - see header comment
+    onEvent({
+      type: 'CALL_ENDED',
+      call_id: event.callId,
+      organization_id: event.organizationId,
+      occurred_at: new Date().toISOString(),
+      call: null,
+      to_status: 'ended',
+    });
+  };
+
   callEventBus.on('call.transitioned', onTransition);
+  callEventBus.on('call.hungup', onHungUp);
   transcriptEventBus.on('segment', onSegment);
   transcriptEventBus.on('partial', onPartial);
 
   return () => {
     callEventBus.off('call.transitioned', onTransition);
+    callEventBus.off('call.hungup', onHungUp);
     transcriptEventBus.off('segment', onSegment);
     transcriptEventBus.off('partial', onPartial);
   };

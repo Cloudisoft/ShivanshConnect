@@ -74,7 +74,9 @@ describe('VapiProvider', () => {
     // default set - without 'transcript' here, Live Monitor's real-time
     // transcript feed would never receive anything from Vapi to ingest.
     expect(body.serverMessages).toEqual(['status-update', 'end-of-call-report', 'transcript', 'tool-calls']);
-    expect(body.silenceTimeoutSeconds).toBe(30);
+    expect(body.silenceTimeoutSeconds).toBe(20);
+    // The assistant can hang up itself once the conversation is over.
+    expect(body.endCallFunctionEnabled).toBe(true);
     // No voicemailDetection/backgroundDenoisingEnabled without config.
     expect(body.voicemailDetection).toBeUndefined();
     expect(body.backgroundDenoisingEnabled).toBeUndefined();
@@ -186,6 +188,8 @@ describe('VapiProvider', () => {
       artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false },
       backgroundSound: 'office',
       serverMessages: ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'],
+      endCallFunctionEnabled: true,
+      silenceTimeoutSeconds: 20,
     });
     // Callbacks and Do-Not-Call requests are available on every call.
     expect(tools.map((t: any) => t.function?.name ?? t.type)).toEqual(['schedule_callback', 'request_dnc']);
@@ -223,6 +227,8 @@ describe('VapiProvider', () => {
       artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false },
       backgroundSound: 'office',
       serverMessages: ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'],
+      endCallFunctionEnabled: true,
+      silenceTimeoutSeconds: 20,
       firstMessage: 'Hi, am I speaking with Priya?',
       model: {
         provider: 'anthropic',

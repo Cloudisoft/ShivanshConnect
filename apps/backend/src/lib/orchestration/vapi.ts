@@ -61,6 +61,8 @@ const VAPI_REQUEST_TIMEOUT_MS = 20_000;
 /** Webhook events every call must send: call status, the end-of-call
  * report, live transcripts (partial and final - Live Monitor) and tool calls. */
 const SERVER_MESSAGES = ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'];
+/** A dead line (nobody speaking) is hung up after this long. */
+const SILENCE_TIMEOUT_SECONDS = 20;
 import {
   type AssistantConfig,
   type AssistantResult,
@@ -463,7 +465,11 @@ export class VapiProvider implements CallOrchestrationProvider {
     // Real field: ends the call if the caller goes silent for this long
     // (Vapi default is 30s; set explicitly here so a campaign never
     // leaves a call hung open indefinitely on a dead line).
-    payload.silenceTimeoutSeconds = 30;
+    payload.silenceTimeoutSeconds = SILENCE_TIMEOUT_SECONDS;
+    // Lets the assistant hang up itself once the conversation is over
+    // (goodbye said, not interested, wrong number, callback booked) - it
+    // had no way to, so finished calls sat open until the silence timeout.
+    payload.endCallFunctionEnabled = true;
 
     // Per explicit request: every campaign plays Vapi's office ambience
     // behind the assistant (the campaign-level background-noise option was
@@ -676,6 +682,10 @@ export class VapiProvider implements CallOrchestrationProvider {
         // Per call too, so live transcripts flow even when the agent's saved
         // assistant predates this setting.
         serverMessages: SERVER_MESSAGES,
+        // Hang up as soon as the conversation is done - per call so it
+        // applies without republishing every agent.
+        endCallFunctionEnabled: true,
+        silenceTimeoutSeconds: SILENCE_TIMEOUT_SECONDS,
       };
       // Auto transfer: the assistant gets a real transferCall tool for this
       // call's server-resolved destination (the campaign's transfer number,

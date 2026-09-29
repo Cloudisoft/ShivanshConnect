@@ -15,6 +15,7 @@ import { extractPipecatToolCalls, extractVapiToolCalls, processToolCalls } from 
 import { ingestLiveTranscriptSegment } from '../services/liveTranscriptIngestion.js';
 import { vapiRoleToSpeaker } from '../lib/orchestration/vapi.js';
 import { emitLiveTranscriptPartial } from '../lib/transcriptEventBus.js';
+import { markCallHungUp } from '../lib/callHangupSignal.js';
 
 /** vapi call id -> our call's id/org, for the partial-transcript fast
  * path below: Vapi sends many partials per utterance, so each one must not
@@ -282,6 +283,9 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
             forwarding: 'transferring',
           };
           const nextStatus = map[vapiStatus];
+          // The line just dropped: off Live Monitor right away (the real
+          // status/disposition still follow from end-of-call-report).
+          if (vapiStatus === 'ended') markCallHungUp({ callId: call.id, organizationId: call.organization_id });
           if (nextStatus) {
             const extra: Record<string, unknown> = {};
             if (nextStatus === 'in_progress' && !call.answered_at) extra.answered_at = new Date().toISOString();

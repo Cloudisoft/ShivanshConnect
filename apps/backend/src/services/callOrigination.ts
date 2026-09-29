@@ -210,27 +210,17 @@ async function resolveCallPersonalization(
     custom_field: (lead?.custom_fields as Record<string, string> | undefined) ?? undefined,
   };
 
-  const hasName = Boolean(context.first_name && context.first_name.trim().length > 0);
+  const firstName = context.first_name?.trim() || null;
   const renderedSystemPrompt = renderTemplate(version.system_prompt ?? '', context);
 
-  if (hasName) {
-    // Named lead: use the campaign/agent author's own greeting template,
-    // rendered live against this lead's real data (e.g. "Hi, am I
-    // speaking with {{first_name}}?").
-    const firstMessage = renderTemplate(version.greeting_template ?? '', context);
-    return { firstMessage, systemPrompt: renderedSystemPrompt, context };
-  }
-
-  // Unnamed lead, or no lead at all (a manual test call): never render
-  // the named greeting template against an empty {{first_name}} (that
-  // would either leave the literal "{{first_name}}" in the caller's ear,
-  // per renderTemplate()'s own documented "never silently blank" rule,
-  // or produce an awkward "Hi, am I speaking with ?"). Build a real,
-  // generic fallback instead: "Hi, my name is {voice} calling from
-  // {campaign}. How are you doing today?" The campaign name is spoken
-  // with any duplicate marker stripped ("MVA (copy)", "MVA copy 2",
-  // "Copy of MVA" all read as "MVA") - calls were greeting people "from
-  // MBA Copy". Falls back to the organization's name, then no company.
+  // Every outbound call opens the same natural way (explicit request):
+  //   AI:    "Hi Alex, how are you today?"      (no name: "Hi, how are you doing today?")
+  //   Human: "I'm fine, how are you?"
+  //   AI:    "I'm fine, thanks - this is Christopher from MVA." -> script
+  // and if the person says there's no Alex: "May I know who I'm speaking
+  // with?". The company is the campaign's name spoken without duplicate
+  // markers ("MVA (copy)", "Copy of MVA" -> "MVA"), else the
+  // organization's name.
   let companyName: string | null = null;
   if (campaignId) {
     const { data } = await supabase.from('campaigns').select('name').eq('id', campaignId).eq('organization_id', orgId).maybeSingle();
@@ -241,10 +231,36 @@ async function resolveCallPersonalization(
     companyName = org?.name?.trim() || null;
   }
 
-  const firstMessage = companyName
-    ? `Hi, my name is ${voiceName} calling from ${companyName}. How are you doing today?`
-    : `Hi, my name is ${voiceName}. How are you doing today?`;
-  return { firstMessage, systemPrompt: `${renderedSystemPrompt}${ASK_CALLER_NAME_INSTRUCTION}`, context };
+  const firstMessage = firstName ? `Hi ${firstName}, how are you today?` : 'Hi, how are you doing today?';
+  const opening = buildOpeningInstruction(firstMessage, voiceName, companyName, firstName);
+  return {
+    firstMessage,
+    systemPrompt: `${renderedSystemPrompt}${opening}${firstName ? '' : ASK_CALLER_NAME_INSTRUCTION}`,
+    context,
+  };
+}
+
+/** How the call opens after the first line (already spoken by the
+ * assistant as firstMessage): wait for the reply, answer "how are you",
+ * introduce yourself, then the script. */
+export function buildOpeningInstruction(firstMessage: string, voiceName: string, companyName: string | null, firstName: string | null): string {
+  const intro = companyName ? `this is ${voiceName} from ${companyName}` : `this is ${voiceName}`;
+  const lines = [
+    '',
+    '',
+    'How this call opens - follow it exactly:',
+    `1. You have ALREADY said: "${firstMessage}" Do not say it again. Wait for their reply.`,
+    `2. When they answer (for example "I'm fine, how are you?"), reply briefly and warmly - "I'm fine, thanks!" (say how you are only if they asked) - and in the same breath introduce yourself: "${intro}." Then go straight into the call script.`,
+  ];
+  if (firstName) {
+    lines.push(
+      `3. If they say they are not ${firstName}, or that there is no ${firstName} there, say: "Oh, I'm sorry about that - may I know who I'm speaking with?" Then carry on with the person on the line, using their name.`,
+    );
+  }
+  lines.push(
+    'Never greet them or ask how they are a second time. If the call script starts with its own greeting or introduction, skip that part - you have already done it.',
+  );
+  return lines.join('\n');
 }
 
 /** A campaign's name as it should be spoken to a caller: duplicate
