@@ -30,10 +30,17 @@ export function LiveCallsTable({
   calls,
   onSelect,
   selectedCallId,
+  listenIds,
+  onToggleListen,
+  onToggleListenAll,
 }: {
   calls: LiveMonitorActiveCall[];
   onSelect: (callId: string) => void;
   selectedCallId: string | null;
+  /** Calls ticked for listening - see LiveMonitorPage. */
+  listenIds?: Set<string>;
+  onToggleListen?: (callId: string) => void;
+  onToggleListenAll?: (checked: boolean) => void;
 }): JSX.Element {
   const now = useNow(1000);
 
@@ -45,6 +52,18 @@ export function LiveCallsTable({
     <table className="w-full text-left text-sm">
       <thead>
         <tr className="border-b border-ink-200 text-xs uppercase tracking-wide text-ink-500">
+          {listenIds && (
+            <th className="w-8 py-2 pr-3">
+              <input
+                type="checkbox"
+                aria-label="Listen to all calls"
+                title="Listen to all calls"
+                className="h-4 w-4 rounded border-ink-300"
+                checked={calls.length > 0 && calls.every((c) => listenIds.has(c.id))}
+                onChange={(e) => onToggleListenAll?.(e.target.checked)}
+              />
+            </th>
+          )}
           <th className="py-2 pr-3">Call</th>
           <th className="py-2 pr-3">Campaign</th>
           <th className="py-2 pr-3">Lead</th>
@@ -63,6 +82,17 @@ export function LiveCallsTable({
             onClick={() => onSelect(call.id)}
             className={`cursor-pointer border-b border-ink-100 hover:bg-ink-50 ${selectedCallId === call.id ? 'bg-ink-50' : ''}`}
           >
+            {listenIds && (
+              <td className="py-2 pr-3" onClick={(e) => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  aria-label={`Listen to call ${call.id.slice(0, 8)}`}
+                  className="h-4 w-4 rounded border-ink-300"
+                  checked={listenIds.has(call.id)}
+                  onChange={() => onToggleListen?.(call.id)}
+                />
+              </td>
+            )}
             <td className="py-2 pr-3 font-mono text-xs text-ink-500">{call.id.slice(0, 8)}</td>
             <td className="py-2 pr-3">{call.campaign_name ?? '-'}</td>
             <td className="py-2 pr-3">{call.lead_name ?? '-'}</td>

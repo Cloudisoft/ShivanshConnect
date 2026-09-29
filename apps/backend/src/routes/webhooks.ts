@@ -150,6 +150,18 @@ async function markWebhookProcessed(supabase: ReturnType<typeof getSupabaseAdmin
     .eq('id', webhookEventId);
 }
 
+/** Database errors arrive as plain objects (not Error instances), so their
+ * real message used to be recorded as "Unknown webhook processing error." -
+ * which hid why every end-of-call-report was failing. */
+function webhookErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string') {
+    const e = err as { message: string; code?: string; details?: string | null };
+    return [e.code, e.message, e.details].filter(Boolean).join(' - ');
+  }
+  return 'Unknown webhook processing error.';
+}
+
 async function markWebhookFailed(supabase: ReturnType<typeof getSupabaseAdmin>, webhookEventId: string, errorMessage: string): Promise<void> {
   const { data: updated } = await supabase
     .from('webhook_events')
@@ -336,8 +348,11 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
           await applyCallStatus(supabase, call, nextStatus, {
             ended_at: new Date().toISOString(),
             ended_reason: endedReason ?? null,
-            duration_seconds: message.durationSeconds ?? null,
-            cost: message.cost ?? null,
+            // Vapi sends seconds with decimals (18.52); calls.duration_seconds
+            // is an integer column, and the database rejected the whole
+            // update - so the call never closed here.
+            duration_seconds: typeof message.durationSeconds === 'number' ? Math.round(message.durationSeconds) : null,
+            cost: typeof message.cost === 'number' ? message.cost : null,
           });
           break;
         }
@@ -359,7 +374,7 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       await markWebhookProcessed(supabase, webhookEventId, call.organization_id);
       return reply.status(200).send(toolResults.length > 0 ? { received: true, results: toolResults } : { received: true });
     } catch (err) {
-      await markWebhookFailed(supabase, webhookEventId, err instanceof Error ? err.message : 'Unknown webhook processing error.');
+      await markWebhookFailed(supabase, webhookEventId, webhookErrorMessage(err));
       // Still a 200: Vapi should not aggressively retry-storm a
       // processing bug on our side - the failure is captured in
       // webhook_failures for manual replay instead.
@@ -462,7 +477,7 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       await markWebhookProcessed(supabase, webhookEventId, call.organization_id);
       return reply.status(200).send({ received: true });
     } catch (err) {
-      await markWebhookFailed(supabase, webhookEventId, err instanceof Error ? err.message : 'Unknown webhook processing error.');
+      await markWebhookFailed(supabase, webhookEventId, webhookErrorMessage(err));
       return reply.status(200).send({ received: true, processing_error: true });
     }
   });
@@ -518,7 +533,7 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       await markWebhookProcessed(supabase, webhookEventId, message.organization_id);
       return reply.status(200).send({ received: true });
     } catch (err) {
-      await markWebhookFailed(supabase, webhookEventId, err instanceof Error ? err.message : 'Unknown webhook processing error.');
+      await markWebhookFailed(supabase, webhookEventId, webhookErrorMessage(err));
       return reply.status(200).send({ received: true, processing_error: true });
     }
   });
@@ -568,7 +583,7 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
       await markWebhookProcessed(supabase, webhookEventId, message.organization_id);
       return reply.status(200).send({ received: true });
     } catch (err) {
-      await markWebhookFailed(supabase, webhookEventId, err instanceof Error ? err.message : 'Unknown webhook processing error.');
+      await markWebhookFailed(supabase, webhookEventId, webhookErrorMessage(err));
       return reply.status(200).send({ received: true, processing_error: true });
     }
   });
