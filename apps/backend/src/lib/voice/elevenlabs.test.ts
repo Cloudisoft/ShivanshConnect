@@ -17,7 +17,12 @@ describe('ElevenLabsProvider', () => {
   it('listVoices calls GET /v1/voices with the xi-api-key header', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ voices: [{ voice_id: 'v1', name: 'Rachel', labels: { gender: 'female', accent: 'american' } }] }),
+      json: async () => ({
+        voices: [
+          { voice_id: 'v1', name: 'Rachel', category: 'premade', labels: { gender: 'female', accent: 'american' } },
+          { voice_id: 'v2', name: 'Wendy', category: 'cloned', labels: {} },
+        ],
+      }),
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -29,7 +34,8 @@ describe('ElevenLabsProvider', () => {
       expect.objectContaining({ headers: expect.objectContaining({ 'xi-api-key': 'key-123' }) }),
     );
     expect(voices).toEqual([
-      { providerVoiceId: 'v1', name: 'Rachel', gender: 'female', language: undefined, accent: 'american', description: undefined, requiresExternalHosting: false },
+      { providerVoiceId: 'v1', name: 'Rachel', gender: 'female', language: undefined, accent: 'american', description: undefined, requiresExternalHosting: false, isCloned: false },
+      { providerVoiceId: 'v2', name: 'Wendy', gender: 'unknown', language: undefined, accent: undefined, description: undefined, requiresExternalHosting: false, isCloned: true },
     ]);
   });
 

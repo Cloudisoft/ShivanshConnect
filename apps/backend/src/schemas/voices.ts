@@ -19,6 +19,7 @@ export const listVoicesQuerySchema = paginationSchema.extend({
   language: z.string().trim().max(20).optional(),
   gender: z.enum(['male', 'female', 'neutral', 'unknown']).optional(),
   status: z.enum(['active', 'inactive']).optional(),
+  is_cloned: z.enum(['true', 'false']).optional(),
 });
 export type ListVoicesQuery = z.infer<typeof listVoicesQuerySchema>;
 
@@ -56,5 +57,15 @@ export const importVoicesByIdSchema = z.object({
     )
     .min(1)
     .max(100),
+  /** Mark every voice in this import as a cloned voice. */
+  is_cloned: z.boolean().optional(),
 });
 export type ImportVoicesByIdInput = z.infer<typeof importVoicesByIdSchema>;
+
+export const updateVoiceSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    is_cloned: z.boolean().optional(),
+  })
+  .refine((v) => v.name !== undefined || v.is_cloned !== undefined, { message: 'Nothing to update.' });
+export type UpdateVoiceInput = z.infer<typeof updateVoiceSchema>;

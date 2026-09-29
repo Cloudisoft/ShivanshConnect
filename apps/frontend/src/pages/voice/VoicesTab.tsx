@@ -8,6 +8,7 @@ import {
   useImportVoicesById,
   usePreviewVoice,
   useSyncVoices,
+  useUpdateVoice,
   useVoices,
   type VoiceFilters,
 } from '../../hooks/useVoices';
@@ -118,10 +119,26 @@ function parseVoiceLines(text: string): { provider_voice_id: string; name: strin
     .filter((v) => v.provider_voice_id && v.name);
 }
 
+function ClonedToggleButton({ voice }: { voice: Voice }): JSX.Element {
+  const updateVoice = useUpdateVoice();
+  return (
+    <button
+      type="button"
+      className="whitespace-nowrap text-xs text-ink-500 hover:text-ink-900 hover:underline disabled:opacity-50"
+      disabled={updateVoice.isPending}
+      onClick={() => updateVoice.mutate({ id: voice.id, is_cloned: !voice.is_cloned })}
+      title={voice.is_cloned ? 'Remove the Cloned tag' : 'Tag this voice as a cloned voice'}
+    >
+      {voice.is_cloned ? 'Unmark cloned' : 'Mark cloned'}
+    </button>
+  );
+}
+
 function ImportByIdModal({ providerKeys, onClose }: { providerKeys: VoiceProviderKey[]; onClose: () => void }): JSX.Element {
   const importVoices = useImportVoicesById();
   const [providerKey, setProviderKey] = useState<VoiceProviderKey>(providerKeys[0]);
   const [text, setText] = useState('');
+  const [isCloned, setIsCloned] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ created: number; updated: number; failed: { provider_voice_id: string; name: string; error: string }[] } | null>(null);
 
@@ -131,7 +148,7 @@ function ImportByIdModal({ providerKeys, onClose }: { providerKeys: VoiceProvide
     setError(null);
     setResult(null);
     try {
-      const res = await importVoices.mutateAsync({ provider_key: providerKey, voices: parsed });
+      const res = await importVoices.mutateAsync({ provider_key: providerKey, voices: parsed, is_cloned: isCloned || undefined });
       setResult(res);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : 'Import failed.');
@@ -175,6 +192,11 @@ function ImportByIdModal({ providerKeys, onClose }: { providerKeys: VoiceProvide
           />
           <p className="mt-1 text-xs text-ink-500">{parsed.length} voice(s) parsed.</p>
         </div>
+
+        <label className="mt-3 flex items-center gap-2 text-sm text-ink-700">
+          <input type="checkbox" checked={isCloned} onChange={(e) => setIsCloned(e.target.checked)} />
+          These are cloned voices (tag them "Cloned")
+        </label>
 
         {error && <Alert>{error}</Alert>}
         {result && (
@@ -380,11 +402,11 @@ export function VoicesTab(): JSX.Element {
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-ink-800">{VOICE_PROVIDER_LABELS[voice.provider_key]}</span>
                       <ProviderBadge provider={voice.provider_key} />
+                      {voice.is_cloned && <Badge tone="warning">Cloned</Badge>}
                     </div>
                   </td>
                   <td className="px-4 py-3">
                     {voice.name}
-                    {voice.is_cloned && <Badge tone="neutral">cloned</Badge>}
                   </td>
                   <td className="px-4 py-3 capitalize text-ink-600">{voice.gender ?? 'unknown'}</td>
                   <td className="px-4 py-3 text-ink-600">{voice.language ?? '-'}</td>
@@ -402,6 +424,7 @@ export function VoicesTab(): JSX.Element {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <PlayPreviewButton voice={voice} />
+                      {canManage && <ClonedToggleButton voice={voice} />}
                       {canManage && <DeleteVoiceButton voice={voice} />}
                     </div>
                   </td>

@@ -11,6 +11,7 @@ import {
   importVoicesByIdSchema,
   listVoicesQuerySchema,
   previewVoiceSchema,
+  updateVoiceSchema,
   voiceProviderKeySchema,
 } from '../schemas/voices.js';
 import { writeAuditLog } from '../lib/audit.js';
@@ -74,6 +75,7 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     if (query.provider_key) builder = builder.eq('provider_key', query.provider_key);
     if (query.language) builder = builder.eq('language', query.language);
     if (query.gender) builder = builder.eq('gender', query.gender);
+    if (query.is_cloned) builder = builder.eq('is_cloned', query.is_cloned === 'true');
     // Hidden (inactive) voices are only listed when explicitly asked for -
     // see services/voiceCatalog.ts.
     builder = builder.eq('status', query.status ?? 'active');
@@ -100,43 +102,64 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     const adapter = await getAdapterForOrgProvider(supabase, orgId, providerKey);
     const remoteVoices = await adapter.listVoices();
 
-    const { data: existingRows } = await supabase
-      .from('voices')
-      .select('id, provider_voice_id')
-      .eq('organization_id', orgId)
-      .eq('provider_key', providerKey);
-    const existingByProviderVoiceId = new Map((existingRows ?? []).map((r) => [r.provider_voice_id as string, r.id as string]));
+    const existingByProviderVoiceId = new Map<string, Record<string, unknown>>();
+    for (let from = 0; ; from += 1000) {
+      const { data: page, error: pageError } = await supabase
+        .from('voices')
+        .select('id, provider_voice_id, provider_name, gender, language, accent, description, is_cloned')
+        .eq('organization_id', orgId)
+        .eq('provider_key', providerKey)
+        .order('id', { ascending: true })
+        .range(from, from + 999);
+      if (pageError) throw pageError;
+      for (const r of page ?? []) existingByProviderVoiceId.set(r.provider_voice_id as string, r);
+      if (!page || page.length < 1000) break;
+    }
 
     let created = 0;
     let updated = 0;
+    const inserts: Record<string, unknown>[] = [];
     for (const v of remoteVoices) {
       // Only English voices are offered from Cartesia (explicit request).
       if (providerKey === 'cartesia' && !(v.language ?? '').toLowerCase().startsWith('en')) continue;
-      const existingId = existingByProviderVoiceId.get(v.providerVoiceId);
-      const row = {
-        organization_id: orgId,
-        provider_key: providerKey,
-        provider_voice_id: v.providerVoiceId,
+      const existing = existingByProviderVoiceId.get(v.providerVoiceId);
+      const fields = {
         provider_name: v.name,
         gender: v.gender ?? 'unknown',
         language: v.language ?? null,
         accent: v.accent ?? null,
         description: v.description ?? null,
-        is_cloned: false,
-        clone_status: 'n/a' as const,
-        consent_confirmed: false,
-        created_by: req.user!.id,
       };
-      if (existingId) {
-        // The display name is managed by voiceCatalog normalization below.
-        const { error } = await supabase.from('voices').update(row).eq('id', existingId);
+      if (existing) {
+        // The display name is managed by voiceCatalog normalization below,
+        // and a voice marked cloned stays cloned (sync only ever adds the
+        // mark when the provider itself reports a cloned voice). Rows
+        // whose details didn't change aren't rewritten.
+        const patch: Record<string, unknown> = {};
+        for (const [k, val] of Object.entries(fields)) if ((existing[k] ?? null) !== val) patch[k] = val;
+        if (v.isCloned && !existing.is_cloned) Object.assign(patch, { is_cloned: true, clone_status: 'ready' });
+        if (Object.keys(patch).length === 0) continue;
+        const { error } = await supabase.from('voices').update(patch).eq('id', existing.id as string);
         if (error) throw error;
         updated += 1;
       } else {
-        const { error } = await supabase.from('voices').insert({ ...row, name: v.name });
-        if (error) throw error;
-        created += 1;
+        inserts.push({
+          ...fields,
+          organization_id: orgId,
+          provider_key: providerKey,
+          provider_voice_id: v.providerVoiceId,
+          name: v.name,
+          is_cloned: Boolean(v.isCloned),
+          clone_status: v.isCloned ? 'ready' : 'n/a',
+          consent_confirmed: false,
+          created_by: req.user!.id,
+        });
       }
+    }
+    for (let i = 0; i < inserts.length; i += 200) {
+      const { error } = await supabase.from('voices').insert(inserts.slice(i, i + 200));
+      if (error) throw error;
+      created += Math.min(200, inserts.length - i);
     }
     await normalizeVoiceCatalog(orgId);
 
@@ -199,18 +222,19 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
         language: info.language ?? null,
         accent: info.accent ?? null,
         description: info.description ?? null,
-        is_cloned: false,
-        clone_status: 'n/a' as const,
-        consent_confirmed: false,
-        created_by: req.user!.id,
+        // Asked to mark cloned, or the provider reports it as cloned.
+        ...(body.is_cloned || info.isCloned ? { is_cloned: true, clone_status: 'ready' as const } : {}),
       };
       const existingId = existingByProviderVoiceId.get(v.provider_voice_id);
       if (existingId) {
-        const { error } = await supabase.from('voices').update(row).eq('id', existingId);
+        // An existing cloned mark is kept (never reset to not-cloned here).
+        const { error } = await supabase.from('voices').update({ ...row, status: 'active' }).eq('id', existingId);
         if (error) throw error;
         updated += 1;
       } else {
-        const { error } = await supabase.from('voices').insert(row);
+        const { error } = await supabase
+          .from('voices')
+          .insert({ is_cloned: false, clone_status: 'n/a' as const, ...row, consent_confirmed: false, created_by: req.user!.id });
         if (error) throw error;
         created += 1;
       }
@@ -321,8 +345,9 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
       sampleContentType,
     );
 
-    const apiOrigin = `${req.protocol}://${req.headers.host}`;
-    const sampleAudioUrl = `${apiOrigin}${storageUrl}`;
+    // Supabase Storage returns an absolute signed URL; only a relative
+    // path (local-disk storage) needs this API's origin in front.
+    const sampleAudioUrl = /^https?:\/\//i.test(storageUrl) ? storageUrl : `${req.protocol}://${req.headers.host}${storageUrl}`;
 
     const { data: voice, error } = await supabase
       .from('voices')
@@ -421,6 +446,41 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return ok({ action: 'delete', affected: ids.length });
+  });
+
+  // PATCH /api/v1/voices/:id - rename, or mark/unmark as cloned (a voice
+  // cloned directly on the provider's site is otherwise indistinguishable).
+  app.patch('/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const body = updateVoiceSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    const voice = await getOwnedVoice(supabase, id, orgId);
+
+    const patch: Record<string, unknown> = {};
+    if (body.name !== undefined) patch.name = body.name;
+    if (body.is_cloned !== undefined && body.is_cloned !== voice.is_cloned) {
+      patch.is_cloned = body.is_cloned;
+      // A voice cloned through this app keeps its own clone_status.
+      if (voice.clone_status === 'n/a' || voice.clone_status === 'ready') patch.clone_status = body.is_cloned ? 'ready' : 'n/a';
+    }
+    if (Object.keys(patch).length === 0) return ok(withHostingFlag(voice));
+    const { data: updatedVoice, error } = await supabase.from('voices').update(patch).eq('id', id).select(VOICE_COLUMNS).single();
+    if (error) throw error;
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.VOICE_UPDATED,
+      entityType: 'voice',
+      entityId: id,
+      oldValue: { name: voice.name, is_cloned: voice.is_cloned },
+      newValue: patch,
+      ipAddress: req.ip,
+    });
+
+    return ok(withHostingFlag(updatedVoice));
   });
 
   // DELETE /api/v1/voices/:id

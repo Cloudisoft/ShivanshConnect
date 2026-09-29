@@ -1,20 +1,24 @@
 /**
  * Keeps each organization's voice catalog to what should actually be
  * offered for calls, per explicit request: "only keep English Cartesia
- * voices, remove everything else", and show "Ray", not "Ray -
- * Conversationalist".
+ * voices" (from Cartesia's ~1000-voice library), and show "Ray", not
+ * "Ray - Conversationalist".
  *
- * - Voices that are not English Cartesia voices are set inactive (hidden
- *   from every voice list/picker). Kept anyway: cloned voices (the
- *   organization's own) and any voice a campaign's current version or a
- *   published agent version still uses - hiding those would block
- *   starting/resuming that campaign (campaignPreflight requires an active
- *   voice). Once nothing uses them, the next run hides them too.
+ * - Cartesia voices that are not English are set inactive (hidden from
+ *   every voice list/picker). Voices from every other provider
+ *   (ElevenLabs etc. - the account's own voices, synced on request) are
+ *   kept. Kept anyway: cloned voices (the organization's own) and any
+ *   voice a campaign's current version or a published agent version still
+ *   uses - hiding those would block starting/resuming that campaign
+ *   (campaignPreflight requires an active voice).
  * - Cartesia's emotion variants of the same voice ("Carson - Angry
  *   Friendly Support" next to "Carson - Friendly Support") are hidden.
  * - Display name = the person's name only (spokenVoiceName of the
  *   provider label, kept in voices.provider_name); where two kept voices
- *   share a name, later ones get " 2", " 3" so they stay tellable apart.
+ *   of a provider share a name, later ones get " 2", " 3" so they stay
+ *   tellable apart. Cartesia names always follow the provider label; for
+ *   other providers only a name still equal to the raw provider label is
+ *   shortened - a name someone chose (import by ID) is left alone.
  *
  * Never reactivates anything and never deletes rows (calls and agent/
  * campaign versions keep pointing at the same voices). Idempotent: only
@@ -62,7 +66,7 @@ export function planVoiceCatalog(voices: VoiceRow[], inUse: Set<string>): { deac
   for (const v of voices) {
     if (v.status !== 'active') continue;
     const protectedVoice = inUse.has(v.id) || Boolean(v.is_cloned);
-    let hide = !protectedVoice && !isEnglishCartesia(v);
+    let hide = !protectedVoice && v.provider_key === 'cartesia' && !isEnglishCartesia(v);
     if (!hide && !protectedVoice && v.provider_key === 'cartesia') {
       const { person, rest } = splitLabel(labelOf(v));
       const [first, ...others] = rest.split(/\s+/);
@@ -74,10 +78,20 @@ export function planVoiceCatalog(voices: VoiceRow[], inUse: Set<string>): { deac
 
   const rename: Array<{ id: string; name: string }> = [];
   const seen = new Map<string, number>();
+  const keyOf = (v: VoiceRow, name: string) => `${v.organization_id}|${v.provider_key}|${name.toLowerCase()}`;
+  const renamable = (v: VoiceRow) => !v.is_cloned && (v.provider_key === 'cartesia' || (v.provider_name !== null && v.name === v.provider_name));
+  // Names that stay as they are still count, so a shortened name never
+  // duplicates one (e.g. imported "christopher" + synced "Christopher -
+  // Friendly" -> "Christopher 2").
+  for (const v of kept) {
+    if (renamable(v) || v.provider_key === 'cartesia') continue;
+    const key = keyOf(v, v.name.trim());
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+  }
   for (const v of [...kept].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))) {
-    if (v.provider_key !== 'cartesia' || v.is_cloned) continue;
+    if (!renamable(v)) continue;
     const base = spokenVoiceName(labelOf(v)) ?? labelOf(v);
-    const key = `${v.organization_id}|${base.toLowerCase()}`;
+    const key = keyOf(v, base);
     const n = (seen.get(key) ?? 0) + 1;
     seen.set(key, n);
     const name = n === 1 ? base : `${base} ${n}`;

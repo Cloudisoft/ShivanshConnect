@@ -16,6 +16,8 @@ interface ElevenLabsVoice {
   name: string;
   labels?: Record<string, string>;
   description?: string | null;
+  /** "premade" | "cloned" | "generated" | "professional" | ... */
+  category?: string | null;
 }
 
 function mapGender(labels: Record<string, string> | undefined): VoiceInfo['gender'] {
@@ -34,6 +36,7 @@ function toVoiceInfo(v: ElevenLabsVoice): VoiceInfo {
     accent: v.labels?.accent,
     description: v.description ?? undefined,
     requiresExternalHosting: false,
+    isCloned: v.category === 'cloned' || v.category === 'professional',
   };
 }
 

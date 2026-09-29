@@ -61,6 +61,7 @@ export const AUDIT_ACTIONS = {
   VOICE_SYNCED: 'voice.synced',
   VOICE_IMPORTED_BY_ID: 'voice.imported_by_id',
   VOICE_CLONE_REQUESTED: 'voice.clone_requested',
+  VOICE_UPDATED: 'voice.updated',
   VOICE_DELETED: 'voice.deleted',
   VOICE_BULK_ACTION: 'voice.bulk_action',
 
