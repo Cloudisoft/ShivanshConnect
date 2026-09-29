@@ -110,7 +110,7 @@ describe('VapiProvider', () => {
       backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 },
       beepMaxAwaitSeconds: 20,
     });
-    expect(body.voicemailMessage).toBeUndefined(); // never leaves a message - detect and hang up
+    expect(body.voicemailMessage).toBe('Please call us back at 555-0100.');
     // Office ambience on every campaign; the old per-campaign noise level no longer maps to anything.
     expect(body.backgroundSound).toBe('office');
     expect(body.backgroundDenoisingEnabled).toBeUndefined();
@@ -193,7 +193,7 @@ describe('VapiProvider', () => {
     expect(tools.map((t: any) => t.function?.name ?? t.type)).toEqual(['schedule_callback', 'request_dnc']);
   });
 
-  it('createCall() always detects voicemail on campaign calls and hangs up (no message)', async () => {
+  it('createCall() always detects voicemail on campaign calls and sends the voicemail script', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_vm', status: 'queued' }) });
     vi.stubGlobal('fetch', fetchMock);
     const provider = new VapiProvider('sk-test');
@@ -212,11 +212,11 @@ describe('VapiProvider', () => {
     await provider.createCall({ ...base, voicemailDetection: null });
     const [on, toggledOff, noCampaign] = fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).assistantOverrides);
     const plan = { provider: 'vapi', backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 }, beepMaxAwaitSeconds: 20 };
-    // Every campaign call detects voicemail and hangs up - never leaves a message.
+    // Every campaign call detects voicemail; the campaign's script is left after the beep.
     expect(on.voicemailDetection).toEqual(plan);
     expect(toggledOff.voicemailDetection).toEqual(plan);
-    expect(on.voicemailMessage).toBeUndefined();
-    expect(toggledOff.voicemailMessage).toBeUndefined();
+    expect(on.voicemailMessage).toBe('Call us back.');
+    expect(toggledOff.voicemailMessage).toBe('Call us back.');
     expect(noCampaign.voicemailDetection).toBeUndefined();
   });
 

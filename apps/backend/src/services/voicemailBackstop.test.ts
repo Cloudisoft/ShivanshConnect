@@ -71,13 +71,37 @@ describe('voicemailBackstop', () => {
     expect(Object.keys(fake.tables.calls.find((c: any) => c.id === call.id)!)).not.toContain('detected_by');
   });
 
-  it('never leaves a message, even when the campaign has one configured, and applies even with detection turned off', async () => {
-    fake.tables.campaigns.push({ id: 'camp-1', voicemail_detection_enabled: false, leave_voicemail: true, voicemail_message: 'Please call us back.' });
-    const call = seedCall({ campaign_id: 'camp-1' });
+  it("leaves the campaign's voicemail script, then hangs up", async () => {
+    vi.useFakeTimers();
+    try {
+      fake.tables.campaigns.push({ id: 'camp-1', voicemail_detection_enabled: true, leave_voicemail: true, voicemail_message: 'Please call us back.' });
+      const call = seedCall({ campaign_id: 'camp-1' });
+      provider.getCall.mockResolvedValue({ status: 'in-progress', raw: {} });
+      provider.say.mockResolvedValue(undefined);
+      const done = handleVoicemailBackstop(fake.supabase as any, call.id);
+      await vi.runAllTimersAsync();
+      expect(await done).toBe('ended');
+      expect(provider.say).toHaveBeenCalledWith('vapi-1', 'Please call us back.');
+      expect(provider.say.mock.invocationCallOrder[0]).toBeLessThan(provider.endCall.mock.invocationCallOrder[0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('just hangs up when the campaign has no voicemail script', async () => {
+    fake.tables.campaigns.push({ id: 'camp-2', voicemail_detection_enabled: true, leave_voicemail: false, voicemail_message: 'unused' });
+    const call = seedCall({ campaign_id: 'camp-2' });
     provider.getCall.mockResolvedValue({ status: 'in-progress', raw: {} });
     expect(await handleVoicemailBackstop(fake.supabase as any, call.id)).toBe('ended');
     expect(provider.say).not.toHaveBeenCalled();
     expect(provider.endCall).toHaveBeenCalledWith('vapi-1');
+  });
+
+  it("doesn't leave the script twice when Vapi is already leaving it", async () => {
+    fake.tables.campaigns.push({ id: 'camp-3', voicemail_detection_enabled: true, leave_voicemail: true, voicemail_message: 'Hi, this is Ashton from Motor Vehicle Accident Helpline.' });
+    const call = seedCall({ campaign_id: 'camp-3' });
+    expect(await handleVoicemailBackstop(fake.supabase as any, call.id, ['Hi, this is Ashton from Motor Vehicle Accident Helpline, please call back.'])).toBe('skipped');
+    expect(provider.endCall).not.toHaveBeenCalled();
   });
 
   it('does nothing once Vapi has already ended the call', async () => {
