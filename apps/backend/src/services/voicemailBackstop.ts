@@ -16,6 +16,7 @@
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { resolveProviderForCall } from '../lib/orchestration/resolveProvider.js';
 import { transitionCallState } from '../lib/callStateMachine.js';
+import { renderTemplate, spokenVoiceName } from '../lib/promptVariables.js';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
@@ -85,6 +86,23 @@ export function alreadyLeavingMessage(aiText: string[], message: string | null):
   return start.length > 0 && aiText.some((t) => normalise(t).includes(start));
 }
 
+/** Fills {{agent_name}}, {{first_name}}... in the voicemail script for this
+ * call, the same way the call's own opening is personalized. */
+async function renderVoicemailScript(supabase: Supabase, call: Record<string, any>, script: string): Promise<string> {
+  const [{ data: voice }, { data: lead }] = await Promise.all([
+    call.voice_id ? supabase.from('voices').select('name').eq('id', call.voice_id).maybeSingle() : Promise.resolve({ data: null }),
+    call.lead_id ? supabase.from('leads').select('first_name, last_name, phone_normalized, email, custom_fields').eq('id', call.lead_id).maybeSingle() : Promise.resolve({ data: null }),
+  ]);
+  return renderTemplate(script, {
+    first_name: lead?.first_name || undefined,
+    last_name: lead?.last_name || undefined,
+    phone: lead?.phone_normalized || undefined,
+    email: lead?.email || undefined,
+    agent_name: spokenVoiceName(voice?.name ?? null) ?? 'your assistant',
+    custom_field: (lead?.custom_fields as Record<string, string> | undefined) ?? undefined,
+  });
+}
+
 /** Vapi's answer when the call has already ended by the time we act. */
 function isCallAlreadyEnded(err: unknown): boolean {
   return err instanceof Error && /not active/i.test(err.message);
@@ -100,7 +118,7 @@ export async function handleVoicemailBackstop(supabase: Supabase, callId: string
   if (call.campaign_id) {
     const { data: campaign } = await supabase.from('campaigns').select('leave_voicemail, voicemail_message').eq('id', call.campaign_id).maybeSingle();
     if (campaign?.leave_voicemail && typeof campaign.voicemail_message === 'string' && campaign.voicemail_message.trim()) {
-      message = campaign.voicemail_message.trim();
+      message = await renderVoicemailScript(supabase, call, campaign.voicemail_message.trim());
     }
   }
   if (alreadyLeavingMessage(aiText, message)) return 'skipped';
