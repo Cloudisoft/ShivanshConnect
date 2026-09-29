@@ -1,6 +1,6 @@
 import { Alert, Badge, Card } from '../components/ui';
 import { useAuth } from '../hooks/useAuth';
-import { useInboundRoutes, useUpdateInboundRoute } from '../hooks/useQueues';
+import { useInboundRoutes, useUpdateInboundRoute, type InboundRoute } from '../hooks/useQueues';
 import { ApiClientError } from '../lib/apiClient';
 
 /**
@@ -15,8 +15,11 @@ export function InboundRoutesPage(): JSX.Element {
   const canEdit = hasPermission('numbers.manage');
   const routesQuery = useInboundRoutes();
   const updateRoute = useUpdateInboundRoute();
-  const routes = routesQuery.data?.routes ?? [];
-  const campaigns = routesQuery.data?.campaigns ?? [];
+  // Tolerates both response shapes (a bare array from an older backend
+  // during a deploy) so a version mismatch can never crash the page.
+  const raw = routesQuery.data as unknown;
+  const routes = Array.isArray(raw) ? (raw as InboundRoute[]) : Array.isArray(routesQuery.data?.routes) ? routesQuery.data!.routes : [];
+  const campaigns = Array.isArray(routesQuery.data?.campaigns) ? routesQuery.data!.campaigns : [];
 
   return (
     <div>

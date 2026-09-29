@@ -27,7 +27,10 @@ function Stat({ label, value }: { label: string; value: number | string }): JSX.
  */
 export function QueuesPage(): JSX.Element {
   const summaryQuery = useQueueSummary();
-  const summary = summaryQuery.data;
+  // Only render a summary of the expected shape (guards a stale saved copy
+  // or a backend mid-deploy from crashing the page).
+  const data = summaryQuery.data;
+  const summary = data && Array.isArray(data.outbound) && data.callbacks && Array.isArray(data.callbacks.upcoming) && data.inbound ? data : undefined;
 
   return (
     <div>
