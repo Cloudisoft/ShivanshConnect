@@ -173,6 +173,11 @@ export interface LeadFilter {
   status?: LeadStatus;
   is_dnc?: boolean;
   search?: string;
+  state?: string;
+  called?: 'never' | 'called';
+  has_callback?: boolean;
+  created_from?: string;
+  created_to?: string;
 }
 
 export type LeadBulkSelection = { ids: string[] } | { filter: LeadFilter };

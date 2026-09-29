@@ -51,6 +51,14 @@ export const listLeadsQuerySchema = z.object({
     .optional()
     .transform((v) => (v === undefined ? undefined : v === 'true')),
   search: z.string().trim().max(200).optional(),
+  state: z.string().trim().max(50).optional(),
+  called: z.enum(['never', 'called']).optional(),
+  has_callback: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === 'true')),
+  created_from: z.string().datetime().optional(),
+  created_to: z.string().datetime().optional(),
   sort_by: z.enum(['created_at', 'last_called_at', 'attempts', 'last_name', 'next_callback_at']).default('created_at'),
   sort_dir: z.enum(['asc', 'desc']).default('desc'),
 });
@@ -72,6 +80,11 @@ const leadFilterSchema = z.object({
   status: leadStatusSchema.optional(),
   is_dnc: z.boolean().optional(),
   search: z.string().trim().max(200).optional(),
+  state: z.string().trim().max(50).optional(),
+  called: z.enum(['never', 'called']).optional(),
+  has_callback: z.boolean().optional(),
+  created_from: z.string().datetime().optional(),
+  created_to: z.string().datetime().optional(),
 });
 
 export const leadBulkActionSchema = z

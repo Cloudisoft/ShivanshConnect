@@ -48,6 +48,8 @@ function extractFilters(query: Record<string, unknown>): CdrFilters {
     phone: query.phone as string | undefined,
     lead_id: query.lead_id as string | undefined,
     status: query.status as string | undefined,
+    direction: query.direction as 'inbound' | 'outbound' | undefined,
+    min_talk_seconds: query.min_talk_seconds as number | undefined,
   };
 }
 

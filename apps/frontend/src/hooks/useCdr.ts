@@ -11,6 +11,8 @@ export interface CdrFilters {
   phone?: string;
   lead_id?: string;
   status?: string;
+  direction?: string;
+  min_talk_seconds?: string;
 }
 
 function buildParams(page: number, pageSize: number, filters: CdrFilters): URLSearchParams {

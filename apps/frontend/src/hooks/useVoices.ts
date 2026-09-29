@@ -10,18 +10,18 @@ export interface VoiceFilters {
   language?: string;
   gender?: string;
   status?: string;
+  is_cloned?: 'true' | 'false';
+  search?: string;
 }
 
-export function useVoices(filters: VoiceFilters = {}) {
-  const params = new URLSearchParams({ page: '1', page_size: '100' });
-  if (filters.provider_key) params.set('provider_key', filters.provider_key);
-  if (filters.language) params.set('language', filters.language);
-  if (filters.gender) params.set('gender', filters.gender);
-  if (filters.status) params.set('status', filters.status);
+export function useVoices(filters: VoiceFilters = {}, page = 1) {
+  const params = new URLSearchParams({ page: String(page), page_size: '100' });
+  for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
 
   return useQuery({
-    queryKey: ['voices', filters],
+    queryKey: ['voices', filters, page],
     queryFn: () => api.getPage<Voice[]>(`/voices?${params.toString()}`),
+    placeholderData: (prev) => prev,
   });
 }
 

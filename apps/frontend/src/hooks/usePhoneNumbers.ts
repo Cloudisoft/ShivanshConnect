@@ -6,17 +6,19 @@ export interface PhoneNumberFilters {
   provider_key?: TelephonyProviderKey;
   status?: string;
   assigned_agent_id?: string;
+  unassigned?: 'true';
+  search?: string;
+  inbound?: 'answering' | 'not_set_up';
 }
 
 export function usePhoneNumbers(filters: PhoneNumberFilters = {}) {
   const params = new URLSearchParams({ page: '1', page_size: '100' });
-  if (filters.provider_key) params.set('provider_key', filters.provider_key);
-  if (filters.status) params.set('status', filters.status);
-  if (filters.assigned_agent_id) params.set('assigned_agent_id', filters.assigned_agent_id);
+  for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
 
   return useQuery({
     queryKey: ['phone-numbers', filters],
     queryFn: () => api.getPage<PhoneNumber[]>(`/phone-numbers?${params.toString()}`),
+    placeholderData: (prev) => prev,
   });
 }
 

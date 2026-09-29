@@ -7,13 +7,14 @@ import { useAuth } from '../hooks/useAuth';
 import { useLeads, useDeleteLead, useLeadBulkAction, type LeadsQuery } from '../hooks/useLeads';
 import { useLeadList, useLeadLists } from '../hooks/useLeadLists';
 import { useQueueLeadsExport } from '../hooks/useExports';
-import { Alert, Badge, Button, Card, Input } from '../components/ui';
+import { Alert, Badge, Button, Card } from '../components/ui';
+import { FilterBar, FilterDate, FilterSearch, FilterSelect, dayToIso, hasActiveFilters } from '../components/FilterBar';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { AddLeadModal } from '../components/leads/AddLeadModal';
 import { PasteNumbersModal } from '../components/leads/PasteNumbersModal';
 import { ImportModal } from '../components/leads/ImportModal';
 import { ExportTrigger } from '../components/exports/ExportTrigger';
-import { LEAD_STATUSES, type LeadListRow, type LeadStatus } from '@shivanshconnect/shared';
+import { LEAD_STATUSES, type LeadFilter, type LeadListRow, type LeadStatus } from '@shivanshconnect/shared';
 import { ApiClientError } from '../lib/apiClient';
 
 const PAGE_SIZE = 50;
@@ -29,14 +30,23 @@ const ROW_HEIGHT = 44;
  * ~50-row page is a modest win, but it's cheap and keeps this page
  * consistent if a larger page size is ever chosen later.
  */
+interface LeadsView {
+  search?: string;
+  status?: LeadStatus;
+  dnc?: 'dnc' | 'not_dnc';
+  state?: string;
+  called?: 'never' | 'called';
+  has_callback?: boolean;
+  from_day?: string;
+  to_day?: string;
+}
+
 export function LeadsPage(): JSX.Element {
   const { hasPermission } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const leadListId = searchParams.get('lead_list_id') ?? undefined;
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState<LeadStatus | ''>('');
-  const [dncOnly, setDncOnly] = useState(false);
+  const [view, setView] = useState<LeadsView>({});
   const [sortBy, setSortBy] = useState<LeadsQuery['sort_by']>('created_at');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
@@ -47,13 +57,27 @@ export function LeadsPage(): JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectAllMatching, setSelectAllMatching] = useState(false);
 
+  // ONE filter object for the list, "select all matching" bulk actions
+  // and the export - so they always cover exactly the same leads.
+  const leadFilter = useMemo<LeadFilter>(
+    () => ({
+      lead_list_id: leadListId,
+      status: view.status,
+      is_dnc: view.dnc === undefined ? undefined : view.dnc === 'dnc',
+      search: view.search,
+      state: view.state,
+      called: view.called,
+      has_callback: view.has_callback || undefined,
+      created_from: dayToIso(view.from_day),
+      created_to: dayToIso(view.to_day, true),
+    }),
+    [leadListId, view],
+  );
   const query: LeadsQuery = {
+    ...leadFilter,
+    lead_list_id: leadListId,
     page,
     page_size: PAGE_SIZE,
-    lead_list_id: leadListId,
-    status: status || undefined,
-    is_dnc: dncOnly || undefined,
-    search: search || undefined,
     sort_by: sortBy,
     sort_dir: sortDir,
   };
@@ -80,6 +104,14 @@ export function LeadsPage(): JSX.Element {
   function resetSelection() {
     setSelected(new Set());
     setSelectAllMatching(false);
+  }
+
+  // A filter change resets the page and any selection (a selection made
+  // under other filters must never ride along into a bulk action).
+  function updateView(change: (v: LeadsView) => LeadsView) {
+    setView(change);
+    setPage(1);
+    resetSelection();
   }
 
   function toggleRow(id: string) {
@@ -117,10 +149,9 @@ export function LeadsPage(): JSX.Element {
   async function runBulkAction(action: 'delete' | 'move_to_list' | 'assign_list', targetListId?: string) {
     setActionError(null);
     try {
-      const filter = { lead_list_id: leadListId ?? undefined, status: status || undefined, is_dnc: dncOnly || undefined, search: search || undefined };
       await bulkAction.mutateAsync(
         selectAllMatching
-          ? { action, filter, lead_list_id: targetListId }
+          ? { action, filter: leadFilter, lead_list_id: targetListId }
           : { action, lead_ids: Array.from(selected), lead_list_id: targetListId },
       );
       resetSelection();
@@ -173,12 +204,7 @@ export function LeadsPage(): JSX.Element {
               onExport={(type) =>
                 queueExport.mutateAsync({
                   type,
-                  filters: {
-                    lead_list_id: leadListId ?? undefined,
-                    status: status || undefined,
-                    is_dnc: dncOnly || undefined,
-                    search: search || undefined,
-                  },
+                  filters: { ...leadFilter },
                 })
               }
             />
@@ -190,63 +216,56 @@ export function LeadsPage(): JSX.Element {
       {showPaste && <PasteNumbersModal leadListId={leadListId} onClose={() => setShowPaste(false)} />}
       {showImport && <ImportModal leadListId={leadListId} onClose={() => setShowImport(false)} />}
 
-      <Card className="mt-6 !p-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[220px] flex-1">
-            <Input
-              placeholder="Search name, phone or email..."
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-            />
-          </div>
-          <select
-            className="rounded-md border border-ink-300 bg-white px-3 py-2 text-sm"
-            value={leadListId ?? ''}
-            onChange={(e) => {
-              const next = new URLSearchParams(searchParams);
-              if (e.target.value) next.set('lead_list_id', e.target.value);
-              else next.delete('lead_list_id');
-              setSearchParams(next);
-              setPage(1);
-            }}
-          >
-            <option value="">All lists</option>
-            {(listsQuery.data?.data ?? []).map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-              </option>
-            ))}
-          </select>
-          <select
-            className="rounded-md border border-ink-300 bg-white px-3 py-2 text-sm"
-            value={status}
-            onChange={(e) => {
-              setStatus(e.target.value as LeadStatus | '');
-              setPage(1);
-            }}
-          >
-            <option value="">All statuses</option>
-            {LEAD_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <label className="flex items-center gap-2 text-sm text-ink-700">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-ink-300"
-              checked={dncOnly}
-              onChange={(e) => {
-                setDncOnly(e.target.checked);
-                setPage(1);
-              }}
-            />
-            DNC only
-          </label>
+      <FilterBar
+        active={hasActiveFilters(view) || Boolean(leadListId)}
+        onClear={() => {
+          updateView(() => ({}));
+          if (leadListId) {
+            const next = new URLSearchParams(searchParams);
+            next.delete('lead_list_id');
+            setSearchParams(next);
+          }
+        }}
+      >
+        <FilterSearch label="Search" placeholder="Name, phone or email..." value={view.search} onChange={(v) => updateView((f) => ({ ...f, search: v }))} />
+        <FilterSelect
+          label="List"
+          allLabel="All lists"
+          value={leadListId}
+          onChange={(v) => {
+            const next = new URLSearchParams(searchParams);
+            if (v) next.set('lead_list_id', v);
+            else next.delete('lead_list_id');
+            setSearchParams(next);
+            setPage(1);
+            resetSelection();
+          }}
+          options={(listsQuery.data?.data ?? []).map((l) => ({ value: l.id, label: l.name }))}
+        />
+        <FilterSelect label="Status" allLabel="All statuses" value={view.status} onChange={(v) => updateView((f) => ({ ...f, status: v as LeadStatus | undefined }))} options={LEAD_STATUSES.map((st) => ({ value: st, label: st.replace(/_/g, ' ') }))} />
+        <FilterSelect
+          label="Called"
+          allLabel="Any"
+          value={view.called}
+          onChange={(v) => updateView((f) => ({ ...f, called: v as LeadsView['called'] }))}
+          options={[{ value: 'never', label: 'Never called' }, { value: 'called', label: 'Called at least once' }]}
+        />
+        <FilterSelect
+          label="DNC"
+          allLabel="Any"
+          value={view.dnc}
+          onChange={(v) => updateView((f) => ({ ...f, dnc: v as LeadsView['dnc'] }))}
+          options={[{ value: 'dnc', label: 'DNC only' }, { value: 'not_dnc', label: 'Not DNC' }]}
+        />
+        <FilterSearch label="State" placeholder="e.g. PA" value={view.state} onChange={(v) => updateView((f) => ({ ...f, state: v }))} className="w-24" />
+        <FilterDate label="Added from" value={view.from_day} onChange={(v) => updateView((f) => ({ ...f, from_day: v }))} />
+        <FilterDate label="Added to" value={view.to_day} onChange={(v) => updateView((f) => ({ ...f, to_day: v }))} />
+        <label className="mb-2 flex items-center gap-2 text-sm text-ink-700">
+          <input type="checkbox" className="h-4 w-4 rounded border-ink-300" checked={Boolean(view.has_callback)} onChange={(e) => updateView((f) => ({ ...f, has_callback: e.target.checked || undefined }))} />
+          Has callback
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-medium text-ink-600">
+          Sort
           <select
             className="rounded-md border border-ink-300 bg-white px-3 py-2 text-sm"
             value={`${sortBy}:${sortDir}`}
@@ -260,10 +279,11 @@ export function LeadsPage(): JSX.Element {
             <option value="created_at:asc">Oldest first</option>
             <option value="last_name:asc">Last name A-Z</option>
             <option value="attempts:desc">Most attempts</option>
+            <option value="last_called_at:desc">Recently called</option>
             <option value="next_callback_at:asc">Next callback</option>
           </select>
-        </div>
-      </Card>
+        </label>
+      </FilterBar>
 
       {selectionCount > 0 && (
         <Card className="mt-4 flex flex-wrap items-center justify-between gap-3 !p-3">

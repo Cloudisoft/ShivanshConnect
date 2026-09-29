@@ -11,6 +11,9 @@ export const listCdrQuerySchema = paginationSchema.extend({
   phone: z.string().trim().min(1).max(64).optional(),
   lead_id: uuidSchema.optional(),
   status: z.string().trim().min(1).max(50).optional(),
+  direction: z.enum(['inbound', 'outbound']).optional(),
+  /** Only calls whose talk time is at least this many seconds. */
+  min_talk_seconds: z.coerce.number().int().min(1).max(86_400).optional(),
 });
 export type ListCdrQuery = z.infer<typeof listCdrQuerySchema>;
 
