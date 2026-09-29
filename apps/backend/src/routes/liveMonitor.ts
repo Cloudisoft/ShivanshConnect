@@ -97,6 +97,23 @@ export async function liveMonitorActionRoutes(app: FastifyInstance): Promise<voi
   app.addHook('preHandler', authenticate);
 
   // POST /api/v1/calls/:id/listen
+  // GET /api/v1/calls/:id/transcript - everything said so far on a call,
+  // so opening a call in Live Monitor mid-conversation (or after a page
+  // reload) shows the whole transcript, not only what arrives next.
+  app.get('/:id/transcript', { preHandler: requirePermission('live_monitor.view') }, async (req) => {
+    const { id } = req.params as { id: string };
+    const supabase = getSupabaseAdmin();
+    const call = await loadOwnCall(supabase, id, req.user!.organizationId);
+    const { data, error } = await supabase
+      .from('call_transcript_segments')
+      .select('id, call_id, segment_index, speaker, start_ms, end_ms, text')
+      .eq('call_id', call.id)
+      .order('segment_index', { ascending: true })
+      .limit(2000);
+    if (error) throw error;
+    return ok(data ?? []);
+  });
+
   app.post('/:id/listen', { preHandler: requirePermission('live_monitor.listen') }, async (req) => {
     const { id } = req.params as { id: string };
     const supabase = getSupabaseAdmin();

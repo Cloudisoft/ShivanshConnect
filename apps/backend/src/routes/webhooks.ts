@@ -14,6 +14,24 @@ import { transitionCallState } from '../lib/callStateMachine.js';
 import { extractPipecatToolCalls, extractVapiToolCalls, processToolCalls } from '../services/toolCallHandler.js';
 import { ingestLiveTranscriptSegment } from '../services/liveTranscriptIngestion.js';
 import { vapiRoleToSpeaker } from '../lib/orchestration/vapi.js';
+import { emitLiveTranscriptPartial } from '../lib/transcriptEventBus.js';
+
+/** vapi call id -> our call's id/org, for the partial-transcript fast
+ * path below: Vapi sends many partials per utterance, so each one must not
+ * cost a DB lookup (and they were each written to webhook_events too). */
+const partialCallCache = new Map<string, { id: string; organizationId: string; at: number }>();
+const PARTIAL_CACHE_TTL_MS = 10 * 60_000;
+
+async function callForPartial(supabase: ReturnType<typeof getSupabaseAdmin>, vapiCallId: string): Promise<{ id: string; organizationId: string } | null> {
+  const hit = partialCallCache.get(vapiCallId);
+  if (hit && Date.now() - hit.at < PARTIAL_CACHE_TTL_MS) return hit;
+  const { data } = await supabase.from('calls').select('id, organization_id').eq('vapi_call_id', vapiCallId).maybeSingle();
+  if (!data) return null;
+  if (partialCallCache.size > 2000) partialCallCache.clear();
+  const entry = { id: data.id as string, organizationId: data.organization_id as string, at: Date.now() };
+  partialCallCache.set(vapiCallId, entry);
+  return entry;
+}
 
 /**
  * Phase 6 webhook receivers (spec sections 31/58).
@@ -174,6 +192,18 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
     // else (the caller is waiting on this response).
     if (eventType === 'assistant-request') {
       return reply.status(200).send(await handleAssistantRequest(supabase, message));
+    }
+
+    // Words still being spoken: pushed straight to Live Monitor so the
+    // transcript moves as people talk. Never stored (the 'final' version of
+    // the same utterance is), so it skips the webhook_events record.
+    if (eventType === 'transcript' && message.transcriptType !== 'final') {
+      const speaker = vapiRoleToSpeaker(message.role);
+      if (providerCallId && speaker && typeof message.transcript === 'string' && message.transcript.trim()) {
+        const live = await callForPartial(supabase, providerCallId);
+        if (live) emitLiveTranscriptPartial({ callId: live.id, organizationId: live.organizationId, speaker, text: message.transcript.trim() });
+      }
+      return reply.status(200).send({ received: true });
     }
 
     let organizationId: string | null = null;

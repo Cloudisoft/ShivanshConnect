@@ -58,6 +58,9 @@
 import { CONVERSATION_GUIDANCE, personalityLines } from '../callGuidance.js';
 
 const VAPI_REQUEST_TIMEOUT_MS = 20_000;
+/** Webhook events every call must send: call status, the end-of-call
+ * report, live transcripts (partial and final - Live Monitor) and tool calls. */
+const SERVER_MESSAGES = ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'];
 import {
   type AssistantConfig,
   type AssistantResult,
@@ -418,7 +421,7 @@ export class VapiProvider implements CallOrchestrationProvider {
       // messages at all, silently starving Live Monitor's real-time
       // transcript feed (services/liveTranscriptIngestion.ts) even though
       // everything downstream of the webhook is correctly wired.
-      serverMessages: ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'],
+      serverMessages: SERVER_MESSAGES,
     };
 
     if (config.voice) {
@@ -670,6 +673,9 @@ export class VapiProvider implements CallOrchestrationProvider {
         stopSpeakingPlan: STOP_SPEAKING_PLAN,
         artifactPlan: ARTIFACT_PLAN,
         backgroundSound: BACKGROUND_SOUND,
+        // Per call too, so live transcripts flow even when the agent's saved
+        // assistant predates this setting.
+        serverMessages: SERVER_MESSAGES,
       };
       // Auto transfer: the assistant gets a real transferCall tool for this
       // call's server-resolved destination (the campaign's transfer number,

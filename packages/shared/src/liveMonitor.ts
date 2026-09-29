@@ -13,6 +13,9 @@ export const LIVE_MONITOR_EVENT_TYPES = [
   'CALL_RINGING',
   'CALL_CONNECTED',
   'TRANSCRIPT_UPDATED',
+  // Words as they're being spoken (not yet a finished sentence). Never
+  // stored - replaced by TRANSCRIPT_UPDATED when the sentence completes.
+  'TRANSCRIPT_PARTIAL',
   'CALL_TRANSFER_STARTED',
   'CALL_TRANSFER_CONNECTED',
   'CALL_TRANSFER_FAILED',
@@ -80,6 +83,8 @@ export interface LiveMonitorWsEvent {
   occurred_at: string;
   call: LiveMonitorActiveCall | null;
   segment?: LiveMonitorTranscriptSegment;
+  /** Only on TRANSCRIPT_PARTIAL: the in-progress words of one speaker. */
+  partial?: { speaker: 'ai' | 'caller'; text: string };
   from_status?: string;
   to_status?: string;
 }
