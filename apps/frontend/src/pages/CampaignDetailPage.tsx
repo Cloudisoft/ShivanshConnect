@@ -34,6 +34,7 @@ import { Alert, Badge, Button, Card, Input, Label } from '../components/ui';
 import { PreLaunchModal } from '../components/campaigns/PreLaunchModal';
 import { api, describeApiError } from '../lib/apiClient';
 import { handlePlaceholderPaste } from '../lib/placeholderPaste';
+import { VoiceSelect } from '../components/VoiceSelect';
 
 const TABS = ['Overview', 'Configuration', 'Leads', 'Settings'] as const;
 type Tab = (typeof TABS)[number];
@@ -493,14 +494,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
         </div>
         <div>
           <Label>Voice</Label>
-          <select className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} disabled={!canEdit}>
-            <option value="">Use agent's own voice</option>
-            {(voicesQuery.data?.data ?? []).map((voice: any) => (
-              <option key={voice.id} value={voice.id}>
-                {voice.name}
-              </option>
-            ))}
-          </select>
+          <VoiceSelect value={voiceId} onChange={setVoiceId} emptyLabel="Use agent's own voice" disabled={!canEdit} />
           {(voicesQuery.data?.data ?? []).length === 0 && (
             <p className="mt-1 text-xs text-ink-500">
               No voices registered yet -{' '}

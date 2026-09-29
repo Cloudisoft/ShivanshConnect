@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { applyPhoneNumberFilters, chunk, collectMatchingIds } from '../services/listFilters.js';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok, paginationMeta } from '../lib/response.js';
@@ -90,19 +91,7 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
     const supabase = getSupabaseAdmin();
     const orgId = req.user!.organizationId;
 
-    let builder = supabase.from('phone_numbers').select(PHONE_NUMBER_COLUMNS, { count: 'exact' }).eq('organization_id', orgId);
-    if (query.provider_key) builder = builder.eq('provider_key', query.provider_key);
-    if (query.status) builder = builder.eq('status', query.status);
-    if (query.assigned_agent_id) builder = builder.eq('assigned_agent_id', query.assigned_agent_id);
-    if (query.unassigned) builder = builder.is('assigned_agent_id', null);
-    if (query.search) {
-      const raw = query.search.replace(/[%,()*\\]/g, ' ').trim();
-      const digits = raw.replace(/\D/g, '');
-      const term = digits.length >= 3 ? digits : raw;
-      if (term) builder = builder.or(`phone_number.ilike.%${term}%,friendly_name.ilike.%${raw}%`);
-    }
-    if (query.inbound === 'answering') builder = builder.not('vapi_phone_number_id', 'is', null);
-    if (query.inbound === 'not_set_up') builder = builder.is('vapi_phone_number_id', null);
+    let builder = applyPhoneNumberFilters(supabase.from('phone_numbers').select(PHONE_NUMBER_COLUMNS, { count: 'exact' }).eq('organization_id', orgId), query);
 
     const from = (query.page - 1) * query.page_size;
     const to = from + query.page_size - 1;
@@ -401,19 +390,26 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
     const supabase = getSupabaseAdmin();
     const orgId = req.user!.organizationId;
 
-    const { data: owned, error: ownedError } = await supabase
-      .from('phone_numbers')
-      .select('id')
-      .eq('organization_id', orgId)
-      .in('id', body.phone_number_ids);
-    if (ownedError) throw ownedError;
-    const ids = (owned ?? []).map((n) => n.id as string);
+    let ids: string[];
+    if (body.filter) {
+      ids = await collectMatchingIds(supabase, 'phone_numbers', orgId, (b) => applyPhoneNumberFilters(b, body.filter!));
+    } else {
+      const { data: owned, error: ownedError } = await supabase
+        .from('phone_numbers')
+        .select('id')
+        .eq('organization_id', orgId)
+        .in('id', body.phone_number_ids ?? []);
+      if (ownedError) throw ownedError;
+      ids = (owned ?? []).map((n) => n.id as string);
+    }
 
     let affected = 0;
     if (ids.length > 0) {
       if (body.action === 'delete') {
-        const { error } = await supabase.from('phone_numbers').delete().in('id', ids);
-        if (error) throw error;
+        for (const part of chunk(ids)) {
+          const { error } = await supabase.from('phone_numbers').delete().in('id', part);
+          if (error) throw error;
+        }
         affected = ids.length;
       } else {
         if (body.assigned_agent_id) {
@@ -421,8 +417,10 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
           if (error) throw error;
           if (!agent || agent.organization_id !== orgId) throw new ValidationError('That agent does not belong to your organization.');
         }
-        const { error } = await supabase.from('phone_numbers').update({ assigned_agent_id: body.assigned_agent_id ?? null }).in('id', ids);
-        if (error) throw error;
+        for (const part of chunk(ids)) {
+          const { error } = await supabase.from('phone_numbers').update({ assigned_agent_id: body.assigned_agent_id ?? null }).in('id', part);
+          if (error) throw error;
+        }
         affected = ids.length;
       }
     }
@@ -433,7 +431,7 @@ export async function phoneNumberRoutes(app: FastifyInstance): Promise<void> {
       action: AUDIT_ACTIONS.PHONE_NUMBER_BULK_ACTION,
       entityType: 'phone_number',
       entityId: null,
-      newValue: { action: body.action, affected, assigned_agent_id: body.assigned_agent_id ?? null },
+      newValue: { action: body.action, affected, assigned_agent_id: body.assigned_agent_id ?? null, by_filter: Boolean(body.filter) },
       ipAddress: req.ip,
     });
 

@@ -50,6 +50,7 @@ function extractFilters(query: Record<string, unknown>): CdrFilters {
     status: query.status as string | undefined,
     direction: query.direction as 'inbound' | 'outbound' | undefined,
     min_talk_seconds: query.min_talk_seconds as number | undefined,
+    call_ids: Array.isArray(query.call_ids) ? (query.call_ids as string[]) : undefined,
   };
 }
 

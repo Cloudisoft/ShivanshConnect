@@ -82,11 +82,37 @@ export function useDeleteVoice() {
   });
 }
 
+/** Explicit ids, or every voice matching the list filters. */
+export type VoiceSelection = { voice_ids: string[] } | { filter: Record<string, unknown> };
+
+/** The list filters in the JSON shape the bulk endpoints take. */
+export function voiceFilterBody(filters: VoiceFilters): Record<string, unknown> {
+  const { is_cloned, ...rest } = filters;
+  return { ...rest, ...(is_cloned ? { is_cloned: is_cloned === 'true' } : {}) };
+}
+
 export function useBulkDeleteVoices() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (voiceIds: string[]) => api.post<{ action: 'delete'; affected: number }>('/voices/bulk-delete', { voice_ids: voiceIds }),
+    mutationFn: (selection: VoiceSelection) => api.post<{ action: 'delete'; affected: number }>('/voices/bulk-delete', selection),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['voices'] }),
+  });
+}
+
+export function useBulkUpdateVoices() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: VoiceSelection & { is_cloned: boolean }) => api.post<{ affected: number }>('/voices/bulk-update', input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['voices'] }),
+  });
+}
+
+export function useVoice(id: string | undefined) {
+  return useQuery({
+    queryKey: ['voices', 'one', id],
+    queryFn: () => api.get<Voice>(`/voices/${id}`),
+    enabled: Boolean(id),
+    staleTime: 60_000,
   });
 }
 

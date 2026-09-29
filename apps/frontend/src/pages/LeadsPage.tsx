@@ -124,12 +124,14 @@ export function LeadsPage(): JSX.Element {
     });
   }
 
+  const pageAllSelected = selectAllMatching || (leads.length > 0 && leads.every((l) => selected.has(l.id)));
+
   function togglePage() {
+    const unselect = pageAllSelected;
     setSelectAllMatching(false);
     setSelected((prev) => {
-      const allOnPage = leads.every((l) => prev.has(l.id));
       const next = new Set(prev);
-      if (allOnPage) leads.forEach((l) => next.delete(l.id));
+      if (unselect) leads.forEach((l) => next.delete(l.id));
       else leads.forEach((l) => next.add(l.id));
       return next;
     });
@@ -361,11 +363,23 @@ export function LeadsPage(): JSX.Element {
 
       <div className="mt-4 flex items-center gap-3 text-xs text-ink-500">
         <button type="button" className="underline" onClick={togglePage}>
-          Select page
+          {pageAllSelected ? 'Unselect page' : 'Select page'}
         </button>
         <button type="button" className="underline" onClick={invertPage}>
           Invert page selection
         </button>
+        {pagination && pagination.total > 0 && !selectAllMatching && (
+          <button
+            type="button"
+            className="font-medium text-gold-700 underline"
+            onClick={() => {
+              setSelected(new Set(leads.map((l) => l.id)));
+              setSelectAllMatching(true);
+            }}
+          >
+            Select all {pagination.total} matching leads
+          </button>
+        )}
       </div>
 
       <ErrorBoundary label="Leads table" key={`${page}-${leads.length}-${leadsQuery.dataUpdatedAt}`}>
@@ -374,6 +388,9 @@ export function LeadsPage(): JSX.Element {
           loading={leadsQuery.isLoading}
           hasError={leadsQuery.isError}
           selected={selected}
+          allMatching={selectAllMatching}
+          pageAllSelected={pageAllSelected}
+          onTogglePage={togglePage}
           onToggleRow={toggleRow}
           onDelete={hasPermission('leads.delete') ? (id) => deleteLead.mutate(id) : undefined}
         />
@@ -417,9 +434,15 @@ function LeadsTable({
   loading,
   hasError,
   selected,
+  allMatching,
+  pageAllSelected,
+  onTogglePage,
   onToggleRow,
   onDelete,
 }: {
+  allMatching: boolean;
+  pageAllSelected: boolean;
+  onTogglePage: () => void;
   leads: LeadListRow[];
   loading: boolean;
   hasError?: boolean;
@@ -442,7 +465,15 @@ function LeadsTable({
         <table className="w-full min-w-[1200px] text-left text-sm">
           <thead className="sticky top-0 z-10 border-b border-ink-200 bg-ink-50 text-xs font-semibold uppercase tracking-wide text-ink-500">
             <tr>
-              <th className="w-8 px-3 py-3" />
+              <th className="w-8 px-3 py-3">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-ink-300"
+                  checked={pageAllSelected}
+                  onChange={onTogglePage}
+                  aria-label="Select all leads on this page"
+                />
+              </th>
               {COLUMNS.map((c) => (
                 <th key={c.key} className="px-3 py-3 whitespace-nowrap">
                   {c.label}
@@ -487,7 +518,7 @@ function LeadsTable({
             {!loading && !hasError && leads.length > 0 && virtualItems.length === 0 && (
               <>
                 {leads.map((lead) => (
-                  <LeadRow key={lead.id} lead={lead} selected={selected.has(lead.id)} onToggleRow={onToggleRow} onDelete={onDelete} />
+                  <LeadRow key={lead.id} lead={lead} selected={allMatching || selected.has(lead.id)} onToggleRow={onToggleRow} onDelete={onDelete} />
                 ))}
               </>
             )}
@@ -499,7 +530,7 @@ function LeadsTable({
             {!loading &&
               virtualItems.map((virtualRow) => {
                 const lead = leads[virtualRow.index];
-                return <LeadRow key={lead.id} lead={lead} selected={selected.has(lead.id)} onToggleRow={onToggleRow} onDelete={onDelete} />;
+                return <LeadRow key={lead.id} lead={lead} selected={allMatching || selected.has(lead.id)} onToggleRow={onToggleRow} onDelete={onDelete} />;
               })}
             {!loading && virtualItems.length > 0 && (
               <tr aria-hidden style={{ height: Math.max(0, rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end) }}>

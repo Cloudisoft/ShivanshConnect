@@ -81,7 +81,7 @@ export function useTranscriptSearch(query: string) {
 export function useCreateCdrExport() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { type: ExportType; filters: CdrFilters }) => api.post<ExportRecord>('/cdr/export', input),
+    mutationFn: (input: { type: ExportType; filters: CdrFilters & { call_ids?: string[] } }) => api.post<ExportRecord>('/cdr/export', input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['exports'] }),
   });
 }

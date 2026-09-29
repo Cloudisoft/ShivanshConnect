@@ -104,4 +104,50 @@ describe('List filters (CDR, Leads, Voices, DIDs)', () => {
     expect(numbersOf(await get(token, '/api/v1/phone-numbers?inbound=not_set_up'))).toEqual(['+16105559876']);
     expect(numbersOf(await get(token, '/api/v1/phone-numbers?unassigned=false'))).toHaveLength(2);
   });
+
+  it('bulk-acts on ALL voices matching the filters (not just the ticked ones), and fetches one voice by id', async () => {
+    const { token, orgId } = await signup('Voice Bulk Org', `voice-bulk-${Date.now()}@test.com`);
+    const other = await signup('Voice Bulk Other', `voice-bulk-other-${Date.now()}@test.com`);
+    const now = new Date().toISOString();
+    const base = { provider_key: 'cartesia', status: 'active', is_cloned: false, clone_status: 'n/a', gender: 'male', created_at: now, updated_at: now };
+    const mine = Array.from({ length: 3 }, (_, i) => ({ ...base, id: randomUUID(), organization_id: orgId, name: `Ray ${i}`, provider_voice_id: `ray-${i}` }));
+    const keep = { ...base, id: randomUUID(), organization_id: orgId, name: 'Tina', provider_voice_id: 'tina', gender: 'female' };
+    const foreign = { ...base, id: randomUUID(), organization_id: other.orgId, name: 'Ray Foreign', provider_voice_id: 'ray-f' };
+    fake.tables.voices.push(...mine, keep, foreign);
+    const post = (url: string, payload: unknown) => app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${token}` }, payload });
+
+    const marked = await post('/api/v1/voices/bulk-update', { filter: { search: 'ray' }, is_cloned: true });
+    expect(marked.json().data.affected).toBe(3);
+    const cloned = (await get(token, '/api/v1/voices?is_cloned=true')).json().data.map((v: any) => v.name).sort();
+    expect(cloned).toEqual(['Ray 0', 'Ray 1', 'Ray 2']);
+    expect(fake.tables.voices.find((v: any) => v.id === foreign.id)?.is_cloned).toBe(false);
+
+    const one = await get(token, `/api/v1/voices/${keep.id}`);
+    expect(one.json().data.name).toBe('Tina');
+    expect((await get(other.token, `/api/v1/voices/${keep.id}`)).statusCode).toBe(404);
+
+    const deleted = await post('/api/v1/voices/bulk-delete', { filter: { gender: 'male' } });
+    expect(deleted.json().data.affected).toBe(3);
+    expect((await get(token, '/api/v1/voices')).json().data.map((v: any) => v.name)).toEqual(['Tina']);
+    expect(fake.tables.voices.some((v: any) => v.id === foreign.id)).toBe(true);
+  });
+
+  it('bulk-deletes every DID matching the filters, and only those', async () => {
+    const { token, orgId } = await signup('Did Bulk Org', `did-bulk-${Date.now()}@test.com`);
+    const now = new Date().toISOString();
+    const base = { organization_id: orgId, provider_key: 'twilio', status: 'active', capabilities: {}, created_at: now, vapi_phone_number_id: null, assigned_agent_id: null };
+    const a = { ...base, id: randomUUID(), phone_number: '+14845550101', friendly_name: 'PA 1' };
+    const b = { ...base, id: randomUUID(), phone_number: '+14845550102', friendly_name: 'PA 2' };
+    const c = { ...base, id: randomUUID(), phone_number: '+12125550103', friendly_name: 'NY', provider_key: 'telnyx' };
+    fake.tables.phone_numbers.push(a, b, c);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/phone-numbers/bulk-actions',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { filter: { provider_key: 'twilio' }, action: 'delete' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.affected).toBe(2);
+    expect((await get(token, '/api/v1/phone-numbers')).json().data.map((n: any) => n.phone_number)).toEqual(['+12125550103']);
+  });
 });

@@ -24,6 +24,7 @@ import { usePreviewVoice, useVoices } from '../../hooks/useVoices';
 import { Alert, Button, Card, Input, Label } from '../../components/ui';
 import { ApiClientError, describeApiError } from '../../lib/apiClient';
 import { handlePlaceholderPaste } from '../../lib/placeholderPaste';
+import { VoiceSelect } from '../../components/VoiceSelect';
 
 const CUSTOM_MODEL_SENTINEL = '__custom__';
 
@@ -207,19 +208,9 @@ function VoicePicker({ value, onChange }: { value: string; onChange: (voiceId: s
         </p>
       )}
       <div className="flex items-center gap-2">
-        <select
-          id="voice_id"
-          className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 focus:border-ink-500 focus:outline-none focus:ring-1 focus:ring-ink-500"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">No voice selected</option>
-          {voices.map((v) => (
-            <option key={v.id} value={v.id}>
-              {v.name} ({v.provider_key}{v.requires_external_hosting ? ', self-hosted' : ''})
-            </option>
-          ))}
-        </select>
+        <div className="flex-1">
+          <VoiceSelect id="voice_id" value={value} onChange={onChange} emptyLabel="No voice selected" />
+        </div>
         <Button type="button" variant="secondary" disabled={!value || preview.isPending} onClick={handlePreview}>
           <Play className="h-3.5 w-3.5" /> {preview.isPending ? '...' : 'Preview'}
         </Button>

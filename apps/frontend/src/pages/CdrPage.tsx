@@ -7,6 +7,8 @@ import { useExportHistory } from '../hooks/useExports';
 import { useCampaigns } from '../hooks/useCampaigns';
 import { useAgents } from '../hooks/useAgents';
 import { useDispositions } from '../hooks/useDispositions';
+import { useRowSelection } from '../hooks/useRowSelection';
+import { RowCheckbox, SelectPageCheckbox, SelectionBar } from '../components/SelectionBar';
 import { FilterBar, FilterDate, FilterSearch, FilterSelect, dayToIso, hasActiveFilters } from '../components/FilterBar';
 import { Badge, Button, Card } from '../components/ui';
 import { CallDetailDrawer } from '../components/cdr/CallDetailDrawer';
@@ -122,6 +124,8 @@ export function CdrPage(): JSX.Element {
   const cdrQuery = useCdrList(page, 25, filters);
   const rows = cdrQuery.data?.data ?? [];
   const pagination = cdrQuery.data?.pagination;
+  const selection = useRowSelection(rows.map((r) => r.call_id), filters);
+  const exportSelected = useCreateCdrExport();
 
   return (
     <div>
@@ -161,6 +165,24 @@ export function CdrPage(): JSX.Element {
         <FilterDate label="To" value={view.to_day} onChange={(v) => updateView((f) => ({ ...f, to_day: v }))} />
       </FilterBar>
 
+      {canExport && (
+        <SelectionBar selection={selection} pageCount={rows.length} total={pagination?.total ?? rows.length} noun="calls">
+          <span className="text-xs text-ink-500">Export selected:</span>
+          <ExportTrigger
+            csvType="cdr_csv"
+            xlsxType="cdr_xlsx"
+            pending={exportSelected.isPending}
+            onExport={(type) =>
+              exportSelected.mutateAsync({
+                type,
+                // All matching = the current filters; otherwise exactly the ticked calls.
+                filters: selection.allMatching ? filters : { ...filters, call_ids: Array.from(selection.selected) },
+              })
+            }
+          />
+        </SelectionBar>
+      )}
+
       {cdrQuery.isLoading && <p className="mt-8 text-sm text-ink-500">Loading calls...</p>}
 
       {!cdrQuery.isLoading && rows.length === 0 && (
@@ -178,6 +200,11 @@ export function CdrPage(): JSX.Element {
           <table className="min-w-full divide-y divide-ink-200 text-sm">
             <thead className="bg-ink-50 text-left text-xs font-medium uppercase tracking-wide text-ink-500">
               <tr>
+                {canExport && (
+                  <th className="px-4 py-2">
+                    <SelectPageCheckbox selection={selection} label="Select all calls on this page" />
+                  </th>
+                )}
                 <th className="px-4 py-2">Started</th>
                 <th className="px-4 py-2">Ended</th>
                 <th className="px-4 py-2">Lead</th>
@@ -193,6 +220,11 @@ export function CdrPage(): JSX.Element {
             <tbody className="divide-y divide-ink-100">
               {rows.map((row) => (
                 <tr key={row.call_id} className="cursor-pointer hover:bg-ink-50" onClick={() => setSelectedCallId(row.call_id)}>
+                  {canExport && (
+                    <td className="px-4 py-2" onClick={(e) => e.stopPropagation()}>
+                      <RowCheckbox selection={selection} id={row.call_id} label={`Select call to ${row.destination_number}`} />
+                    </td>
+                  )}
                   <td className="px-4 py-2 text-ink-900">{row.started_at ? new Date(row.started_at).toLocaleString() : '-'}</td>
                   <td className="px-4 py-2 text-ink-900">{row.ended_at ? new Date(row.ended_at).toLocaleString() : '-'}</td>
                   <td className="px-4 py-2 text-ink-700">{row.lead_name ?? '-'}</td>

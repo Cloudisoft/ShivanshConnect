@@ -25,6 +25,8 @@ export interface CdrFilters {
   status?: string;
   direction?: 'inbound' | 'outbound';
   min_talk_seconds?: number;
+  /** Export only: exactly these calls (still scoped by every other filter). */
+  call_ids?: string[];
 }
 
 const CALL_COLUMNS =
@@ -63,6 +65,7 @@ function applyCommonFilters(builder: any, orgId: string, filters: CdrFilters): a
   if (filters.phone) b = b.ilike('customer_number', `%${filters.phone}%`);
   if (filters.direction) b = b.eq('direction', filters.direction);
   if (filters.min_talk_seconds) b = b.gte('talk_duration_seconds', filters.min_talk_seconds);
+  if (filters.call_ids?.length) b = b.in('id', filters.call_ids);
   return b;
 }
 
@@ -102,6 +105,23 @@ export async function iterateAllCdrRows(
   onPage: (rows: CdrRow[]) => Promise<void>,
   batchSize = 500,
 ): Promise<number> {
+  if (filters.call_ids?.length) {
+    // Ticked rows: fetched in chunks small enough for an `in` filter URL.
+    let total = 0;
+    const { call_ids: callIds, ...rest } = filters;
+    for (let i = 0; i < callIds.length; i += 200) {
+      const part = callIds.slice(i, i + 200);
+      // eslint-disable-next-line no-await-in-loop
+      const { calls } = await fetchCdrCallsPage(supabase, orgId, { ...rest, call_ids: part }, 1, part.length);
+      if (calls.length === 0) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const rows = await buildCdrRows(supabase, orgId, calls);
+      // eslint-disable-next-line no-await-in-loop
+      await onPage(rows);
+      total += rows.length;
+    }
+    return total;
+  }
   let page = 1;
   let total = 0;
   for (;;) {

@@ -7,6 +7,7 @@ import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { uuidSchema } from '../schemas/common.js';
 import {
   bulkDeleteVoicesSchema,
+  bulkUpdateVoicesSchema,
   cloneVoiceMetadataSchema,
   importVoicesByIdSchema,
   listVoicesQuerySchema,
@@ -23,6 +24,7 @@ import { getStorageAdapter } from '../lib/storage/index.js';
 import { StorageNotConfiguredError } from '../lib/storage/types.js';
 import { toAdapterCredentials } from './voiceProviders.js';
 import { randomUUID } from 'node:crypto';
+import { applyVoiceFilters, chunk, collectMatchingIds, type VoiceFilter } from '../services/listFilters.js';
 
 const VOICE_COLUMNS =
   'id, organization_id, provider_key, provider_voice_id, name, gender, language, accent, description, status, is_cloned, source_sample_storage_path, clone_status, clone_error, consent_confirmed, created_by, created_at, updated_at';
@@ -38,6 +40,19 @@ async function getOwnedVoice(supabase: ReturnType<typeof getSupabaseAdmin>, id: 
   if (error) throw error;
   if (!voice || voice.organization_id !== orgId) throw new NotFoundError('Voice not found.');
   return voice;
+}
+
+/** The caller's own voice ids for an explicit id list or a list filter
+ * ("select all matching"). */
+async function resolveVoiceSelection(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  orgId: string,
+  body: { voice_ids?: string[]; filter?: VoiceFilter },
+): Promise<string[]> {
+  if (body.filter) return collectMatchingIds(supabase, 'voices', orgId, (b) => applyVoiceFilters(b, body.filter!));
+  const { data, error } = await supabase.from('voices').select('id').eq('organization_id', orgId).in('id', body.voice_ids ?? []);
+  if (error) throw error;
+  return (data ?? []).map((v) => v.id as string);
 }
 
 async function getAdapterForOrgProvider(
@@ -71,18 +86,12 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     const supabase = getSupabaseAdmin();
     const orgId = req.user!.organizationId;
 
-    let builder = supabase.from('voices').select(VOICE_COLUMNS, { count: 'exact' }).eq('organization_id', orgId);
-    if (query.provider_key) builder = builder.eq('provider_key', query.provider_key);
-    if (query.language) builder = builder.eq('language', query.language);
-    if (query.gender) builder = builder.eq('gender', query.gender);
-    if (query.is_cloned) builder = builder.eq('is_cloned', query.is_cloned === 'true');
-    if (query.search) {
-      const term = query.search.replace(/[%,()*\\]/g, ' ').trim();
-      if (term) builder = builder.or(`name.ilike.%${term}%,provider_voice_id.ilike.%${term}%`);
-    }
     // Hidden (inactive) voices are only listed when explicitly asked for -
     // see services/voiceCatalog.ts.
-    builder = builder.eq('status', query.status ?? 'active');
+    let builder = applyVoiceFilters(supabase.from('voices').select(VOICE_COLUMNS, { count: 'exact' }).eq('organization_id', orgId), {
+      ...query,
+      is_cloned: query.is_cloned === undefined ? undefined : query.is_cloned === 'true',
+    });
 
     const from = (query.page - 1) * query.page_size;
     const to = from + query.page_size - 1;
@@ -92,6 +101,15 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     if (error) throw error;
 
     return ok((data ?? []).map(withHostingFlag), { pagination: paginationMeta(query.page, query.page_size, count ?? 0) });
+  });
+
+  // GET /api/v1/voices/:id - one voice (any status), e.g. to show the
+  // currently chosen voice in a picker that only searches active ones.
+  app.get('/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    uuidSchema.parse(id);
+    const voice = await getOwnedVoice(getSupabaseAdmin(), id, req.user!.organizationId);
+    return ok(withHostingFlag(voice));
   });
 
   // POST /api/v1/voices/sync/:providerKey - calls listVoices() on the
@@ -425,17 +443,10 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     const body = bulkDeleteVoicesSchema.parse(req.body);
     const supabase = getSupabaseAdmin();
     const orgId = req.user!.organizationId;
+    const ids = await resolveVoiceSelection(supabase, orgId, body);
 
-    const { data: owned, error: ownedError } = await supabase
-      .from('voices')
-      .select('id')
-      .eq('organization_id', orgId)
-      .in('id', body.voice_ids);
-    if (ownedError) throw ownedError;
-    const ids = (owned ?? []).map((v) => v.id as string);
-
-    if (ids.length > 0) {
-      const { error } = await supabase.from('voices').delete().in('id', ids);
+    for (const part of chunk(ids)) {
+      const { error } = await supabase.from('voices').delete().in('id', part);
       if (error) throw error;
     }
 
@@ -445,7 +456,7 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
       action: AUDIT_ACTIONS.VOICE_BULK_ACTION,
       entityType: 'voice',
       entityId: null,
-      newValue: { action: 'delete', affected: ids.length },
+      newValue: { action: 'delete', affected: ids.length, by_filter: Boolean(body.filter) },
       ipAddress: req.ip,
     });
 
@@ -485,6 +496,39 @@ export async function voiceRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return ok(withHostingFlag(updatedVoice));
+  });
+
+  // POST /api/v1/voices/bulk-update - tag/untag selected (or all
+  // matching) voices as cloned.
+  app.post('/bulk-update', async (req) => {
+    const body = bulkUpdateVoicesSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+    const ids = await resolveVoiceSelection(supabase, orgId, body);
+
+    // A voice cloned through this app keeps its own clone_status.
+    for (const part of chunk(ids)) {
+      const { error } = await supabase.from('voices').update({ is_cloned: body.is_cloned }).in('id', part);
+      if (error) throw error;
+      const { error: statusError } = await supabase
+        .from('voices')
+        .update({ clone_status: body.is_cloned ? 'ready' : 'n/a' })
+        .in('id', part)
+        .in('clone_status', ['n/a', 'ready']);
+      if (statusError) throw statusError;
+    }
+
+    await writeAuditLog({
+      organizationId: orgId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.VOICE_BULK_ACTION,
+      entityType: 'voice',
+      entityId: null,
+      newValue: { action: body.is_cloned ? 'mark_cloned' : 'unmark_cloned', affected: ids.length, by_filter: Boolean(body.filter) },
+      ipAddress: req.ip,
+    });
+
+    return ok({ action: 'update', affected: ids.length });
   });
 
   // DELETE /api/v1/voices/:id

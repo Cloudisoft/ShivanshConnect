@@ -11,12 +11,18 @@ export interface PhoneNumberFilters {
   inbound?: 'answering' | 'not_set_up';
 }
 
-export function usePhoneNumbers(filters: PhoneNumberFilters = {}) {
-  const params = new URLSearchParams({ page: '1', page_size: '100' });
+/** The list filters in the JSON shape the bulk endpoint takes. */
+export function phoneNumberFilterBody(filters: PhoneNumberFilters): Record<string, unknown> {
+  const { unassigned, ...rest } = filters;
+  return { ...rest, ...(unassigned ? { unassigned: true } : {}) };
+}
+
+export function usePhoneNumbers(filters: PhoneNumberFilters = {}, page = 1) {
+  const params = new URLSearchParams({ page: String(page), page_size: '100' });
   for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
 
   return useQuery({
-    queryKey: ['phone-numbers', filters],
+    queryKey: ['phone-numbers', filters, page],
     queryFn: () => api.getPage<PhoneNumber[]>(`/phone-numbers?${params.toString()}`),
     placeholderData: (prev) => prev,
   });
@@ -99,7 +105,9 @@ export function useUpdatePhoneNumber() {
 export function usePhoneNumberBulkAction() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { phone_number_ids: string[]; action: 'delete' | 'assign_agent'; assigned_agent_id?: string | null }) =>
+    mutationFn: (
+      input: ({ phone_number_ids: string[] } | { filter: Record<string, unknown> }) & { action: 'delete' | 'assign_agent'; assigned_agent_id?: string | null },
+    ) =>
       api.post<{ action: string; affected: number }>('/phone-numbers/bulk-actions', input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['phone-numbers'] }),
   });

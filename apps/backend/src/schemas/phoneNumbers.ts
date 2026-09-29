@@ -96,9 +96,22 @@ export const updatePhoneNumberSchema = z
 export type UpdatePhoneNumberInput = z.infer<typeof updatePhoneNumberSchema>;
 
 // POST /phone-numbers/bulk-actions
-export const phoneNumberBulkActionSchema = z.object({
-  phone_number_ids: z.array(uuidSchema).min(1).max(500),
-  action: z.enum(['delete', 'assign_agent']),
-  assigned_agent_id: uuidSchema.nullable().optional(),
-});
+export const phoneNumberBulkActionSchema = z
+  .object({
+    phone_number_ids: z.array(uuidSchema).min(1).max(500).optional(),
+    /** "Select all matching" - the same filters GET /phone-numbers takes. */
+    filter: z
+      .object({
+        provider_key: telephonyProviderKeySchema.optional(),
+        status: z.enum(['active', 'inactive', 'releasing']).optional(),
+        assigned_agent_id: uuidSchema.optional(),
+        unassigned: z.boolean().optional(),
+        search: z.string().trim().max(100).optional(),
+        inbound: z.enum(['answering', 'not_set_up']).optional(),
+      })
+      .optional(),
+    action: z.enum(['delete', 'assign_agent']),
+    assigned_agent_id: uuidSchema.nullable().optional(),
+  })
+  .refine((d) => Boolean(d.phone_number_ids?.length) !== Boolean(d.filter), { message: 'Provide exactly one of phone_number_ids or filter.' });
 export type PhoneNumberBulkActionInput = z.infer<typeof phoneNumberBulkActionSchema>;
