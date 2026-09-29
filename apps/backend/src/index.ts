@@ -53,7 +53,7 @@ import { startNoCallerAudioSweep } from './services/noCallerAudioSweep.js';
 import { startRecordingBackfillSweep } from './services/recordingBackfillSweep.js';
 import { startVoiceCatalogSync } from './services/voiceCatalog.js';
 import { runCallEndDataRepair } from './services/callEndDataRepair.js';
-import { dashboardRoutes } from './routes/dashboard.js';
+import { dashboardRoutes, startDashboardWarmer } from './routes/dashboard.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { dispositionRoutes } from './routes/dispositions.js';
 import { callbackRoutes } from './routes/callbacks.js';
@@ -414,6 +414,9 @@ async function main() {
     // English-Cartesia-only voice catalog with clean names - see
     // services/voiceCatalog.ts.
     startVoiceCatalogSync();
+    // Keeps every organization's dashboard pre-built so sign-in never waits
+    // for it - see routes/dashboard.ts.
+    startDashboardWarmer();
     // One-off (self-limiting) repair for historical calls stuck with a
     // blank End Time/Duration by the status-update/end-of-call-report
     // race bug fixed in routes/webhooks.ts - see services/
