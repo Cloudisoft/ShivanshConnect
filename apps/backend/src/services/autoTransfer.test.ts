@@ -64,6 +64,17 @@ describe('autoTransfer', () => {
     expect(updated.transfer_initiated_by).toBe('ai');
   });
 
+  it('does nothing when the assistant already called its transferCall tool, even before Vapi reports forwarding', async () => {
+    const call = seedCall();
+    provider.getCall.mockResolvedValue({
+      status: 'in-progress',
+      raw: { messages: [{ role: 'tool_calls', toolCalls: [{ function: { name: 'transferCall', arguments: '{"destination":"+14845559999"}' } }] }] },
+    });
+
+    expect(await performAutoTransfer(fake.supabase as any, call.id)).toBe('skipped');
+    expect(provider.transferCall).not.toHaveBeenCalled();
+  });
+
   it('does nothing when Vapi is already forwarding the call (the transferCall tool fired)', async () => {
     const call = seedCall();
     provider.getCall.mockResolvedValue({ status: 'forwarding', raw: {} });

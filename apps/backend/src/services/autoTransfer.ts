@@ -19,7 +19,7 @@ import { resolveProviderForCall } from '../lib/orchestration/resolveProvider.js'
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
 /** How long the transferCall tool gets to fire on its own first. */
-const AUTO_TRANSFER_DELAY_MS = Number.parseInt(process.env.AUTO_TRANSFER_DELAY_MS ?? '', 10) || 1500;
+const AUTO_TRANSFER_DELAY_MS = Number.parseInt(process.env.AUTO_TRANSFER_DELAY_MS ?? '', 10) || 6000;
 
 /** Any way the assistant says it is handing the caller over - "transferring
  * the call", "transferring you now", "let me transfer you", "I'll connect
@@ -31,6 +31,15 @@ const TRANSFER_ANNOUNCEMENT =
 const TRANSFERABLE_STATUSES = new Set(['answered', 'in_progress']);
 
 const scheduled = new Set<string>();
+
+/** True when Vapi's call record shows the assistant already invoked its
+ * transferCall tool. */
+export function hasTransferToolCall(raw: Record<string, any> | null | undefined): boolean {
+  const messages: any[] = [...(raw?.messages ?? []), ...(raw?.artifact?.messages ?? [])];
+  return messages.some((m) =>
+    (m?.toolCalls ?? m?.tool_calls ?? []).some((tc: any) => (tc?.function?.name ?? tc?.name) === 'transferCall'),
+  );
+}
 
 export function announcesTransfer(text: string): boolean {
   return TRANSFER_ANNOUNCEMENT.test(text);
@@ -48,6 +57,12 @@ export async function performAutoTransfer(supabase: Supabase, callId: string): P
     // 'forwarding') before our own status webhook landed.
     const live = await provider.getCall(providerCallId);
     if (live.status !== 'in-progress') return 'skipped';
+    // Real incident: the assistant's own transferCall had already fired
+    // (Vapi was dialing the destination, status not yet 'forwarding'),
+    // and this backstop sent a second transfer on top of it. Never
+    // double up: if the call already has a transferCall tool call, leave
+    // it to Vapi.
+    if (hasTransferToolCall(live.raw)) return 'skipped';
   }
 
   const transition = await transitionCallState(supabase, call.id, 'transfer_pending', {
