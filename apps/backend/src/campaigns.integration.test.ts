@@ -399,6 +399,44 @@ describe('Phase 7: campaign engine end-to-end', () => {
       payload: { lead_ids: [dialingLead.lead_id] },
     });
     expect(crossOrgRemove.statusCode).toBe(404);
+
+    // Selection scopes (same org, a second campaign): rotate and remove
+    // only the ticked leads, or every lead matching a status filter.
+    const { campaign: scoped } = await createCampaignWithLeads(token, agent.id, phoneNumber.id, 0);
+    const orgLeadIds = fake.tables.campaign_leads.filter((cl) => cl.campaign_id === campaign.id).map((cl) => cl.lead_id).concat(pendingLead.lead_id);
+    await app.inject({ method: 'POST', url: `/api/v1/campaigns/${scoped.id}/leads`, headers: { authorization: `Bearer ${token}` }, payload: { lead_ids: orgLeadIds } });
+    const rows = fake.tables.campaign_leads.filter((cl) => cl.campaign_id === scoped.id);
+    expect(rows).toHaveLength(5);
+    const [done1, done2, retry1, retry2, pend1] = rows;
+    Object.assign(done1, { status: 'completed', final_disposition: 'CALL_CONNECTED' });
+    Object.assign(done2, { status: 'completed', final_disposition: 'CALL_CONNECTED' });
+    Object.assign(retry1, { status: 'retry_pending', final_disposition: 'NO_ANSWER', attempt_count: 2 });
+    Object.assign(retry2, { status: 'retry_pending', final_disposition: 'NO_ANSWER', attempt_count: 2 });
+    const post = (path: string, payload: Record<string, unknown>): Promise<any> => app.inject({ method: 'POST', url: `/api/v1/campaigns/${scoped.id}/leads/${path}`, headers: { authorization: `Bearer ${token}` }, payload });
+
+    // Preview for two ticked leads: the completed one is excluded, the retryable one included - named.
+    const preview = (await post('rotate', { dry_run: true, campaign_lead_ids: [done1.id, retry1.id] })).json().data;
+    expect(preview).toMatchObject({ rotated: 1, excluded: 1 });
+    expect(preview.decisions).toHaveLength(2);
+    expect(preview.decisions[0].campaignLeadId).toBe(retry1.id);
+    expect(preview.decisions[0].phone).toMatch(/^\+1/);
+
+    await post('rotate', { dry_run: false, campaign_lead_ids: [done1.id, retry1.id] });
+    expect(retry1).toMatchObject({ status: 'pending', attempt_count: 0 });
+    expect(retry2.status).toBe('retry_pending'); // not ticked - untouched
+    expect(done1.status).toBe('completed');
+
+    // All matching a status filter.
+    const byStatus = (await post('rotate', { dry_run: false, status: 'retry_pending' })).json().data;
+    expect(byStatus.rotated).toBe(1);
+    expect(retry2.status).toBe('pending');
+
+    // Bulk remove: ticked rows, then everything matching a status.
+    expect((await post('remove', { campaign_lead_ids: [pend1.id] })).json().data).toEqual({ removed: 1, skipped_active: 0 });
+    expect((await post('remove', { all_matching: true, status: 'completed' })).json().data).toEqual({ removed: 2, skipped_active: 0 });
+    const scopedRemaining = fake.tables.campaign_leads.filter((cl) => cl.campaign_id === scoped.id).map((cl) => cl.id).sort();
+    expect(scopedRemaining).toEqual([retry1.id, retry2.id].sort());
+    expect((await post('remove', {})).statusCode).toBe(422);
   });
 
   it('never lets a running campaign edit change the already-published snapshot, even after the underlying agent is re-published', async () => {

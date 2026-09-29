@@ -25,6 +25,38 @@ import { chunkArray } from '../lib/arrayChunk.js';
 /** Keeps every `.in(column, [...])` filter below in safe territory (see
  * lib/arrayChunk.ts's header comment). */
 const ID_QUERY_BATCH_SIZE = 200;
+const PAGE_ROWS = 1000;
+
+type ScopedCampaignLead = { id: string; lead_id: string; status: string; final_disposition: string | null };
+
+/** The attached leads an action covers: the ticked rows, or every row
+ * matching the status filter (all rows when none). Read in pages - a
+ * single unpaged select stops at PostgREST's 1000-row cap, which made
+ * rotate silently skip every lead past the first 1000. */
+async function loadScopedCampaignLeads(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  campaignId: string,
+  scope: { campaign_lead_ids?: string[]; status?: string },
+): Promise<ScopedCampaignLead[]> {
+  const columns = 'id, lead_id, status, final_disposition';
+  if (scope.campaign_lead_ids?.length) {
+    return selectInBatches<ScopedCampaignLead>(
+      (batch) => supabase.from('campaign_leads').select(columns).eq('campaign_id', campaignId).in('id', batch),
+      scope.campaign_lead_ids,
+    );
+  }
+  const rows: ScopedCampaignLead[] = [];
+  for (let from = 0; ; from += PAGE_ROWS) {
+    let q = supabase.from('campaign_leads').select(columns).eq('campaign_id', campaignId);
+    if (scope.status) q = q.eq('status', scope.status);
+    // eslint-disable-next-line no-await-in-loop
+    const { data, error } = await q.order('id', { ascending: true }).range(from, from + PAGE_ROWS - 1);
+    if (error) throw error;
+    rows.push(...((data ?? []) as ScopedCampaignLead[]));
+    if (!data || data.length < PAGE_ROWS) break;
+  }
+  return rows;
+}
 
 /** Real Supabase's `.in()` doesn't accept an unbounded array (see
  * ID_QUERY_BATCH_SIZE) - runs one filtered select per batch in parallel
@@ -806,10 +838,12 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     // Same batching fix as POST /:id/leads above - a large bulk selection
     // built an unbatched .in() filter that could exceed PostgREST's
     // header limit.
-    const matched = await selectInBatches<{ id: string; lead_id: string; status: string }>(
-      (batch) => supabase.from('campaign_leads').select('id, lead_id, status').eq('campaign_id', id).in('lead_id', batch),
-      body.lead_ids,
-    );
+    const matched = body.lead_ids
+      ? await selectInBatches<{ id: string; lead_id: string; status: string }>(
+          (batch) => supabase.from('campaign_leads').select('id, lead_id, status').eq('campaign_id', id).in('lead_id', batch),
+          body.lead_ids,
+        )
+      : await loadScopedCampaignLeads(supabase, id, { campaign_lead_ids: body.campaign_lead_ids, status: body.all_matching ? body.status : undefined });
 
     const removable = matched.filter((cl) => !ACTIVE_STATUSES.includes(cl.status));
     const skippedActive = matched.length - removable.length;
@@ -846,24 +880,19 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     const orgId = req.user!.organizationId;
     await getOwnedCampaign(supabase, id, orgId);
 
-    const { data: campaignLeads, error } = await supabase.from('campaign_leads').select('id, lead_id, status, final_disposition').eq('campaign_id', id);
-    if (error) throw error;
+    const campaignLeads = await loadScopedCampaignLeads(supabase, id, body);
 
-    const decisions = decideRotation(campaignLeads ?? []);
+    const decisions = decideRotation(campaignLeads as Parameters<typeof decideRotation>[0]);
     const included = decisions.filter((d) => d.include);
     const excluded = decisions.filter((d) => !d.include);
 
     if (!body.dry_run) {
-      const BATCH_SIZE = 500;
-      for (let i = 0; i < included.length; i += BATCH_SIZE) {
-        const batch = included.slice(i, i + BATCH_SIZE);
-        await supabase
+      for (const batch of chunkArray(included.map((b) => b.campaignLeadId), ID_QUERY_BATCH_SIZE)) {
+        const { error } = await supabase
           .from('campaign_leads')
           .update({ status: 'pending', attempt_count: 0, next_eligible_at: null, final_disposition: null })
-          .in(
-            'id',
-            batch.map((b) => b.campaignLeadId),
-          );
+          .in('id', batch);
+        if (error) throw error;
       }
       await writeAuditLog({
         organizationId: orgId,
@@ -871,13 +900,25 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
         action: AUDIT_ACTIONS.CAMPAIGN_LEADS_ROTATED,
         entityType: 'campaign',
         entityId: id,
-        newValue: { rotated: included.length, excluded: excluded.length },
+        newValue: { rotated: included.length, excluded: excluded.length, selected: body.campaign_lead_ids?.length ?? null, status: body.status ?? null },
         ipAddress: req.ip,
       });
     }
 
+    // The preview names each lead (first 500 decisions, included first).
+    const shown = [...included, ...excluded].slice(0, 500);
+    const leadRows = await selectInBatches<{ id: string; first_name: string | null; last_name: string | null; phone_normalized: string | null }>(
+      (batch) => supabase.from('leads').select('id, first_name, last_name, phone_normalized').in('id', batch),
+      [...new Set(shown.map((d) => d.leadId))],
+    );
+    const leadById = new Map(leadRows.map((l) => [l.id, l]));
+    const namedDecisions = shown.map((d) => {
+      const lead = leadById.get(d.leadId);
+      return { ...d, leadName: lead ? [lead.first_name, lead.last_name].filter(Boolean).join(' ').trim() || null : null, phone: lead?.phone_normalized ?? null };
+    });
+
     return ok(
-      { rotated: included.length, excluded: excluded.length, dry_run: body.dry_run, decisions },
+      { rotated: included.length, excluded: excluded.length, dry_run: body.dry_run, decisions: namedDecisions },
       { message: body.dry_run ? `${included.length} lead(s) would be re-queued, ${excluded.length} excluded.` : `${included.length} lead(s) re-queued for another attempt.` },
     );
   });

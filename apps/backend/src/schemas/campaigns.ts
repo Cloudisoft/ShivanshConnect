@@ -102,14 +102,31 @@ export const attachLeadsSchema = z
   });
 export type AttachLeadsInput = z.infer<typeof attachLeadsSchema>;
 
+/** Which attached leads an action covers: ticked rows (campaign_lead_ids),
+ * or every attached lead matching the list filter (status), or - neither
+ * given - every attached lead. */
+const campaignLeadScope = {
+  campaign_lead_ids: z.array(uuidSchema).min(1).max(5000).optional(),
+  status: z.string().trim().min(1).max(40).optional(),
+};
+
 export const rotateLeadsSchema = z.object({
   dry_run: z.boolean().default(false),
+  ...campaignLeadScope,
 });
 export type RotateLeadsInput = z.infer<typeof rotateLeadsSchema>;
 
-export const removeLeadsSchema = z.object({
-  lead_ids: z.array(uuidSchema).min(1).max(20000),
-});
+export const removeLeadsSchema = z
+  .object({
+    lead_ids: z.array(uuidSchema).min(1).max(20000).optional(),
+    campaign_lead_ids: z.array(uuidSchema).min(1).max(5000).optional(),
+    /** Remove every attached lead matching the list filter. */
+    all_matching: z.boolean().optional(),
+    status: z.string().trim().min(1).max(40).optional(),
+  })
+  .refine((b) => [Boolean(b.lead_ids?.length), Boolean(b.campaign_lead_ids?.length), Boolean(b.all_matching)].filter(Boolean).length === 1, {
+    message: 'Provide exactly one of lead_ids, campaign_lead_ids or all_matching.',
+  });
 export type RemoveLeadsInput = z.infer<typeof removeLeadsSchema>;
 
 export const updateConcurrencySchema = z.object({
