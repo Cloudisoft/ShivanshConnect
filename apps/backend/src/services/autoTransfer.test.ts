@@ -64,6 +64,17 @@ describe('autoTransfer', () => {
     expect(updated.transfer_initiated_by).toBe('ai');
   });
 
+  it('does nothing when the assistant already called its transferCall tool, even before Vapi reports forwarding', async () => {
+    const call = seedCall();
+    provider.getCall.mockResolvedValue({
+      status: 'in-progress',
+      raw: { messages: [{ role: 'tool_calls', toolCalls: [{ function: { name: 'transferCall', arguments: '{"destination":"+14845559999"}' } }] }] },
+    });
+
+    expect(await performAutoTransfer(fake.supabase as any, call.id)).toBe('skipped');
+    expect(provider.transferCall).not.toHaveBeenCalled();
+  });
+
   it('does nothing when Vapi is already forwarding the call (the transferCall tool fired)', async () => {
     const call = seedCall();
     provider.getCall.mockResolvedValue({ status: 'forwarding', raw: {} });
@@ -79,5 +90,20 @@ describe('autoTransfer', () => {
     expect(await performAutoTransfer(fake.supabase as any, noDestination.id)).toBe('skipped');
     expect(await performAutoTransfer(fake.supabase as any, alreadyTransferring.id)).toBe('skipped');
     expect(provider.transferCall).not.toHaveBeenCalled();
+  });
+});
+
+describe('scheduleAutoTransferIfAnnounced', () => {
+  it('never schedules a backstop transfer for a Vapi call (its own transferCall tool handles it)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { scheduleAutoTransferIfAnnounced } = await import('./autoTransfer.js');
+      provider.transferCall.mockReset();
+      scheduleAutoTransferIfAnnounced(fake.supabase as any, { id: 'vapi-call', engine: 'vapi', transfer_destination_e164: '+14845559999' }, 'ai', 'Transferring you now.');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(provider.transferCall).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
