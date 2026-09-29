@@ -92,3 +92,18 @@ describe('autoTransfer', () => {
     expect(provider.transferCall).not.toHaveBeenCalled();
   });
 });
+
+describe('scheduleAutoTransferIfAnnounced', () => {
+  it('never schedules a backstop transfer for a Vapi call (its own transferCall tool handles it)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { scheduleAutoTransferIfAnnounced } = await import('./autoTransfer.js');
+      provider.transferCall.mockReset();
+      scheduleAutoTransferIfAnnounced(fake.supabase as any, { id: 'vapi-call', engine: 'vapi', transfer_destination_e164: '+14845559999' }, 'ai', 'Transferring you now.');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(provider.transferCall).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

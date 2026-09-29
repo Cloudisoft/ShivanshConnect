@@ -83,6 +83,14 @@ export async function performAutoTransfer(supabase: Supabase, callId: string): P
 /** Called for every final AI utterance; schedules at most one backstop
  * transfer per call. Never throws. */
 export function scheduleAutoTransferIfAnnounced(supabase: Supabase, call: Record<string, any>, speaker: 'ai' | 'caller', text: string): void {
+  // Vapi calls carry a real transferCall tool, and Vapi deliberately runs it
+  // only after the assistant finishes its sentence. Production call
+  // 13d65ffe (29 Sep 00:49 UTC): the assistant called transferCall, and
+  // ~4s later - still mid-sentence - this backstop's control-URL transfer
+  // pre-empted it; on Twilio that path dropped both legs within 150ms
+  // (the specialist line never rang). So for Vapi the transfer is left
+  // entirely to Vapi's own tool.
+  if (call.engine === 'vapi') return;
   if (speaker !== 'ai' || !call.transfer_destination_e164 || scheduled.has(call.id) || !announcesTransfer(text)) return;
   scheduled.add(call.id);
   const timer = setTimeout(() => {
