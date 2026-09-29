@@ -74,6 +74,32 @@ export async function liveMonitorWsRoutes(app: FastifyInstance): Promise<void> {
         }
       };
 
+      // Everything live starts before the snapshot query, never after it:
+      // the snapshot used to be awaited first, so under load (29 Sep) no
+      // heartbeat reached the browser for 45s, it gave up and reconnected
+      // about once a minute, and every call event in that wait was lost.
+      // Events that arrive before the snapshot is sent are held and sent
+      // right after it, so the snapshot never overwrites them.
+      let pending: unknown[] | null = [];
+      const sendLive = (payload: unknown) => {
+        if (pending) pending.push(payload);
+        else send(payload);
+      };
+      const unsubscribe = registerLiveMonitorSubscriber(supabase, organizationId, sendLive);
+
+      const heartbeat: LiveMonitorHeartbeat = { type: 'HEARTBEAT' };
+      send(heartbeat);
+      const heartbeatInterval = setInterval(() => send(heartbeat), HEARTBEAT_INTERVAL_MS);
+
+      const cleanup = () => {
+        closed = true;
+        pending = null;
+        clearInterval(heartbeatInterval);
+        unsubscribe();
+      };
+      socket.on('close', cleanup);
+      socket.on('error', cleanup);
+
       try {
         const calls = await fetchActiveCallsSnapshot(supabase, organizationId);
         const snapshot: LiveMonitorSnapshot = { type: 'SNAPSHOT', calls };
@@ -81,22 +107,9 @@ export async function liveMonitorWsRoutes(app: FastifyInstance): Promise<void> {
       } catch (err) {
         req.log.error({ err }, 'live-monitor: failed to build initial snapshot');
       }
-
-      const unsubscribe = registerLiveMonitorSubscriber(supabase, organizationId, send);
-
-      const heartbeat: LiveMonitorHeartbeat = { type: 'HEARTBEAT' };
-      const heartbeatInterval = setInterval(() => send(heartbeat), HEARTBEAT_INTERVAL_MS);
-
-      socket.on('close', () => {
-        closed = true;
-        clearInterval(heartbeatInterval);
-        unsubscribe();
-      });
-      socket.on('error', () => {
-        closed = true;
-        clearInterval(heartbeatInterval);
-        unsubscribe();
-      });
+      const held = pending ?? [];
+      pending = null;
+      for (const payload of held) send(payload);
     },
   );
 }

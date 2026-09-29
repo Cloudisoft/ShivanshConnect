@@ -47,7 +47,20 @@ const NOT_IN_SERVICE_ENDED_REASONS = new Set(['invalid-number']);
 /** ended_reason values that are a genuine technical/provider-side failure
  * with no meaningful interaction, and aren't specifically a no-answer or
  * an invalid number - the remaining DISCONNECTED bucket. */
-const OTHER_NO_INTERACTION_ENDED_REASONS = new Set(['silence-timed-out', 'pipeline-error', 'twilio-failed', 'assistant-error', 'busy', 'dial-failed']);
+const OTHER_NO_INTERACTION_ENDED_REASONS = new Set(['pipeline-error', 'twilio-failed', 'assistant-error', 'busy', 'customer-busy', 'dial-failed']);
+
+/** Vapi has dozens of technical-failure reasons ('twilio-failed-to-connect-call',
+ * 'pipeline-error-openai-llm-failed', 'call.start.error-...', ...). Any of
+ * them on a call without a real conversation is DISCONNECTED - they used to
+ * fall through to the HUNG_UP default. */
+function isTechnicalFailureReason(reason: string | null): boolean {
+  return reason != null && /error|failed|fault/i.test(reason);
+}
+
+/** The line went quiet and the provider ended it: a DISCONNECT when nothing
+ * was really said, but a conversation that had already happened is still
+ * CALL_CONNECTED (it used to be DISCONNECTED however long the call was). */
+const SILENCE_ENDED_REASONS = new Set(['silence-timed-out']);
 
 /** Union of every "no meaningful interaction occurred" reason above,
  * regardless of which specific disposition it maps to - used only to gate
@@ -186,7 +199,7 @@ export function decideDisposition(signals: CallOutcomeSignals): DispositionDecis
   // picks up and hangs up in the first second is still a real hang-up,
   // not a disconnect, and is never lumped in with no-answer/not-in-service
   // above either.
-  if (noInteraction) {
+  if (noInteraction || isTechnicalFailureReason(signals.endedReason) || (signals.endedReason != null && SILENCE_ENDED_REASONS.has(signals.endedReason))) {
     return { code: 'DISCONNECTED', confidence: 0.8, reason: signals.endedReason ? `Provider reported a technical failure (${signals.endedReason}) with no meaningful interaction.` : 'Call ended with no meaningful interaction.' };
   }
 
