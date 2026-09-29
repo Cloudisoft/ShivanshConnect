@@ -1,5 +1,6 @@
 import { handleAssistantRequest } from '../services/inboundCalls.js';
 import { scheduleAutoTransferIfAnnounced } from '../services/autoTransfer.js';
+import { checkForVoicemail } from '../services/voicemailBackstop.js';
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { authenticate, requirePermission } from '../middleware/auth.js';
@@ -232,6 +233,9 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
             // "Transferring you now" must actually transfer - see
             // services/autoTransfer.ts.
             scheduleAutoTransferIfAnnounced(supabase, call, speaker, text);
+            // A voicemail greeting Vapi's own detector missed - see
+            // services/voicemailBackstop.ts.
+            checkForVoicemail(supabase, call, speaker, text, typeof message.secondsFromStart === 'number' ? message.secondsFromStart : null);
           } catch (err) {
             req.log.error({ err, callId: call.id }, 'Live transcript segment could not be stored');
           }

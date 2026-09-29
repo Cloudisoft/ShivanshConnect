@@ -163,6 +163,10 @@ export interface CreateCallParams {
    */
   firstMessageOverride?: string | null;
   systemPromptOverride?: string | null;
+  /** The campaign's voicemail settings (Vapi only), sent with the call
+   * itself so detection never depends on what the assistant was saved
+   * with. */
+  voicemailDetection?: AssistantConfig['voicemailDetection'];
   /** The assistant's own configured model.provider (Vapi only) - Vapi's
    * POST /call requires assistantOverrides.model to include a valid
    * `provider` whenever ANY model field is overridden (a partial override

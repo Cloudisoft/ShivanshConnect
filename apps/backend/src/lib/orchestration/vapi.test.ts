@@ -106,10 +106,9 @@ describe('VapiProvider', () => {
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.voicemailDetection).toEqual({
-      provider: 'openai',
-      type: 'transcript',
-      backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 3, maxRetries: 6 },
-      beepMaxAwaitSeconds: 15,
+      provider: 'vapi',
+      backoffPlan: { startAtSeconds: 2, frequencySeconds: 2, maxRetries: 6 },
+      beepMaxAwaitSeconds: 20,
     });
     expect(body.voicemailMessage).toBe('Please call us back at 555-0100.');
     // Office ambience on every campaign; the old per-campaign noise level no longer maps to anything.
@@ -130,10 +129,9 @@ describe('VapiProvider', () => {
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.voicemailDetection).toEqual({
-      provider: 'openai',
-      type: 'transcript',
-      backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 3, maxRetries: 6 },
-      beepMaxAwaitSeconds: 15,
+      provider: 'vapi',
+      backoffPlan: { startAtSeconds: 2, frequencySeconds: 2, maxRetries: 6 },
+      beepMaxAwaitSeconds: 20,
     });
     expect(body.voicemailMessage).toBeUndefined();
     expect(body.backgroundSound).toBe('office');
@@ -193,6 +191,32 @@ describe('VapiProvider', () => {
     });
     // Callbacks and Do-Not-Call requests are available on every call.
     expect(tools.map((t: any) => t.function?.name ?? t.type)).toEqual(['schedule_callback', 'request_dnc']);
+  });
+
+  it("createCall() sends the campaign's voicemail detection and message with the call itself", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_vm', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new VapiProvider('sk-test');
+    const base = {
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: null,
+    };
+    await provider.createCall({ ...base, voicemailDetection: { enabled: true, leaveVoicemail: true, message: ' Call us back. ' } });
+    await provider.createCall({ ...base, voicemailDetection: { enabled: true, leaveVoicemail: false, message: 'Call us back.' } });
+    await provider.createCall({ ...base, voicemailDetection: { enabled: false, leaveVoicemail: true, message: 'Call us back.' } });
+    const [withMessage, hangUpOnly, off] = fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).assistantOverrides);
+    expect(withMessage.voicemailDetection).toEqual({ provider: 'vapi', backoffPlan: { startAtSeconds: 2, frequencySeconds: 2, maxRetries: 6 }, beepMaxAwaitSeconds: 20 });
+    expect(withMessage.voicemailMessage).toBe('Call us back.');
+    expect(hangUpOnly.voicemailDetection).toBeDefined();
+    expect(hangUpOnly.voicemailMessage).toBeUndefined();
+    expect(off.voicemailDetection).toBeUndefined();
+    expect(off.voicemailMessage).toBeUndefined();
   });
 
   it('createCall() sends real assistantOverrides.firstMessage/model.messages when a per-lead override is resolved (Bug 1)', async () => {

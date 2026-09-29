@@ -527,6 +527,13 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
         llmTemperature: version.llm_temperature ?? null,
         llmMaxTokens: version.llm_max_tokens ?? null,
         knowledgeBaseSearch: scriptAndKnowledge.hasKnowledgeBase,
+        voicemailDetection: params.callingRulesOverride
+          ? {
+              enabled: params.callingRulesOverride.voicemail_detection_enabled,
+              leaveVoicemail: params.callingRulesOverride.leave_voicemail,
+              message: params.callingRulesOverride.voicemail_message,
+            }
+          : null,
       });
 
       await supabase.from('calls').update({ vapi_call_id: created.providerCallId, started_at: new Date().toISOString() }).eq('id', call.id);
