@@ -76,8 +76,8 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
           status: 200,
           json: async () => ({
             voices: [
-              { voice_id: 'el-voice-1', name: 'Rachel', labels: { gender: 'female', accent: 'american' } },
-              { voice_id: 'el-voice-2', name: 'Josh', labels: { gender: 'male', accent: 'american' } },
+              { voice_id: 'el-voice-1', name: 'Rachel - Calm, Clear', labels: { gender: 'female', accent: 'american' } },
+              { voice_id: 'el-voice-2', name: 'Josh', category: 'cloned', labels: { gender: 'male', accent: 'american' } },
             ],
           }),
         } as unknown as Response;
@@ -185,15 +185,35 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     expect(syncRes.statusCode).toBe(200);
     expect(syncRes.json().data.created).toBe(2);
 
-    // Only English Cartesia voices stay active (services/voiceCatalog.ts), so
-    // synced ElevenLabs voices are listed under status=inactive.
-    const listA = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenA}` } });
+    // Synced ElevenLabs voices stay active (only non-English Cartesia
+    // voices are hidden), shown by person name, and a voice ElevenLabs
+    // reports as cloned is tagged cloned.
+    const listA = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
     expect(listA.json().data).toHaveLength(2);
     expect(listA.json().data.every((v: any) => v.requires_external_hosting === false)).toBe(true);
+    const josh = listA.json().data.find((v: any) => v.provider_voice_id === 'el-voice-2');
+    expect(josh.is_cloned).toBe(true);
+    const rachel = listA.json().data.find((v: any) => v.provider_voice_id === 'el-voice-1');
+    expect(rachel.name).toBe('Rachel');
+    expect(rachel.is_cloned).toBe(false);
+
+    // Tag Rachel as cloned by hand; a re-sync keeps the tag (and rewrites
+    // nothing that didn't change).
+    const mark = await app.inject({ method: 'PATCH', url: `/api/v1/voices/${rachel.id}`, headers: { authorization: `Bearer ${tokenA}` }, payload: { is_cloned: true } });
+    expect(mark.statusCode).toBe(200);
+    expect(mark.json().data.is_cloned).toBe(true);
+    const resync = await app.inject({ method: 'POST', url: '/api/v1/voices/sync/elevenlabs', headers: { authorization: `Bearer ${tokenA}` } });
+    expect(resync.json().data).toMatchObject({ created: 0, updated: 0 });
+    const clonedOnly = await app.inject({ method: 'GET', url: '/api/v1/voices?is_cloned=true', headers: { authorization: `Bearer ${tokenA}` } });
+    expect(clonedOnly.json().data.map((v: any) => v.provider_voice_id).sort()).toEqual(['el-voice-1', 'el-voice-2']);
+
+    // Org B cannot tag Org A's voice.
+    const crossOrgMark = await app.inject({ method: 'PATCH', url: `/api/v1/voices/${rachel.id}`, headers: { authorization: `Bearer ${tokenB}` }, payload: { is_cloned: false } });
+    expect(crossOrgMark.statusCode).toBe(404);
 
     // Org B never connected ElevenLabs and never synced - its voice list
     // must stay empty even though org A's sync just ran.
-    const listB = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenB}` } });
+    const listB = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenB}` } });
     expect(listB.statusCode).toBe(200);
     expect(listB.json().data).toHaveLength(0);
     const catalogB = await app.inject({ method: 'GET', url: '/api/v1/voice-providers', headers: { authorization: `Bearer ${tokenB}` } });
@@ -256,6 +276,25 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     const listAfterRename = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${token}` } });
     expect(listAfterRename.json().data).toHaveLength(2);
     expect(listAfterRename.json().data.map((v: any) => v.name).sort()).toEqual(['chris-renamed', 'ella']);
+    expect(listAfterRename.json().data.every((v: any) => v.is_cloned === false)).toBe(true);
+
+    // Importing with is_cloned tags the voices cloned; a later plain
+    // re-import never removes that tag.
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/voices/import-by-id',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { provider_key: 'elevenlabs', is_cloned: true, voices: [{ provider_voice_id: 'el-ella', name: 'ella' }] },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/voices/import-by-id',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { provider_key: 'elevenlabs', voices: [{ provider_voice_id: 'el-ella', name: 'ella' }] },
+    });
+    const listCloned = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${token}` } });
+    expect(listCloned.json().data.find((v: any) => v.name === 'ella').is_cloned).toBe(true);
+    expect(listCloned.json().data.find((v: any) => v.name === 'chris-renamed').is_cloned).toBe(false);
   });
 
   it('POST /voices/bulk-delete removes only the caller org\'s own ids, scoped correctly cross-org', async () => {
@@ -286,7 +325,7 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     });
     expect(syncRes.json().data.created).toBe(2);
 
-    const listA = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenA}` } });
+    const listA = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
     const [voice1, voice2] = listA.json().data;
 
     // Org B cannot delete Org A's voices by id - scoped out, affected=0.
@@ -298,7 +337,7 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     });
     expect(crossOrgAttempt.statusCode).toBe(200);
     expect(crossOrgAttempt.json().data.affected).toBe(0);
-    const listAStillThere = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenA}` } });
+    const listAStillThere = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
     expect(listAStillThere.json().data).toHaveLength(2);
 
     // Org A deletes both of its own voices in one call.
@@ -311,7 +350,7 @@ describe('Phase 4: voice provider connect -> sync -> list, cloning consent + asy
     expect(bulkDeleteRes.statusCode).toBe(200);
     expect(bulkDeleteRes.json().data.affected).toBe(2);
 
-    const listAfter = await app.inject({ method: 'GET', url: '/api/v1/voices?status=inactive', headers: { authorization: `Bearer ${tokenA}` } });
+    const listAfter = await app.inject({ method: 'GET', url: '/api/v1/voices', headers: { authorization: `Bearer ${tokenA}` } });
     expect(listAfter.json().data).toHaveLength(0);
   });
 

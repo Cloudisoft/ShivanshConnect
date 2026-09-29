@@ -39,6 +39,9 @@ export interface VoiceInfo {
    * record) so a route/UI reading a single voice never has to join back
    * to the provider catalog to know which badge to show. */
   requiresExternalHosting: boolean;
+  /** True when the provider reports this as the account's own cloned
+   * voice (ElevenLabs category "cloned"/"professional"). */
+  isCloned?: boolean;
 }
 
 export interface PreviewAudioResult {

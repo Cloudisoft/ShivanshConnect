@@ -30,7 +30,7 @@ export function useVoices(filters: VoiceFilters = {}) {
 export function useVoicesWithClonePolling() {
   return useQuery({
     queryKey: ['voices', 'clone-poll'],
-    queryFn: () => api.getPage<Voice[]>('/voices?page=1&page_size=100'),
+    queryFn: () => api.getPage<Voice[]>('/voices?page=1&page_size=100&is_cloned=true'),
     refetchInterval: (query) => {
       const data = query.state.data as { data: Voice[] } | undefined;
       const hasPending = data?.data?.some((v) => v.clone_status === 'pending' || v.clone_status === 'processing');
@@ -50,7 +50,7 @@ export function useSyncVoices() {
 export function useImportVoicesById() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { provider_key: VoiceProviderKey; voices: { provider_voice_id: string; name: string }[] }) =>
+    mutationFn: (input: { provider_key: VoiceProviderKey; voices: { provider_voice_id: string; name: string }[]; is_cloned?: boolean }) =>
       api.post<{ created: number; updated: number; failed: { provider_voice_id: string; name: string; error: string }[] }>(
         '/voices/import-by-id',
         input,
@@ -63,6 +63,14 @@ export function usePreviewVoice() {
   return useMutation({
     mutationFn: ({ id, sampleText }: { id: string; sampleText?: string }) =>
       api.post<{ url: string; content_type: string }>(`/voices/${id}/preview`, sampleText ? { sample_text: sampleText } : {}),
+  });
+}
+
+export function useUpdateVoice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }: { id: string; name?: string; is_cloned?: boolean }) => api.patch<Voice>(`/voices/${id}`, patch),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['voices'] }),
   });
 }
 

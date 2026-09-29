@@ -30,13 +30,31 @@ describe('planVoiceCatalog', () => {
     ]);
   });
 
-  it('hides non-English and non-Cartesia voices unless something still uses them', () => {
+  it('hides non-English Cartesia voices unless something still uses them, and keeps other providers\' voices', () => {
     const aarti = voice('Aarti - Conversationalist', { language: 'hi' });
+    const used = voice('Hindi Used', { language: 'hi' });
     const claire = voice('claire', { provider_key: 'elevenlabs' });
-    const max = voice('max', { provider_key: 'elevenlabs' });
+    const max = voice('max', { provider_key: 'elevenlabs', language: null });
     const cloned = voice('My Voice', { provider_key: 'elevenlabs', is_cloned: true });
-    const { deactivate } = planVoiceCatalog([aarti, claire, max, cloned], new Set([claire.id]));
-    expect(deactivate.sort()).toEqual([aarti.id, max.id].sort());
+    const { deactivate } = planVoiceCatalog([aarti, used, claire, max, cloned], new Set([used.id]));
+    expect(deactivate).toEqual([aarti.id]);
+  });
+
+  it('shortens synced labels of other providers but never a name someone chose', () => {
+    const custom = voice('christopher', { provider_key: 'elevenlabs', provider_name: 'Christopher Casual Conversation Voice', created_at: '2025-01-01T00:00:00Z' });
+    const synced = voice('Christopher - Friendly, Kind and Raspy', { provider_key: 'elevenlabs' });
+    const adam = voice('Adam - Dominant, Firm', { provider_key: 'elevenlabs' });
+    const cloned = voice('Wendy - Mine', { provider_key: 'elevenlabs', is_cloned: true });
+    const { rename } = planVoiceCatalog([custom, synced, adam, cloned], new Set());
+    expect(rename).toEqual([
+      { id: synced.id, name: 'Christopher 2' },
+      { id: adam.id, name: 'Adam' },
+    ]);
+    const again = planVoiceCatalog(
+      [custom, { ...synced, name: 'Christopher 2' }, { ...adam, name: 'Adam' }, cloned],
+      new Set(),
+    );
+    expect(again.rename).toEqual([]);
   });
 
   it("hides Cartesia's emotion variants but not voices whose style merely starts with that word", () => {
