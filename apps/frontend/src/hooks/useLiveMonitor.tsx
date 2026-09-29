@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   LiveMonitorActiveCall,
   LiveMonitorHeartbeat,
@@ -35,6 +35,8 @@ interface LiveMonitorState {
   status: ConnectionStatus;
   calls: Map<string, LiveMonitorActiveCall>;
   transcripts: Map<string, LiveMonitorTranscriptSegment[]>;
+  /** Words still being spoken, per call and speaker (not yet a segment). */
+  partials: Map<string, { ai?: string; caller?: string }>;
   lastEventByCall: Map<string, LiveMonitorWsEvent>;
 }
 
@@ -74,6 +76,7 @@ function useLiveMonitorConnection(): LiveMonitorState {
     status: 'connecting',
     calls: new Map(),
     transcripts: new Map(),
+    partials: new Map(),
     lastEventByCall: new Map(),
   });
   const wsRef = useRef<WebSocket | null>(null);
@@ -117,6 +120,19 @@ function useLiveMonitorConnection(): LiveMonitorState {
         }
         if (payload.type === 'HEARTBEAT') return;
 
+        // Many of these per sentence: update only the in-progress line,
+        // without touching the calls map or invalidating any queries.
+        if (payload.type === 'TRANSCRIPT_PARTIAL') {
+          const partial = payload.partial;
+          if (!partial) return;
+          setState((prev) => {
+            const partials = new Map(prev.partials);
+            partials.set(payload.call_id, { ...partials.get(payload.call_id), [partial.speaker]: partial.text });
+            return { ...prev, partials };
+          });
+          return;
+        }
+
         if (payload.type !== 'SNAPSHOT' && REALTIME_INVALIDATION_EVENTS.has(payload.type)) {
           // Push, not poll: instead of CDR/Campaigns/Dashboard finding out
           // seconds (or, for Dashboard, up to a minute) later on their own
@@ -136,12 +152,14 @@ function useLiveMonitorConnection(): LiveMonitorState {
             ...prev,
             calls: new Map(prev.calls),
             transcripts: new Map(prev.transcripts),
+            partials: new Map(prev.partials),
             lastEventByCall: new Map(prev.lastEventByCall),
           };
           next.lastEventByCall.set(payload.call_id, payload);
 
           if (payload.type === 'CALL_ENDED') {
             next.calls.delete(payload.call_id);
+            next.partials.delete(payload.call_id);
           } else if (payload.call) {
             next.calls.set(payload.call_id, payload.call);
           }
@@ -150,6 +168,11 @@ function useLiveMonitorConnection(): LiveMonitorState {
             const existing = next.transcripts.get(payload.call_id) ?? [];
             if (!existing.some((s) => s.segment_index === payload.segment!.segment_index)) {
               next.transcripts.set(payload.call_id, [...existing, payload.segment].sort((a, b) => a.segment_index - b.segment_index));
+            }
+            // The finished sentence replaces that speaker's in-progress words.
+            const callPartials = next.partials.get(payload.call_id);
+            if (callPartials?.[payload.segment.speaker]) {
+              next.partials.set(payload.call_id, { ...callPartials, [payload.segment.speaker]: undefined });
             }
           }
 
@@ -182,6 +205,18 @@ function useLiveMonitorConnection(): LiveMonitorState {
   }, [queryClient]);
 
   return state;
+}
+
+/** Everything said so far on a call (the socket only carries what is said
+ * from now on) - so a call opened mid-conversation shows its whole
+ * transcript. Refreshed every 15s as a safety net for a missed event. */
+export function useCallTranscript(callId: string | null) {
+  return useQuery({
+    queryKey: ['live-monitor', 'transcript', callId],
+    queryFn: () => api.get<LiveMonitorTranscriptSegment[]>(`/calls/${callId}/transcript`),
+    enabled: Boolean(callId),
+    refetchInterval: 15_000,
+  });
 }
 
 const LiveMonitorContext = createContext<LiveMonitorState | null>(null);

@@ -30,3 +30,16 @@ transcriptEventBus.setMaxListeners(100);
 export function emitLiveTranscriptSegment(event: LiveTranscriptSegmentEvent): void {
   transcriptEventBus.emit('segment', event);
 }
+
+/** An utterance still being spoken (Vapi's 'partial' transcript). Only
+ * pushed to Live Monitor - never persisted. */
+export interface LiveTranscriptPartialEvent {
+  callId: string;
+  organizationId: string;
+  speaker: 'ai' | 'caller';
+  text: string;
+}
+
+export function emitLiveTranscriptPartial(event: LiveTranscriptPartialEvent): void {
+  transcriptEventBus.emit('partial', event);
+}

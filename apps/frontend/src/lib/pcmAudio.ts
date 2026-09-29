@@ -21,10 +21,34 @@
 
 const DEFAULT_SAMPLE_RATE = 16000;
 
+/** One AudioContext for the page, created/resumed by unlockAudio() during
+ * any click - browsers only allow audio to start from a user gesture, so
+ * this is what lets Live Monitor start listening BY ITSELF later (when a
+ * call connects), not only inside a Listen click. */
+let sharedCtx: AudioContext | null = null;
+
+export function unlockAudio(): void {
+  try {
+    if (!sharedCtx || sharedCtx.state === 'closed') sharedCtx = new AudioContext();
+    if (sharedCtx.state === 'suspended') void sharedCtx.resume().catch(() => undefined);
+  } catch {
+    // No Web Audio support - Listen will report its own error.
+  }
+}
+
+/** True once a click has unlocked audio for this page. */
+export function isAudioUnlocked(): boolean {
+  return sharedCtx?.state === 'running';
+}
+
 /** Schedules incoming Int16 PCM chunks for gapless sequential playback
  * via the Web Audio API. Call `push()` as binary WS frames arrive. */
 export class PcmStreamPlayer {
   private ctx: AudioContext;
+  /** This player's own output; closing a player only disconnects it, so
+   * the shared (unlocked) context stays usable for the next call. */
+  private out: GainNode;
+  private ownsContext: boolean;
   private nextStartTime = 0;
   private sampleRate: number;
 
@@ -37,8 +61,16 @@ export class PcmStreamPlayer {
    * chunk plays silently - which is exactly how Listen "did nothing". */
   constructor(sampleRate: number = DEFAULT_SAMPLE_RATE) {
     this.sampleRate = sampleRate;
-    this.ctx = new AudioContext();
+    if (sharedCtx && sharedCtx.state !== 'closed') {
+      this.ctx = sharedCtx;
+      this.ownsContext = false;
+    } else {
+      this.ctx = new AudioContext();
+      this.ownsContext = true;
+    }
     void this.ctx.resume().catch(() => undefined);
+    this.out = this.ctx.createGain();
+    this.out.connect(this.ctx.destination);
   }
 
   /** Applies a stream's own announced format (e.g. a JSON start frame
@@ -46,6 +78,16 @@ export class PcmStreamPlayer {
   setFormat(sampleRate: number, channels: number): void {
     if (Number.isFinite(sampleRate) && sampleRate >= 8000 && sampleRate <= 48000) this.sampleRate = sampleRate;
     if (channels === 1 || channels === 2) this.channels = channels;
+  }
+
+  /** Call from a click: lets a player that started without one play. */
+  resume(): void {
+    void this.ctx.resume().catch(() => undefined);
+  }
+
+  /** False while the browser is still blocking this player's sound. */
+  get playing(): boolean {
+    return this.ctx.state === 'running';
   }
 
   push(int16: Int16Array): void {
@@ -67,7 +109,7 @@ export class PcmStreamPlayer {
 
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.ctx.destination);
+    source.connect(this.out);
 
     const startAt = Math.max(this.ctx.currentTime, this.nextStartTime);
     source.start(startAt);
@@ -76,7 +118,8 @@ export class PcmStreamPlayer {
 
   async close(): Promise<void> {
     try {
-      await this.ctx.close();
+      this.out.disconnect();
+      if (this.ownsContext) await this.ctx.close();
     } catch {
       // Already closed - fine.
     }

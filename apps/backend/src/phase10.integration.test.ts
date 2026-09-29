@@ -288,4 +288,29 @@ describe('Phase 10: Live Monitor supervisor actions', () => {
     const secondEnd = await app.inject({ method: 'POST', url: `/api/v1/calls/${call.id}/end`, headers: { authorization: `Bearer ${supervisor.token}` } });
     expect(secondEnd.statusCode).toBe(200);
   });
+
+  it('streams words as they are spoken (partial, not stored) and serves the transcript so far for a call', async () => {
+    const { transcriptEventBus } = await import('./lib/transcriptEventBus.js');
+    const { adminToken, call } = await setUpOrgWithLiveCall('LM Org T', `lm-t-${Date.now()}@test.com`, null);
+    const vapiCallId = fake.tables.calls.find((c: any) => c.id === call.id)!.vapi_call_id;
+    const partials: any[] = [];
+    const onPartial = (e: any) => partials.push(e);
+    transcriptEventBus.on('partial', onPartial);
+    const webhook = (message: Record<string, unknown>) =>
+      app.inject({ method: 'POST', url: '/api/v1/webhooks/vapi', payload: { message: { ...message, call: { id: vapiCallId } } } });
+
+    const eventsBefore = fake.tables.webhook_events.length;
+    const partialRes = await webhook({ type: 'transcript', transcriptType: 'partial', role: 'user', transcript: 'Yes I was in an acc' });
+    expect(partialRes.statusCode).toBe(200);
+    transcriptEventBus.off('partial', onPartial);
+    expect(partials).toEqual([{ callId: call.id, organizationId: call.organization_id, speaker: 'caller', text: 'Yes I was in an acc' }]);
+    // Partials are never stored anywhere.
+    expect(fake.tables.webhook_events.length).toBe(eventsBefore);
+    expect(fake.tables.call_transcript_segments.some((s: any) => s.call_id === call.id)).toBe(false);
+
+    await webhook({ type: 'transcript', transcriptType: 'final', role: 'user', transcript: 'Yes I was in an accident last week.' });
+    const transcript = await app.inject({ method: 'GET', url: `/api/v1/calls/${call.id}/transcript`, headers: { authorization: `Bearer ${adminToken}` } });
+    expect(transcript.statusCode).toBe(200);
+    expect(transcript.json().data.map((s: any) => [s.speaker, s.text])).toEqual([['caller', 'Yes I was in an accident last week.']]);
+  });
 });

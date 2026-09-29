@@ -185,6 +185,7 @@ describe('VapiProvider', () => {
       stopSpeakingPlan: { numWords: 0 },
       artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false },
       backgroundSound: 'office',
+      serverMessages: ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'],
     });
     // Callbacks and Do-Not-Call requests are available on every call.
     expect(tools.map((t: any) => t.function?.name ?? t.type)).toEqual(['schedule_callback', 'request_dnc']);
@@ -221,6 +222,7 @@ describe('VapiProvider', () => {
       stopSpeakingPlan: { numWords: 0 },
       artifactPlan: { recordingEnabled: true, recordingUseCustomStorageEnabled: false },
       backgroundSound: 'office',
+      serverMessages: ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'],
       firstMessage: 'Hi, am I speaking with Priya?',
       model: {
         provider: 'anthropic',

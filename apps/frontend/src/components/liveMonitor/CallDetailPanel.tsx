@@ -3,9 +3,10 @@ import { Headphones, Mic, Users, PhoneForwarded, PhoneOff, X, Loader2 } from 'lu
 import type { LiveMonitorActiveCall, LiveMonitorTranscriptSegment } from '@shivanshconnect/shared';
 import { Badge, Button, Alert } from '../ui';
 import { ApiClientError } from '../../lib/apiClient';
-import { PcmStreamPlayer, startMicPcmCapture } from '../../lib/pcmAudio';
+import { PcmStreamPlayer, isAudioUnlocked, startMicPcmCapture, unlockAudio } from '../../lib/pcmAudio';
 import {
   useBargeCall,
+  useCallTranscript,
   useEndCall,
   useListenCall,
   useTransferCall,
@@ -15,6 +16,11 @@ import {
 } from '../../hooks/useLiveMonitor';
 
 type Mode = 'idle' | 'listening' | 'whispering' | 'barged_in';
+
+/** Someone (the caller or their voicemail) is on the line - audio worth
+ * hearing is flowing. */
+const CONNECTED_STATUSES = ['answered', 'in_progress', 'voicemail', 'answering_machine', 'transfer_pending', 'transferring'];
+const AUTO_LISTEN_ATTEMPTS = 3;
 
 const STATE_LABEL: Record<Mode, string> = {
   idle: 'Connected',
@@ -28,6 +34,13 @@ const STATE_TONE: Record<Mode, 'neutral' | 'success' | 'warning' | 'danger'> = {
   whispering: 'warning',
   barged_in: 'danger',
 };
+
+function mergeSegments(history: LiveMonitorTranscriptSegment[], live: LiveMonitorTranscriptSegment[]): LiveMonitorTranscriptSegment[] {
+  const byIndex = new Map<number, LiveMonitorTranscriptSegment>();
+  for (const s of history) byIndex.set(s.segment_index, s);
+  for (const s of live) byIndex.set(s.segment_index, s);
+  return [...byIndex.values()].sort((a, b) => a.segment_index - b.segment_index);
+}
 
 function speakerLabel(speaker: 'ai' | 'caller', voiceName: string | null | undefined): string {
   return speaker === 'ai' ? (voiceName ?? 'AI') : 'Caller';
@@ -78,7 +91,9 @@ function openListenSocket(
 
 export function CallDetailPanel({
   call,
-  segments,
+  segments: liveSegments,
+  partials,
+  autoListen,
   onClose,
   canListen,
   canBarge,
@@ -86,6 +101,9 @@ export function CallDetailPanel({
 }: {
   call: LiveMonitorActiveCall;
   segments: LiveMonitorTranscriptSegment[];
+  partials?: { ai?: string; caller?: string };
+  /** Start listening by itself as soon as the call connects. */
+  autoListen: boolean;
   onClose: () => void;
   canListen: boolean;
   canBarge: boolean;
@@ -102,6 +120,12 @@ export function CallDetailPanel({
   const injectSocketRef = useRef<WebSocket | null>(null);
 
   const listenMutation = useListenCall();
+  // Everything said before this panel opened, merged with what streams in.
+  const historyQuery = useCallTranscript(call.id);
+  const segments = mergeSegments(historyQuery.data ?? [], liveSegments);
+  const autoTriesRef = useRef(0);
+  const userStoppedRef = useRef(false);
+  const [audioLocked, setAudioLocked] = useState(false);
   const whisperMutation = useWhisperCall();
   const bargeMutation = useBargeCall();
   const transferMutation = useTransferCall();
@@ -109,7 +133,33 @@ export function CallDetailPanel({
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [segments.length]);
+  }, [segments.length, partials?.ai, partials?.caller]);
+
+  useEffect(() => {
+    autoTriesRef.current = 0;
+    userStoppedRef.current = false;
+  }, [call.id]);
+
+  // Auto-listen: the moment the call connects (a person or voicemail on
+  // the line), start listening - no click needed. Retries a couple of
+  // times (the audio stream can take a moment to open), and never
+  // restarts after the supervisor pressed Stop listening.
+  useEffect(() => {
+    if (!autoListen || !canListen || mode !== 'idle' || listenMutation.isPending || userStoppedRef.current) return undefined;
+    if (!CONNECTED_STATUSES.includes(call.status) || autoTriesRef.current >= AUTO_LISTEN_ATTEMPTS) return undefined;
+    const t = setTimeout(() => {
+      autoTriesRef.current += 1;
+      void handleListen().then(() => {
+        // Started without a click: the browser may still be muting it
+        // (checked after resume() has had a moment to take effect).
+        setTimeout(() => {
+          const player = listenSocketRef.current?.player;
+          setAudioLocked(Boolean(player && !player.playing && !isAudioUnlocked()));
+        }, 600);
+      });
+    }, autoTriesRef.current === 0 ? 0 : 3000);
+    return () => clearTimeout(t);
+  }, [autoListen, canListen, mode, call.status, call.id, error, listenMutation.isPending]);
 
   // Tear down everything (mic, sockets, player) whenever the panel closes
   // or the selected call changes - never leave a live socket/mic open in
@@ -288,6 +338,24 @@ export function CallDetailPanel({
             <Alert>{error}</Alert>
           </div>
         )}
+        {mode === 'listening' && audioLocked && (
+          <div className="px-6 pt-3">
+            <button
+              type="button"
+              className="w-full rounded-md border border-gold-300 bg-gold-50 px-3 py-2 text-left text-sm text-gold-800"
+              onClick={() => {
+                unlockAudio();
+                listenSocketRef.current?.player.resume();
+                setAudioLocked(false);
+              }}
+            >
+              Listening started automatically - your browser needs one click to play sound. Click here to hear the call.
+            </button>
+          </div>
+        )}
+        {autoListen && canListen && mode === 'idle' && !CONNECTED_STATUSES.includes(call.status) && (
+          <p className="px-6 pt-3 text-xs text-ink-500">Listening will start automatically when the call connects.</p>
+        )}
 
         <div className="flex flex-wrap gap-2 border-b border-ink-200 px-6 py-3">
           {canListen && mode === 'idle' && (
@@ -296,7 +364,7 @@ export function CallDetailPanel({
             </Button>
           )}
           {mode === 'listening' && (
-            <Button variant="secondary" onClick={() => { teardownListen(); setMode('idle'); }}>
+            <Button variant="secondary" onClick={() => { userStoppedRef.current = true; teardownListen(); setMode('idle'); }}>
               <Headphones className="h-4 w-4" /> Stop listening
             </Button>
           )}
@@ -366,7 +434,9 @@ export function CallDetailPanel({
 
         <div className="flex-1 overflow-y-auto px-6 py-4">
           <h3 className="mb-2 text-sm font-semibold text-ink-700">Live transcript</h3>
-          {segments.length === 0 && <p className="text-sm text-ink-400">No transcript segments yet.</p>}
+          {segments.length === 0 && !partials?.ai && !partials?.caller && (
+            <p className="text-sm text-ink-400">{historyQuery.isLoading ? 'Loading transcript...' : 'Nothing said yet - the transcript appears here as people talk.'}</p>
+          )}
           <div className="space-y-2">
             {segments.map((s) => (
               <p key={s.segment_index} className="text-sm">
@@ -376,6 +446,16 @@ export function CallDetailPanel({
                 <span className="text-ink-700">{s.text}</span>
               </p>
             ))}
+            {(['caller', 'ai'] as const).map((speaker) =>
+              partials?.[speaker] ? (
+                <p key={`partial-${speaker}`} className="text-sm italic opacity-70">
+                  <span className={speaker === 'ai' ? 'font-semibold text-ink-900' : 'font-semibold text-gold-700'}>
+                    {speakerLabel(speaker, call.voice_name)}:
+                  </span>{' '}
+                  <span className="text-ink-600">{partials[speaker]}…</span>
+                </p>
+              ) : null,
+            )}
             <div ref={transcriptEndRef} />
           </div>
         </div>

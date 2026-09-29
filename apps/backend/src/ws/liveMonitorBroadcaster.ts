@@ -19,7 +19,7 @@
  */
 import type { CallTransitionEvent } from '../lib/callStateMachine.js';
 import { callEventBus } from '../lib/callStateMachine.js';
-import { transcriptEventBus, type LiveTranscriptSegmentEvent } from '../lib/transcriptEventBus.js';
+import { transcriptEventBus, type LiveTranscriptPartialEvent, type LiveTranscriptSegmentEvent } from '../lib/transcriptEventBus.js';
 import { mapTransitionToLiveMonitorEventType } from './liveMonitorEvents.js';
 import { buildLiveMonitorActiveCalls } from '../services/liveMonitorQuery.js';
 import type { getSupabaseAdmin } from '../lib/supabase.js';
@@ -88,11 +88,25 @@ export function registerLiveMonitorSubscriber(
     });
   };
 
+  const onPartial = (event: LiveTranscriptPartialEvent) => {
+    if (event.organizationId !== organizationId) return; // cross-org isolation - see header comment
+    onEvent({
+      type: 'TRANSCRIPT_PARTIAL',
+      call_id: event.callId,
+      organization_id: event.organizationId,
+      occurred_at: new Date().toISOString(),
+      call: null,
+      partial: { speaker: event.speaker, text: event.text },
+    });
+  };
+
   callEventBus.on('call.transitioned', onTransition);
   transcriptEventBus.on('segment', onSegment);
+  transcriptEventBus.on('partial', onPartial);
 
   return () => {
     callEventBus.off('call.transitioned', onTransition);
     transcriptEventBus.off('segment', onSegment);
+    transcriptEventBus.off('partial', onPartial);
   };
 }
