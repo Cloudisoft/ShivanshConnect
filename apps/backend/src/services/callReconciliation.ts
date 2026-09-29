@@ -33,13 +33,17 @@ import type { CallStatus } from '@shivanshconnect/shared';
 
 type Supabase = ReturnType<typeof getSupabaseAdmin>;
 
-const RECONCILIATION_TICK_MS = Number.parseInt(process.env.CALL_RECONCILIATION_INTERVAL_MS ?? '', 10) || 5 * 60 * 1000;
-/** How long a call may sit in a non-terminal status before this job even
- * considers it "stuck" - deliberately generous (spec 73 suggests "a
- * reasonable timeout", ~10 minutes by default) so a genuinely still-
- * ringing/in-progress call is never mistakenly probed as if something had
- * gone wrong. */
-const STUCK_CALL_TIMEOUT_MS = Number.parseInt(process.env.CALL_RECONCILIATION_STUCK_TIMEOUT_MS ?? '', 10) || 10 * 60 * 1000;
+// Every minute, for calls older than 3 minutes: a lost end-of-call webhook
+// (more likely under large batches) used to leave a finished call showing
+// in Live Monitor for up to 15 minutes. Probing earlier is safe - a call is
+// only closed when the provider itself reports it ended, so a genuinely
+// long conversation is never touched.
+const RECONCILIATION_TICK_MS = Number.parseInt(process.env.CALL_RECONCILIATION_INTERVAL_MS ?? '', 10) || 60 * 1000;
+/** How long a call may sit in a non-terminal status before this job asks
+ * the provider about it (was 10 minutes). Asking is harmless for a call
+ * that is genuinely still in progress - it is left alone unless the
+ * provider reports it ended. */
+const STUCK_CALL_TIMEOUT_MS = Number.parseInt(process.env.CALL_RECONCILIATION_STUCK_TIMEOUT_MS ?? '', 10) || 3 * 60 * 1000;
 
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let tickInFlight = false;
@@ -114,6 +118,9 @@ export async function reconcileOrganizationCalls(supabase: Supabase, organizatio
     .eq('organization_id', organizationId)
     .in('status', ACTIVE_CALL_STATUSES)
     .lte('created_at', stuckBefore)
+    // Oldest first, so with a very large batch the longest-stuck calls are
+    // always the ones checked this tick.
+    .order('created_at', { ascending: true })
     .limit(200);
 
   const rows: Record<string, any>[] = stuckCalls ?? [];
