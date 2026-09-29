@@ -128,15 +128,16 @@ const STOP_SPEAKING_PLAN = { numWords: 0 };
  * keep talking with VM". Was OpenAI's transcript-based detector, which only
  * decides once enough words have been transcribed and first checked 2.5s
  * in; Vapi's own detector listens to the audio itself (greeting cadence,
- * beep) and is Vapi's recommended provider. It now checks from 2s and every
- * 2s after, for about 12s - a voicemail greeting is caught while it is
- * still playing. When it fires Vapi leaves `voicemailMessage` (after the
+ * beep) and is Vapi's recommended provider. It checks from 2.5s and every
+ * 2.5s after (Vapi rejects anything under 2.5s with a 400, which failed
+ * every campaign call on 29 Sep 18:18-18:30 UTC), for about 15s - a
+ * voicemail greeting is caught while it is still playing. When it fires Vapi leaves `voicemailMessage` (after the
  * beep) if the campaign has one, and otherwise hangs up. Voicemails it
  * still misses are caught from the transcript by
  * services/voicemailBackstop.ts. */
 export const VOICEMAIL_DETECTION_PLAN = {
   provider: 'vapi',
-  backoffPlan: { startAtSeconds: 2, frequencySeconds: 2, maxRetries: 6 },
+  backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 },
   beepMaxAwaitSeconds: 20,
 };
 
