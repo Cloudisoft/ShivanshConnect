@@ -161,13 +161,20 @@ export interface RotateDecision {
   campaignLeadId: string;
   include: boolean;
   reason: string;
+  leadName?: string | null;
+  phone?: string | null;
 }
+
+/** Which attached leads an action covers: ticked rows, or every lead
+ * matching the status filter (all leads when neither is given). */
+export type CampaignLeadScope = { campaign_lead_ids?: string[]; status?: string };
+export type CampaignLeadRemoval = { lead_ids: string[] } | { campaign_lead_ids: string[] } | { all_matching: true; status?: string };
 
 export function useRemoveLeads() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, lead_ids }: { id: string; lead_ids: string[] }) =>
-      api.post<{ removed: number; skipped_active: number }>(`/campaigns/${id}/leads/remove`, { lead_ids }),
+    mutationFn: ({ id, ...selection }: { id: string } & CampaignLeadRemoval) =>
+      api.post<{ removed: number; skipped_active: number }>(`/campaigns/${id}/leads/remove`, selection),
     onSuccess: (_d, v) => invalidate(queryClient, v.id),
   });
 }
@@ -175,8 +182,8 @@ export function useRemoveLeads() {
 export function useRotateLeads() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, dry_run }: { id: string; dry_run: boolean }) =>
-      api.post<{ rotated: number; excluded: number; dry_run: boolean; decisions: RotateDecision[] }>(`/campaigns/${id}/leads/rotate`, { dry_run }),
+    mutationFn: ({ id, ...body }: { id: string; dry_run: boolean } & CampaignLeadScope) =>
+      api.post<{ rotated: number; excluded: number; dry_run: boolean; decisions: RotateDecision[] }>(`/campaigns/${id}/leads/rotate`, body),
     onSuccess: (_d, v) => invalidate(queryClient, v.id),
   });
 }
