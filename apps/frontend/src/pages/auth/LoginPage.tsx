@@ -1,10 +1,11 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AuthLayout } from '../../components/AuthLayout';
 import { Alert, Button, Input, Label } from '../../components/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../../lib/supabaseClient';
 import { api } from '../../lib/apiClient';
+import { preloadAllPages } from '../../lib/lazyPage';
 
 export function LoginPage(): JSX.Element {
   const navigate = useNavigate();
@@ -14,6 +15,12 @@ export function LoginPage(): JSX.Element {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Download the app's pages (dashboard, charts...) while the user is still
+  // typing, so signing in lands on a dashboard that's ready to draw.
+  useEffect(() => {
+    preloadAllPages();
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
