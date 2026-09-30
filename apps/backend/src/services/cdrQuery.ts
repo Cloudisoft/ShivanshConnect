@@ -52,6 +52,14 @@ async function resolveCallIdsForDispositionFilter(supabase: Supabase, orgId: str
   return (callDispositions ?? []).map((cd: any) => cd.call_id);
 }
 
+/** Numbers are stored as +16155551234, so "(615) 555-1234", "615-555-1234"
+ * or "+1 615 555 1234" matched nothing: search on the digits alone. Text
+ * with no digits is searched as typed. */
+export function phoneSearchTerm(input: string): string {
+  const digits = input.replace(/\D/g, '');
+  return digits || input.trim();
+}
+
 /** Applies every filter EXCEPT the disposition one (that needs the async
  * pre-resolution above) to a base `calls` query builder. */
 function applyCommonFilters(builder: any, orgId: string, filters: CdrFilters): any {
@@ -62,7 +70,7 @@ function applyCommonFilters(builder: any, orgId: string, filters: CdrFilters): a
   if (filters.ai_agent_id) b = b.eq('ai_agent_id', filters.ai_agent_id);
   if (filters.lead_id) b = b.eq('lead_id', filters.lead_id);
   if (filters.status) b = b.eq('status', filters.status);
-  if (filters.phone) b = b.ilike('customer_number', `%${filters.phone}%`);
+  if (filters.phone) b = b.ilike('customer_number', `%${phoneSearchTerm(filters.phone)}%`);
   if (filters.direction) b = b.eq('direction', filters.direction);
   if (filters.min_talk_seconds) b = b.gte('talk_duration_seconds', filters.min_talk_seconds);
   if (filters.call_ids?.length) b = b.in('id', filters.call_ids);

@@ -92,6 +92,18 @@ describe('cdrQuery.fetchCdrCallsPage / buildCdrRows', () => {
     expect(calls).toHaveLength(2);
   });
 
+  it('finds a number however it is typed - formatted, spaced or with +1', async () => {
+    const { supabase, orgId } = seed();
+    const { calls: plain } = await fetchCdrCallsPage(supabase as any, orgId, { phone: '5005550002' }, 1, 20);
+    expect(plain.length).toBeGreaterThan(0);
+    for (const typed of ['(500) 555-0002', '500-555-0002', '+1 500 555 0002', '500.555.0002']) {
+      const { calls } = await fetchCdrCallsPage(supabase as any, orgId, { phone: typed }, 1, 20);
+      expect(calls.map((c: any) => c.id).sort()).toEqual(plain.map((c: any) => c.id).sort());
+    }
+    const { calls: none } = await fetchCdrCallsPage(supabase as any, orgId, { phone: '(999) 111-2222' }, 1, 20);
+    expect(none).toHaveLength(0);
+  });
+
   it('filters by disposition code, resolving it to the matching call ids first', async () => {
     const { supabase, orgId, call1 } = seed();
     const { calls } = await fetchCdrCallsPage(supabase as any, orgId, { disposition: 'CALL_CONNECTED' }, 1, 20);
