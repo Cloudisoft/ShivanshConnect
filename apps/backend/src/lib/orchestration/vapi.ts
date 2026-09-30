@@ -138,7 +138,14 @@ const STOP_SPEAKING_PLAN = { numWords: 0 };
 export const VOICEMAIL_DETECTION_PLAN = {
   provider: 'vapi',
   backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 },
-  beepMaxAwaitSeconds: 20,
+  // Counted from the start of the call: if no beep is heard by then, Vapi
+  // speaks the script anyway, and one started before the beep is cut off.
+  // Carrier voicemail systems (number read out, "at the tone... press 1 for
+  // more options... press 5 to leave a callback number") take 20-30s to
+  // reach the beep; at 20 the script started inside those prompts and was
+  // cut off. Greetings the transcript backstop recognizes get the script
+  // as soon as the line goes quiet, well before this.
+  beepMaxAwaitSeconds: 40,
 };
 
 /** Every campaign call detects voicemail. When the campaign has a voicemail
