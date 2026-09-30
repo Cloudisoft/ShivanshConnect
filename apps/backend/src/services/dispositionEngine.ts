@@ -105,6 +105,9 @@ export interface CallOutcomeSignals {
   /** True when a tool-call/function-call during the call explicitly
    * signaled the caller asked not to be called again (spec section 60). */
   dncRequested: boolean;
+  /** Whether the call was ever answered (answered_at, an in-progress
+   * transition, or an inbound call). Unknown (undefined) reads as answered. */
+  answered?: boolean;
 }
 
 export interface DispositionDecision {
@@ -170,6 +173,14 @@ export function decideDisposition(signals: CallOutcomeSignals): DispositionDecis
   // which IS duration-sensitive (a real, lengthy conversation the
   // customer ended naturally is still CALL_CONNECTED).
   if (signals.endedReason != null && ALWAYS_NO_INTERACTION_HANGUP_REASONS.has(signals.endedReason)) {
+    // On the Telnyx numbers Vapi also ends calls that never connected this
+    // way: status still "queued", never ringing or answered, given up
+    // after ~15s (415 of 422 on 30 Sep). Those are no-answers - recording
+    // them as HUNG_UP undercounted no-answers and kept the leads from
+    // being retried. A call that was answered keeps HUNG_UP as requested.
+    if (signals.answered === false) {
+      return { code: 'NO_ANSWER', confidence: 0.85, reason: 'The call never connected - no answer and no audio from the other side.' };
+    }
     return { code: 'HUNG_UP', confidence: 0.85, reason: 'No audio from the caller ever reached the assistant.' };
   }
 
@@ -234,6 +245,10 @@ export async function loadCallOutcomeSignals(supabase: Supabase, call: Record<st
   const rows: Array<{ event_type: string; payload: any }> = events ?? [];
   const amdDetected = rows.some((e) => e.event_type === 'call.amd_detected' || e.payload?.amd === true || e.payload?.status === 'voicemail' || e.payload?.status === 'answering_machine');
   const dncRequested = rows.some((e) => e.event_type === 'call.dnc_requested');
+  const answered =
+    Boolean(call.answered_at) ||
+    call.direction === 'inbound' ||
+    rows.some((e) => e.event_type === 'call.transitioned.in_progress' || e.event_type === 'call.transitioned.answered' || e.event_type === 'call.inbound_answered');
 
   return {
     status: call.status as CallStatus,
@@ -242,6 +257,7 @@ export async function loadCallOutcomeSignals(supabase: Supabase, call: Record<st
     amdDetected,
     transferStatus: (call.transfer_status as TransferStatus | null) ?? null,
     dncRequested,
+    answered,
   };
 }
 

@@ -75,6 +75,13 @@ describe('dispositionEngine.decideDisposition - the deterministic rules engine',
     expect(long.code).toBe('HUNG_UP');
   });
 
+  it('assigns NO_ANSWER when the "no customer audio" call was never answered - it never connected (Vapi gives up after ~15s)', () => {
+    const noAudioReason = 'call.in-progress.error-assistant-did-not-receive-customer-audio';
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 15, endedReason: noAudioReason, answered: false })).code).toBe('NO_ANSWER');
+    // Answered, then no sound: still HUNG_UP, as requested.
+    expect(decideDisposition(signals({ status: 'completed', durationSeconds: 15, endedReason: noAudioReason, answered: true })).code).toBe('HUNG_UP');
+  });
+
   it('assigns HUNG_UP for noCallerAudioSweep.ts\'s own "no_customer_audio" ended_reason - our own backend backstop for the same underlying condition', () => {
     expect(decideDisposition(signals({ status: 'completed', durationSeconds: 90, endedReason: 'no_customer_audio' })).code).toBe('HUNG_UP');
   });
@@ -132,5 +139,26 @@ describe('decideDisposition - outcome names match what happened (29 Sep request)
     for (const reason of ['twilio-failed-to-connect-call', 'call.start.error-get-transport', 'pipeline-error-openai-llm-failed', 'silence-timed-out', 'customer-busy']) {
       expect(decideDisposition({ ...base, endedReason: reason, durationSeconds: 4 }).code).toBe('DISCONNECTED');
     }
+  });
+});
+
+describe('loadCallOutcomeSignals - was the call ever answered?', async () => {
+  const { createFakeSupabase } = await import('../test/fakeSupabase.js');
+  const { loadCallOutcomeSignals } = await import('./dispositionEngine.js');
+
+  it('reads a never-connected outbound call as unanswered, and an answered or inbound one as answered', async () => {
+    const fake = createFakeSupabase();
+    const base = { status: 'completed', ended_reason: 'call.in-progress.error-assistant-did-not-receive-customer-audio', duration_seconds: 15 };
+    fake.tables.call_events.push({ call_id: 'c-progress', event_type: 'call.transitioned.in_progress', payload: {}, occurred_at: '2026-09-30T00:00:00Z' });
+    const neverConnected = await loadCallOutcomeSignals(fake.supabase as any, { ...base, id: 'c-none', direction: 'outbound', answered_at: null });
+    const answeredAt = await loadCallOutcomeSignals(fake.supabase as any, { ...base, id: 'c-ans', direction: 'outbound', answered_at: '2026-09-30T00:00:05Z' });
+    const inProgress = await loadCallOutcomeSignals(fake.supabase as any, { ...base, id: 'c-progress', direction: 'outbound', answered_at: null });
+    const inbound = await loadCallOutcomeSignals(fake.supabase as any, { ...base, id: 'c-in', direction: 'inbound', answered_at: null });
+    expect(neverConnected.answered).toBe(false);
+    expect(answeredAt.answered).toBe(true);
+    expect(inProgress.answered).toBe(true);
+    expect(inbound.answered).toBe(true);
+    expect(decideDisposition(neverConnected).code).toBe('NO_ANSWER');
+    expect(decideDisposition(inbound).code).toBe('HUNG_UP');
   });
 });
