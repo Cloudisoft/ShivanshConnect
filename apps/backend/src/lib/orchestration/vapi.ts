@@ -63,6 +63,29 @@ const VAPI_REQUEST_TIMEOUT_MS = 20_000;
 const SERVER_MESSAGES = ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'];
 /** A dead line (nobody speaking) is hung up after this long. */
 const SILENCE_TIMEOUT_SECONDS = 20;
+
+/** Vapi's documented customer.speech.timeout hook: when the caller has said
+ * nothing for 7s after the assistant finished speaking, the assistant
+ * speaks up (checks they're still there, or carries on) instead of
+ * sitting silent until the 20s silence timeout hangs up - reported as
+ * calls "disconnected in the middle of the conversation". About 70 of
+ * 114 silence hang-ups on 30 Sep were this: the assistant finished a
+ * line and the call went quiet. Twice at most, counted again once the
+ * caller speaks. The clock only runs after the assistant speaks, so it
+ * never talks into a voicemail greeting it is staying silent for. */
+const CUSTOMER_SILENCE_HOOKS = [
+  {
+    on: 'customer.speech.timeout',
+    options: { timeoutSeconds: 7, triggerMaxCount: 2, triggerResetMode: 'onUserSpeech' },
+    do: [
+      {
+        type: 'say',
+        prompt:
+          "The caller has gone quiet. In one short, natural sentence, check they're still there, or carry on from where the conversation left off. Don't repeat your introduction.",
+      },
+    ],
+  },
+];
 import {
   type AssistantConfig,
   type AssistantResult,
@@ -426,6 +449,28 @@ export class VapiProvider implements CallOrchestrationProvider {
     return (await res.json()) as T;
   }
 
+  /** Sends a request carrying CUSTOMER_SILENCE_HOOKS; if Vapi rejects the
+   * hooks (400 naming them), sends it once more without them, so a
+   * rejected optional setting never fails the call itself - a rejected
+   * voicemail setting failed every campaign call twice on 29-30 Sep. */
+  private async requestWithOptionalHooks<T>(method: string, path: string, body: Record<string, unknown>): Promise<T> {
+    try {
+      return await this.request<T>(method, path, body);
+    } catch (err) {
+      if (!(err instanceof OrchestrationProviderError) || !/\(400 /.test(err.message) || !/hooks/i.test(err.message)) throw err;
+      // eslint-disable-next-line no-console
+      console.error('Vapi rejected the silence hooks - retrying without them', err.message);
+      const stripped: Record<string, unknown> = { ...body };
+      delete stripped.hooks;
+      if (stripped.assistantOverrides && typeof stripped.assistantOverrides === 'object') {
+        const overrides = { ...(stripped.assistantOverrides as Record<string, unknown>) };
+        delete overrides.hooks;
+        stripped.assistantOverrides = overrides;
+      }
+      return this.request<T>(method, path, stripped);
+    }
+  }
+
   /** Maps our internal AssistantConfig into Vapi's real assistant creation
    * payload shape: model (LLM provider/model/messages/temperature),
    * voice (provider + voiceId), firstMessage (greeting),
@@ -504,6 +549,7 @@ export class VapiProvider implements CallOrchestrationProvider {
     // (Vapi default is 30s; set explicitly here so a campaign never
     // leaves a call hung open indefinitely on a dead line).
     payload.silenceTimeoutSeconds = SILENCE_TIMEOUT_SECONDS;
+    payload.hooks = CUSTOMER_SILENCE_HOOKS;
     // Lets the assistant hang up itself once the conversation is over
     // (goodbye said, not interested, wrong number, callback booked) - it
     // had no way to, so finished calls sat open until the silence timeout.
@@ -559,6 +605,10 @@ export class VapiProvider implements CallOrchestrationProvider {
     delete payload.voicemailDetection;
     delete payload.voicemailMessage;
     delete payload.forwardingPhoneNumber;
+    // Held back on inbound until outbound calls confirm Vapi accepts the
+    // hook: an inbound assistant is returned in the webhook response, so
+    // a rejection there can't be retried and would drop the caller.
+    delete payload.hooks;
     payload.firstMessage = opts.firstMessage;
     payload.firstMessageMode = 'assistant-speaks-first';
     const transfer = opts.transferDestinationE164 && /^\+[1-9]\d{6,14}$/.test(opts.transferDestinationE164) ? opts.transferDestinationE164 : null;
@@ -591,13 +641,13 @@ export class VapiProvider implements CallOrchestrationProvider {
 
   async createAssistant(config: AssistantConfig): Promise<AssistantResult> {
     const payload = this.toVapiAssistantPayload(config);
-    const created = await this.request<{ id: string }>('POST', '/assistant', payload);
+    const created = await this.requestWithOptionalHooks<{ id: string }>('POST', '/assistant', payload);
     return { providerAssistantId: created.id };
   }
 
   async updateAssistant(providerAssistantId: string, config: AssistantConfig): Promise<AssistantResult> {
     const payload = this.toVapiAssistantPayload(config);
-    const updated = await this.request<{ id: string }>('PATCH', `/assistant/${encodeURIComponent(providerAssistantId)}`, payload);
+    const updated = await this.requestWithOptionalHooks<{ id: string }>('PATCH', `/assistant/${encodeURIComponent(providerAssistantId)}`, payload);
     return { providerAssistantId: updated.id };
   }
 
@@ -689,6 +739,7 @@ export class VapiProvider implements CallOrchestrationProvider {
         // applies without republishing every agent.
         endCallFunctionEnabled: true,
         silenceTimeoutSeconds: SILENCE_TIMEOUT_SECONDS,
+        hooks: CUSTOMER_SILENCE_HOOKS,
         ...voicemailSettings(params.voicemailDetection),
       };
       // Auto transfer: the assistant gets a real transferCall tool for this
@@ -724,7 +775,7 @@ export class VapiProvider implements CallOrchestrationProvider {
       }
       payload.assistantOverrides = assistantOverrides;
     }
-    const created = await this.request<VapiCallObject>('POST', '/call', payload);
+    const created = await this.requestWithOptionalHooks<VapiCallObject>('POST', '/call', payload);
     return { providerCallId: created.id, status: created.status };
   }
 
