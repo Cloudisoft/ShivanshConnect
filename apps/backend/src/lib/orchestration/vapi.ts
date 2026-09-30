@@ -808,7 +808,7 @@ export class VapiProvider implements CallOrchestrationProvider {
    * is also open at the same time (see getLiveMonitorUrls()/barge
    * handling in routes/liveMonitor.ts).
    */
-  async say(providerCallId: string, text: string): Promise<void> {
+  async say(providerCallId: string, text: string, options: { interruptionsEnabled?: boolean; endCallAfterSpoken?: boolean } = {}): Promise<void> {
     const call = await this.request<VapiCallObject>('GET', `/call/${encodeURIComponent(providerCallId)}`);
     if (!call.monitor?.controlUrl) {
       throw new OrchestrationProviderError('This call has no active control URL - it may have already ended.');
@@ -820,7 +820,7 @@ export class VapiProvider implements CallOrchestrationProvider {
         headers: { 'Content-Type': 'application/json' },
         // Vapi's ClientInboundMessageSay carries the text in `content`, not
         // `message` (published API spec).
-        body: JSON.stringify({ type: 'say', content: text }),
+        body: JSON.stringify({ type: 'say', content: text, ...options }),
         signal: AbortSignal.timeout(10_000),
       });
     } catch (err) {

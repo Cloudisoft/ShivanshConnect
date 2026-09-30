@@ -1,6 +1,6 @@
 import { handleAssistantRequest } from '../services/inboundCalls.js';
 import { scheduleAutoTransferIfAnnounced } from '../services/autoTransfer.js';
-import { checkForVoicemail } from '../services/voicemailBackstop.js';
+import { checkForVoicemail, noteCallerSpeech } from '../services/voicemailBackstop.js';
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { authenticate, requirePermission } from '../middleware/auth.js';
@@ -257,6 +257,7 @@ export async function webhookReceiverRoutes(app: FastifyInstance): Promise<void>
         const call = await callForTranscript(supabase, providerCallId);
         if (call && message.transcriptType !== 'final') {
           emitLiveTranscriptPartial({ callId: call.id, organizationId: call.organization_id, speaker, text });
+          noteCallerSpeech(call.id, speaker);
         } else if (call && !isDuplicateFinal(`${providerCallId}|${speaker}|${message.secondsFromStart ?? ''}|${text}`)) {
           try {
             await ingestLiveTranscriptSegment(supabase, call, {
