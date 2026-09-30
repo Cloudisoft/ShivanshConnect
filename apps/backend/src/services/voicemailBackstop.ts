@@ -12,6 +12,13 @@
  *
  * Only the other side's first lines count, and only early in the call, so a
  * real conversation that later mentions voicemail is never cut off.
+ *
+ * Carrier voicemail systems keep talking after "at the tone, record your
+ * message" ("...press 1 for more options. To send a fax, press 4"), and
+ * that talked over the script and cut it off mid-sentence. So the script
+ * waits until the other side has gone quiet (the beep follows), and is sent
+ * so that nothing on the line can interrupt it; the call ends once it has
+ * been said.
  */
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { resolveProviderForCall } from '../lib/orchestration/resolveProvider.js';
@@ -42,12 +49,21 @@ const MAX_CALLER_LINES = 3;
  * sound after the greeting's last words. */
 const BACKSTOP_DELAY_MS = Number.parseInt(process.env.VOICEMAIL_BACKSTOP_DELAY_MS ?? '', 10) || 1500;
 
+/** The other side must have been silent this long before the script starts
+ * - the greeting, and any system prompts after it, are over. */
+const QUIET_BEFORE_SCRIPT_MS = Number.parseInt(process.env.VOICEMAIL_QUIET_MS ?? '', 10) || 2500;
+/** Never waits longer than this for the line to go quiet. */
+const MAX_WAIT_FOR_QUIET_MS = 20_000;
+const QUIET_POLL_MS = 250;
+
 const ACTIVE_STATUSES = new Set(['answered', 'in_progress']);
 
 interface CallWatch {
   callerLines: number;
   handled: boolean;
   aiText: string[];
+  /** When the other side was last heard (partial or finished words). */
+  lastCallerAt: number;
 }
 
 const watches = new Map<string, CallWatch>();
@@ -55,7 +71,7 @@ const watches = new Map<string, CallWatch>();
 function watchFor(callId: string): CallWatch {
   let w = watches.get(callId);
   if (!w) {
-    w = { callerLines: 0, handled: false, aiText: [] };
+    w = { callerLines: 0, handled: false, aiText: [], lastCallerAt: Date.now() };
     watches.set(callId, w);
     // A call never lasts this long in the watch window; drop the state.
     setTimeout(() => watches.delete(callId), 10 * 60_000).unref?.();
@@ -103,6 +119,17 @@ async function renderVoicemailScript(supabase: Supabase, call: Record<string, an
   });
 }
 
+/** Waits until the other side has been quiet long enough for the beep to
+ * have come - or MAX_WAIT_FOR_QUIET_MS, whichever is first. */
+async function waitForQuietLine(callId: string): Promise<void> {
+  const w = watches.get(callId);
+  if (!w) return;
+  const deadline = Date.now() + MAX_WAIT_FOR_QUIET_MS;
+  while (Date.now() - w.lastCallerAt < QUIET_BEFORE_SCRIPT_MS && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, QUIET_POLL_MS));
+  }
+}
+
 /** Vapi's answer when the call has already ended by the time we act. */
 function isCallAlreadyEnded(err: unknown): boolean {
   return err instanceof Error && /not active/i.test(err.message);
@@ -148,10 +175,18 @@ export async function handleVoicemailBackstop(supabase: Supabase, callId: string
     console.error('voicemailBackstop: could not mark call as voicemail', call.id, err);
   }
 
-  const sayer = provider as unknown as { say?: (id: string, text: string) => Promise<void> };
+  const sayer = provider as unknown as {
+    say?: (id: string, text: string, options?: { interruptionsEnabled?: boolean; endCallAfterSpoken?: boolean }) => Promise<void>;
+  };
+  let scriptSent = false;
   if (message && typeof sayer.say === 'function') {
     try {
-      await sayer.say(providerCallId, message);
+      await waitForQuietLine(call.id);
+      // Uninterruptible: the voicemail system's own prompts must not cut
+      // the script off. Vapi hangs up once it has been said; the endCall
+      // below is only the fallback.
+      await sayer.say(providerCallId, message, { interruptionsEnabled: false, endCallAfterSpoken: true });
+      scriptSent = true;
       await new Promise((resolve) => setTimeout(resolve, speakingTimeMs(message!)));
     } catch (err) {
       // Vapi's own detector usually gets there first and has already ended
@@ -165,7 +200,7 @@ export async function handleVoicemailBackstop(supabase: Supabase, callId: string
   try {
     await provider.endCall(providerCallId);
   } catch (err) {
-    if (isCallAlreadyEnded(err)) return 'skipped';
+    if (isCallAlreadyEnded(err)) return scriptSent ? 'ended' : 'skipped';
     throw err;
   }
   return 'ended';
@@ -181,6 +216,7 @@ export function checkForVoicemail(
 ): void {
   if (call.direction && call.direction !== 'outbound') return;
   const w = watchFor(call.id);
+  if (speaker === 'caller') w.lastCallerAt = Date.now();
   if (w.handled) return;
   if (speaker === 'ai') {
     w.aiText.push(text);
@@ -205,6 +241,14 @@ export function checkForVoicemail(
       });
   }, BACKSTOP_DELAY_MS);
   timer.unref?.();
+}
+
+/** Words still being spoken by the other side: keeps a pending voicemail
+ * script waiting until the line is quiet. Never throws. */
+export function noteCallerSpeech(callId: string, speaker: 'ai' | 'caller'): void {
+  if (speaker !== 'caller') return;
+  const w = watches.get(callId);
+  if (w) w.lastCallerAt = Date.now();
 }
 
 /** Test hook. */

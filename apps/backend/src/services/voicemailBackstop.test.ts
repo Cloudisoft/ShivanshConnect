@@ -12,7 +12,7 @@ const provider = {
 
 vi.mock('../lib/orchestration/resolveProvider.js', () => ({ resolveProviderForCall: async () => provider }));
 
-const { isVoicemailGreeting, handleVoicemailBackstop, checkForVoicemail, resetVoicemailWatches } = await import('./voicemailBackstop.js');
+const { isVoicemailGreeting, handleVoicemailBackstop, checkForVoicemail, noteCallerSpeech, resetVoicemailWatches } = await import('./voicemailBackstop.js');
 
 function seedCall(overrides: Record<string, unknown> = {}) {
   const call = {
@@ -81,7 +81,7 @@ describe('voicemailBackstop', () => {
       const done = handleVoicemailBackstop(fake.supabase as any, call.id);
       await vi.runAllTimersAsync();
       expect(await done).toBe('ended');
-      expect(provider.say).toHaveBeenCalledWith('vapi-1', 'Please call us back.');
+      expect(provider.say).toHaveBeenCalledWith('vapi-1', 'Please call us back.', { interruptionsEnabled: false, endCallAfterSpoken: true });
       expect(provider.say.mock.invocationCallOrder[0]).toBeLessThan(provider.endCall.mock.invocationCallOrder[0]);
     } finally {
       vi.useRealTimers();
@@ -168,7 +168,55 @@ describe('voicemailBackstop - voicemail script placeholders', () => {
       const done = handleVoicemailBackstop(fake.supabase as any, call.id);
       await vi.runAllTimersAsync();
       expect(await done).toBe('ended');
-      expect(provider.say).toHaveBeenCalledWith('vapi-1', 'Hi, this is Ray. Please call us back.');
+      expect(provider.say).toHaveBeenCalledWith('vapi-1', 'Hi, this is Ray. Please call us back.', { interruptionsEnabled: false, endCallAfterSpoken: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('voicemailBackstop - carrier voicemail systems that keep talking', () => {
+  it('waits for the system to go quiet before leaving the script', async () => {
+    provider.endCall.mockReset();
+    provider.say.mockReset();
+    provider.getCall.mockReset();
+    resetVoicemailWatches();
+    vi.useFakeTimers();
+    try {
+      fake.tables.campaigns.push({ id: 'camp-ivr', voicemail_detection_enabled: true, leave_voicemail: true, voicemail_message: 'Please call us back.' });
+      const call = seedCall({ campaign_id: 'camp-ivr' });
+      provider.getCall.mockResolvedValue({ status: 'in-progress', raw: {} });
+      provider.say.mockResolvedValue(undefined);
+      checkForVoicemail(fake.supabase as any, call, 'caller', 'Your call has been forwarded to an automated voice messaging system.', 3);
+      checkForVoicemail(fake.supabase as any, call, 'caller', 'At the tone, please record your message.', 6);
+      // The system keeps going for another few seconds.
+      for (let i = 0; i < 8; i += 1) {
+        await vi.advanceTimersByTimeAsync(1000);
+        noteCallerSpeech(call.id, 'caller');
+      }
+      checkForVoicemail(fake.supabase as any, call, 'caller', 'When you have finished recording, you may hang up or press 1 for more options. To send a fax, press 4 now.', 14);
+      expect(provider.say).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      expect(provider.say).toHaveBeenCalledWith('vapi-1', 'Please call us back.', { interruptionsEnabled: false, endCallAfterSpoken: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts the call as handled when Vapi hangs up by itself after the script', async () => {
+    provider.endCall.mockReset();
+    provider.say.mockReset();
+    provider.getCall.mockReset();
+    vi.useFakeTimers();
+    try {
+      fake.tables.campaigns.push({ id: 'camp-auto-end', voicemail_detection_enabled: true, leave_voicemail: true, voicemail_message: 'Please call us back.' });
+      const call = seedCall({ campaign_id: 'camp-auto-end' });
+      provider.getCall.mockResolvedValue({ status: 'in-progress', raw: {} });
+      provider.say.mockResolvedValue(undefined);
+      provider.endCall.mockRejectedValue(new Error('Call Not Active.'));
+      const done = handleVoicemailBackstop(fake.supabase as any, call.id);
+      await vi.runAllTimersAsync();
+      expect(await done).toBe('ended');
     } finally {
       vi.useRealTimers();
     }
