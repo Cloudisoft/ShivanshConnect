@@ -143,9 +143,11 @@ export const VOICEMAIL_DETECTION_PLAN = {
   // Carrier voicemail systems (number read out, "at the tone... press 1 for
   // more options... press 5 to leave a callback number") take 20-30s to
   // reach the beep; at 20 the script started inside those prompts and was
-  // cut off. Greetings the transcript backstop recognizes get the script
-  // as soon as the line goes quiet, well before this.
-  beepMaxAwaitSeconds: 40,
+  // cut off. Vapi's API rejects anything above 30 (400, failing every
+  // campaign call on 30 Sep 16:54-17:10 UTC) although its SDK docs say 60.
+  // Greetings the transcript backstop recognizes get the script as soon as
+  // the line goes quiet, usually before this.
+  beepMaxAwaitSeconds: 30,
 };
 
 /** Every campaign call detects voicemail. When the campaign has a voicemail
