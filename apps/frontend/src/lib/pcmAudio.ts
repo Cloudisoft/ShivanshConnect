@@ -20,6 +20,39 @@
  */
 
 const DEFAULT_SAMPLE_RATE = 16000;
+/** Live listening volume boost (see the limiter in PcmStreamPlayer). */
+const LISTEN_GAIN = 2.5;
+/** How much of a stream is measured before playback to learn its format. */
+const DETECT_WINDOW_MS = 1500;
+const STANDARD_RATES = [8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000];
+
+function nearestRate(rate: number): number {
+  return STANDARD_RATES.reduce((best, r) => (Math.abs(r - rate) < Math.abs(best - rate) ? r : best), STANDARD_RATES[0]);
+}
+
+/** Interleaved stereo alternates between two different signals, so
+ * neighbouring samples differ more than samples two apart; in mono it is
+ * the other way round (audio is smooth sample to sample). */
+function looksStereo(chunks: Int16Array[]): boolean {
+  let d1 = 0;
+  let d2 = 0;
+  for (const c of chunks) {
+    for (let i = 0; i + 2 < c.length; i += 2) {
+      d1 += Math.abs(c[i] - c[i + 1]);
+      d2 += Math.abs(c[i] - c[i + 2]);
+    }
+  }
+  return d2 > 0 && d1 > d2 * 1.1;
+}
+
+/** Works out sample rate and channels from how fast bytes arrive. */
+export function detectPcmFormat(chunks: Int16Array[], bytes: number, seconds: number): { sampleRate: number; channels: 1 | 2 } {
+  const bytesPerSecond = bytes / Math.max(seconds, 0.001);
+  const stereo = looksStereo(chunks);
+  const channels: 1 | 2 = stereo ? 2 : 1;
+  const sampleRate = nearestRate(bytesPerSecond / (2 * channels));
+  return { sampleRate, channels };
+}
 
 /** One AudioContext for the page, created/resumed by unlockAudio() during
  * any click - browsers only allow audio to start from a user gesture, so
@@ -69,15 +102,37 @@ export class PcmStreamPlayer {
       this.ownsContext = true;
     }
     void this.ctx.resume().catch(() => undefined);
+    // Phone audio arrives quiet ("live listening is too low"): boosted,
+    // with a compressor in front of the speakers so peaks never clip.
     this.out = this.ctx.createGain();
-    this.out.connect(this.ctx.destination);
+    this.out.gain.value = LISTEN_GAIN;
+    const limiter = this.ctx.createDynamicsCompressor();
+    limiter.threshold.value = -6;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 12;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.1;
+    this.out.connect(limiter);
+    limiter.connect(this.ctx.destination);
+    this.limiter = limiter;
   }
+
+  private limiter: DynamicsCompressorNode | null = null;
+  /** True once the stream announced its format, or it was measured. */
+  private formatKnown = false;
+  private detectStartedAt = 0;
+  private detectBytes = 0;
+  private pending: Int16Array[] = [];
 
   /** Applies a stream's own announced format (e.g. a JSON start frame
    * carrying sampleRate/channels) when it provides one. */
   setFormat(sampleRate: number, channels: number): void {
-    if (Number.isFinite(sampleRate) && sampleRate >= 8000 && sampleRate <= 48000) this.sampleRate = sampleRate;
+    if (Number.isFinite(sampleRate) && sampleRate >= 8000 && sampleRate <= 48000) {
+      this.sampleRate = sampleRate;
+      this.formatKnown = true;
+    }
     if (channels === 1 || channels === 2) this.channels = channels;
+    if (this.formatKnown) this.flushPending();
   }
 
   /** Call from a click: lets a player that started without one play. */
@@ -90,9 +145,42 @@ export class PcmStreamPlayer {
     return this.ctx.state === 'running';
   }
 
+  /** Vapi's listen stream doesn't announce its format, and assuming one
+   * (16 kHz mono) played it at the wrong speed/as noise when it differed -
+   * "live listening is not working". So the first ~1.5 s is measured: the
+   * byte rate gives sample rate x channels, and the sample pattern tells
+   * interleaved stereo (caller and AI on separate channels) from mono. */
   push(int16: Int16Array): void {
     if (int16.length === 0) return;
     if (this.ctx.state === 'suspended') void this.ctx.resume().catch(() => undefined);
+    if (!this.formatKnown) {
+      const now = performance.now();
+      // Timed from the first chunk and counting only what arrives after it,
+      // so a backlog flushed on connect doesn't inflate the byte rate.
+      if (this.detectStartedAt === 0) this.detectStartedAt = now;
+      else this.detectBytes += int16.byteLength;
+      this.pending.push(int16);
+      const elapsed = now - this.detectStartedAt;
+      if (elapsed < DETECT_WINDOW_MS) return;
+      const detected = detectPcmFormat(this.pending, this.detectBytes, elapsed / 1000);
+      this.sampleRate = detected.sampleRate;
+      this.channels = detected.channels;
+      this.formatKnown = true;
+      // eslint-disable-next-line no-console
+      console.info('Live Monitor audio format', detected);
+      this.flushPending();
+      return;
+    }
+    this.play(int16);
+  }
+
+  private flushPending(): void {
+    const queued = this.pending;
+    this.pending = [];
+    for (const chunk of queued) this.play(chunk);
+  }
+
+  private play(int16: Int16Array): void {
     // Interleaved stereo (e.g. caller + assistant on separate channels) is
     // mixed down to mono so the supervisor hears both sides.
     const frames = Math.floor(int16.length / this.channels);
@@ -119,6 +207,7 @@ export class PcmStreamPlayer {
   async close(): Promise<void> {
     try {
       this.out.disconnect();
+      this.limiter?.disconnect();
       if (this.ownsContext) await this.ctx.close();
     } catch {
       // Already closed - fine.

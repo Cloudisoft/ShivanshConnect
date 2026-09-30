@@ -244,7 +244,6 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const [kbIds, setKbIds] = useState<string[]>(v?.knowledge_base_ids ?? []);
   const [transferNumber, setTransferNumber] = useState(campaign.transfer_number_e164 ?? '');
   const [introName, setIntroName] = useState(campaign.intro_name ?? '');
-  const [introSaved, setIntroSaved] = useState(false);
   const [voicemailEnabled, setVoicemailEnabled] = useState(campaign.voicemail_detection_enabled);
   const [voicemailMessage, setVoicemailMessage] = useState(campaign.voicemail_message ?? '');
   const [leaveVoicemail, setLeaveVoicemail] = useState(campaign.leave_voicemail);
@@ -254,7 +253,6 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
   const [callingDays, setCallingDays] = useState<number[]>(campaign.calling_days);
   const [timezone, setTimezone] = useState(campaign.timezone);
   const [error, setError] = useState<string | null>(null);
-  const [savedDraft, setSavedDraft] = useState<{ id: string } | null>(null);
   const [promptPlaceholderNotice, setPromptPlaceholderNotice] = useState<string | null>(null);
 
   const kbQuery = useKnowledgeBases(agentId || undefined);
@@ -273,41 +271,20 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
     setKbIds(v?.knowledge_base_ids ?? []);
   }, [versionId]);
 
-  const existingDraftId = campaign.draft_version?.id ?? null;
-  useEffect(() => {
-    // Reopening a campaign that already has a saved draft should offer
-    // "Publish this draft" immediately, not only after clicking Save again.
-    setSavedDraft(existingDraftId ? { id: existingDraftId } : null);
-  }, [existingDraftId]);
-
   function toggleDay(day: number) {
     setCallingDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day].sort()));
   }
 
-  // True whenever a field that ONLY "Save as new draft version" actually
-  // persists has been changed - this is exactly the trap that lost a
-  // voice change silently: a user edits Voice, clicks "Save calling/
-  // voicemail settings" (updateCampaign, which never touches these
-  // fields at all), sees no error, and the change is gone the moment
-  // they navigate away and the form re-syncs from the still-unchanged
-  // published/draft version.
-  const hasUnsavedDraftOnlyChanges =
-    prompt !== (v?.prompt ?? '') ||
-    agentId !== (v?.ai_agent_id ?? '') ||
-    voiceId !== (v?.voice_id ?? '') ||
-    scriptId !== (v?.script_id ?? '') ||
-    JSON.stringify([...kbIds].sort()) !== JSON.stringify([...(v?.knowledge_base_ids ?? [])].sort());
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
 
-  async function handleSaveCampaignFields() {
+  /** Per request ("one button to publish all changes"): everything on this
+   * tab is saved and made live by this single button - campaign settings,
+   * introduction name, phone numbers, and a new published version with the
+   * prompt/agent/voice/script/knowledge base and calling/voicemail rules. */
+  async function handleSaveAndPublish() {
     setError(null);
-    if (hasUnsavedDraftOnlyChanges) {
-      const proceed = window.confirm(
-        "You've also changed Agent, Voice, Script and/or Knowledge base above - this button does NOT save those. " +
-          'Click Cancel and use "Save as new draft version" (then Publish) instead, or click OK to save only the ' +
-          'calling/voicemail fields and leave the others as they were.',
-      );
-      if (!proceed) return;
-    }
+    setSaving(true);
     try {
       await updateCampaign.mutateAsync({
         id: campaign.id,
@@ -320,34 +297,12 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
         calling_window_end: callingWindowEnd,
         calling_days: callingDays,
         timezone,
+        intro_name: introName.trim() || null,
       });
-    } catch (err) {
-      setError(describeApiError(err, 'Failed to save campaign fields.'));
-    }
-  }
-
-  async function handleSaveIntroName() {
-    setError(null);
-    try {
-      await updateCampaign.mutateAsync({ id: campaign.id, intro_name: introName.trim() || null });
-      setIntroSaved(true);
-    } catch (err) {
-      setError(describeApiError(err, 'Failed to save the introduction name.'));
-    }
-  }
-
-  async function handleSavePhoneNumbers() {
-    setError(null);
-    try {
-      await setPhoneNumbers.mutateAsync({ id: campaign.id, phoneNumberIds });
-    } catch (err) {
-      setError(describeApiError(err, 'Failed to save phone numbers.'));
-    }
-  }
-
-  async function handleSaveDraftVersion() {
-    setError(null);
-    try {
+      const currentNumbers = campaign.phone_numbers.map((p) => p.id).sort().join(',');
+      if ([...phoneNumberIds].sort().join(',') !== currentNumbers) {
+        await setPhoneNumbers.mutateAsync({ id: campaign.id, phoneNumberIds });
+      }
       const version = await createVersion.mutateAsync({
         id: campaign.id,
         prompt,
@@ -356,44 +311,42 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
         script_id: scriptId || null,
         knowledge_base_ids: kbIds,
         transfer_number_e164: transferNumber || null,
-        calling_rules: { timezone, calling_window_start: callingWindowStart, calling_window_end: callingWindowEnd, calling_days: callingDays },
+        calling_rules: {
+          timezone,
+          calling_window_start: callingWindowStart,
+          calling_window_end: callingWindowEnd,
+          calling_days: callingDays,
+          lead_cooldown_minutes: cooldown,
+          voicemail_detection_enabled: voicemailEnabled,
+          voicemail_message: voicemailMessage || null,
+          leave_voicemail: leaveVoicemail,
+        },
       });
-      setSavedDraft({ id: version.id });
+      await publish(version.id);
     } catch (err) {
-      setError(describeApiError(err, 'Failed to save draft version.'));
+      setError(describeApiError(err, 'Failed to save and publish the campaign.'));
+    } finally {
+      setSaving(false);
     }
   }
 
-  async function handlePublish(versionId: string) {
-    setError(null);
+  async function publish(versionId: string) {
     try {
       await publishVersion.mutateAsync({ id: campaign.id, versionId });
-      setSavedDraft(null);
+      setSavedAt(new Date().toLocaleTimeString());
     } catch (err) {
-      // Real trap this exists to catch: the linked AI agent has an
-      // unpublished draft (e.g. a model switched in Configuration but never
-      // published) - publishing the campaign now would snapshot the OLD
-      // agent config, not the draft change. Backend blocks with this code;
-      // offer to proceed anyway rather than just failing silently confusing.
+      // The linked AI agent has an unpublished draft (e.g. a model switch
+      // never published) - publishing now would lock in the agent's older
+      // config. Ask rather than fail.
       const details = (err as { details?: { code?: string; agentDraftVersionNumber?: number } } | undefined)?.details;
-      if (details?.code === 'STALE_AGENT_DRAFT') {
-        const proceed = window.confirm(
-          `The AI agent linked to this campaign has an unpublished draft (v${details.agentDraftVersionNumber}) with changes ` +
-            "that were never published - for example a model switch. Publishing this campaign now will lock in the agent's " +
-            'OLDER published config, not that draft. Go to the agent and click Publish there first (recommended), or click OK ' +
-            'to publish this campaign anyway with the older agent config.',
-        );
-        if (proceed) {
-          try {
-            await publishVersion.mutateAsync({ id: campaign.id, versionId, acknowledgeStaleAgentDraft: true });
-            setSavedDraft(null);
-          } catch (err2) {
-            setError(describeApiError(err2, 'Failed to publish version.'));
-          }
-        }
-        return;
-      }
-      setError(describeApiError(err, 'Failed to publish version.'));
+      if (details?.code !== 'STALE_AGENT_DRAFT') throw err;
+      const proceed = window.confirm(
+        `The AI agent linked to this campaign has unpublished changes (v${details.agentDraftVersionNumber}), for example a model switch. ` +
+          "Publishing now uses the agent's older published setup. Click Cancel to publish the agent first (recommended), or OK to publish this campaign anyway.",
+      );
+      if (!proceed) return;
+      await publishVersion.mutateAsync({ id: campaign.id, versionId, acknowledgeStaleAgentDraft: true });
+      setSavedAt(new Date().toLocaleTimeString());
     }
   }
 
@@ -416,8 +369,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
         <Alert variant="info">
           <div className="flex items-center gap-2">
             <Info className="h-4 w-4" />
-            Showing your saved draft (v{campaign.draft_version.version_number}) - it's not live yet. Publish it to replace{' '}
-            {campaign.current_version ? `the currently published v${campaign.current_version.version_number}` : "what's running"}.
+            Showing your saved draft (v{campaign.draft_version.version_number}) - it's not live yet. Click <strong>Save &amp; publish</strong> to make it live.
           </div>
         </Alert>
       ) : (
@@ -426,8 +378,8 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
             <div className="flex items-center gap-2">
               <Info className="h-4 w-4" />
               Current published version: v{campaign.current_version.version_number}, published{' '}
-              {campaign.current_version.published_at ? new Date(campaign.current_version.published_at).toLocaleString() : 'never'}. Editing below and
-              saving creates a NEW draft version - it does not change what's currently running.
+              {campaign.current_version.published_at ? new Date(campaign.current_version.published_at).toLocaleString() : 'never'}. Change anything below
+              and click <strong>Save &amp; publish</strong> - calls use it from the next one.
             </div>
           </Alert>
         )
@@ -461,13 +413,6 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
       </Card>
 
       <Card className="grid gap-4 sm:grid-cols-2">
-        <div className="sm:col-span-2">
-          <p className="text-xs font-medium text-ink-500">
-            Agent, Voice, Script and Knowledge base changes save with the <strong>&quot;Save as new draft version&quot;</strong> button
-            below, not &quot;Save calling/voicemail settings&quot; - and still need Publish to take effect, same as the Script/prompt
-            section above.
-          </p>
-        </div>
         <div>
           <Label>AI agent</Label>
           <select className="w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm" value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={!canEdit}>
@@ -498,14 +443,8 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
             ))}
           </div>
           <p className="mt-1 text-xs text-ink-500">
-            Select one or more - any mix of providers works. The dialer rotates across every number checked here. Saves
-            immediately with its own button below, not &quot;Save calling/voicemail settings&quot; - no publish needed.
+            Select one or more - any mix of providers works. The dialer rotates across every number checked here.
           </p>
-          {canEdit && (
-            <Button variant="secondary" className="mt-2" onClick={handleSavePhoneNumbers} disabled={setPhoneNumbers.isPending}>
-              {setPhoneNumbers.isPending ? 'Saving...' : 'Save phone numbers'}
-            </Button>
-          )}
         </div>
         <div>
           <Label>Voice</Label>
@@ -522,25 +461,9 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
         </div>
         <div>
           <Label>Introduce as</Label>
-          <div className="flex gap-2">
-            <Input
-              value={introName}
-              onChange={(e) => {
-                setIntroName(e.target.value);
-                setIntroSaved(false);
-              }}
-              placeholder={campaign.name}
-              maxLength={200}
-              disabled={!canEdit}
-            />
-            {canEdit && (
-              <Button variant="secondary" onClick={handleSaveIntroName} disabled={updateCampaign.isPending || introName.trim() === (campaign.intro_name ?? '')}>
-                {introSaved ? 'Saved' : 'Save'}
-              </Button>
-            )}
-          </div>
+          <Input value={introName} onChange={(e) => setIntroName(e.target.value)} placeholder={campaign.name} maxLength={200} disabled={!canEdit} />
           <p className="mt-1 text-xs text-ink-500">
-            The AI says "this is {'{voice}'} from <strong>{introName.trim() || campaign.name}</strong>". Leave empty to use the campaign name. Takes effect on the next call, even while running.
+            The AI says "this is {'{voice}'} from <strong>{introName.trim() || campaign.name}</strong>". Leave empty to use the campaign name.
           </p>
         </div>
         <div>
@@ -658,30 +581,14 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
       </Card>
 
       {canEdit && (
-        <>
-          {hasUnsavedDraftOnlyChanges && (
-            <Alert>
-              You've changed Agent, Voice, Script, and/or Knowledge base above. Click <strong>&quot;Save as new draft version&quot;</strong>{' '}
-              below (then Publish) to keep that change - &quot;Save calling/voicemail settings&quot; will NOT save it.
-            </Alert>
-          )}
-          <Alert variant="info">
-            Calling window, days, and voicemail settings are saved here, but they only take effect for new calls once you publish a version (below) - saving alone does not change what the dialer is currently using.
-          </Alert>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={handleSaveCampaignFields} disabled={updateCampaign.isPending}>
-              Save calling/voicemail settings
-            </Button>
-            <Button onClick={handleSaveDraftVersion} disabled={createVersion.isPending}>
-              Save as new draft version
-            </Button>
-            {savedDraft && (
-              <Button variant="primary" onClick={() => handlePublish(savedDraft.id)} disabled={publishVersion.isPending}>
-                Publish this draft (snapshots config now)
-              </Button>
-            )}
-          </div>
-        </>
+        <div className="sticky bottom-0 flex flex-wrap items-center gap-3 border-t border-ink-200 bg-white/95 py-3">
+          <Button onClick={handleSaveAndPublish} disabled={saving}>
+            {saving ? 'Publishing...' : 'Save & publish'}
+          </Button>
+          <span className="text-xs text-ink-500">
+            {savedAt ? `Published at ${savedAt} - new calls use these settings.` : 'Saves every change on this page and makes it live for the next call.'}
+          </span>
+        </div>
       )}
     </div>
   );
