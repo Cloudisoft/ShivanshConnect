@@ -89,7 +89,14 @@ export function decideRetry(input: RetryDecisionInput): RetryDecision {
   const reason = input.endedReason ?? '';
   const overrideSet = input.retryOnOverride ? new Set(input.retryOnOverride) : null;
 
-  const isNoAnswer = overrideSet ? overrideSet.has(reason) && NO_ANSWER_ENDED_REASONS.has(reason) : NO_ANSWER_ENDED_REASONS.has(reason);
+  // A call disposed NO_ANSWER is a no-answer whatever raw reason the
+  // provider gave (e.g. a never-connected call Vapi ends as
+  // "did-not-receive-customer-audio") - those leads were dropped instead
+  // of retried. A campaign override still decides: its no-answer reasons
+  // opt it in.
+  const noAnswerByDisposition =
+    input.dispositionCode === 'NO_ANSWER' && (!overrideSet || [...NO_ANSWER_ENDED_REASONS].some((r) => overrideSet.has(r)));
+  const isNoAnswer = noAnswerByDisposition || (overrideSet ? overrideSet.has(reason) && NO_ANSWER_ENDED_REASONS.has(reason) : NO_ANSWER_ENDED_REASONS.has(reason));
   const isBusy = overrideSet ? overrideSet.has(reason) && BUSY_ENDED_REASONS.has(reason) : BUSY_ENDED_REASONS.has(reason);
   const isTemporaryFailure = overrideSet ? overrideSet.has(reason) && TEMPORARY_FAILURE_ENDED_REASONS.has(reason) : TEMPORARY_FAILURE_ENDED_REASONS.has(reason);
   // A campaign-level override may ALSO list reasons this module doesn't

@@ -16,6 +16,23 @@ function input(overrides: Partial<RetryDecisionInput>): RetryDecisionInput {
 }
 
 describe('retryEngine - named rules', () => {
+  it('retries a call disposed NO_ANSWER whatever raw reason the provider gave (a never-connected call)', () => {
+    const d = decideRetry(input({ dispositionCode: 'NO_ANSWER', endedReason: 'call.in-progress.error-assistant-did-not-receive-customer-audio' }));
+    expect(d.shouldRetry).toBe(true);
+    expect(d.rule).toBe('no_answer_retry');
+    // Our own dial timeout is a no-answer too.
+    expect(decideRetry(input({ dispositionCode: 'NO_ANSWER', endedReason: 'dial_timeout' })).shouldRetry).toBe(true);
+  });
+
+  it('a campaign retry override without no-answer reasons keeps NO_ANSWER calls from retrying', () => {
+    expect(decideRetry(input({ dispositionCode: 'NO_ANSWER', endedReason: 'dial_timeout', retryOnOverride: ['busy'] })).shouldRetry).toBe(false);
+    expect(decideRetry(input({ dispositionCode: 'NO_ANSWER', endedReason: 'dial_timeout', retryOnOverride: ['no-answer'] })).shouldRetry).toBe(true);
+  });
+
+  it('never retries a NO_ANSWER lead past its max attempts', () => {
+    expect(decideRetry(input({ dispositionCode: 'NO_ANSWER', endedReason: 'dial_timeout', attemptCount: 3 })).shouldRetry).toBe(false);
+  });
+
   it('HARD RULE: a DNC lead never retries, even under adversarial input that tries to force it', () => {
     // Adversarial: everything else says "retry me" (no-answer, attempts
     // far below max, a generous retryOnOverride, a non-DNC disposition
