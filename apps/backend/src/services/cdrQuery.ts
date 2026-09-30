@@ -226,8 +226,10 @@ export async function buildCdrRows(supabase: Supabase, orgId: string, calls: Rec
       campaign_name: campaign?.name ?? null,
       lead_id: call.lead_id ?? null,
       lead_name: lead ? `${lead.first_name ?? ''} ${lead.last_name ?? ''}`.trim() || null : null,
-      caller_number: phoneNumber?.phone_number ?? '',
-      destination_number: call.customer_number,
+      // Who called whom: on an incoming call the customer is the caller and
+      // our number the destination (they used to be the other way round).
+      caller_number: call.direction === 'inbound' ? call.customer_number : (phoneNumber?.phone_number ?? ''),
+      destination_number: call.direction === 'inbound' ? (phoneNumber?.phone_number ?? '') : call.customer_number,
       direction: call.direction,
       ai_agent_id: call.ai_agent_id,
       ai_agent_name: agent?.name ?? null,

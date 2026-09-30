@@ -11,6 +11,7 @@ import { useRowSelection } from '../hooks/useRowSelection';
 import { RowCheckbox, SelectPageCheckbox, SelectionBar } from '../components/SelectionBar';
 import { FilterBar, FilterDate, FilterSearch, FilterSelect, dayToIso, hasActiveFilters } from '../components/FilterBar';
 import { Badge, Button, Card } from '../components/ui';
+import { DirectionBadge, customerNumber } from '../components/cdr/DirectionBadge';
 import { CallDetailDrawer } from '../components/cdr/CallDetailDrawer';
 import { ExportTrigger } from '../components/exports/ExportTrigger';
 import { ExportHistoryList } from '../components/exports/ExportHistoryList';
@@ -205,10 +206,11 @@ export function CdrPage(): JSX.Element {
                     <SelectPageCheckbox selection={selection} label="Select all calls on this page" />
                   </th>
                 )}
+                <th className="px-4 py-2">Direction</th>
                 <th className="px-4 py-2">Started</th>
                 <th className="px-4 py-2">Ended</th>
                 <th className="px-4 py-2">Lead</th>
-                <th className="px-4 py-2">Destination</th>
+                <th className="px-4 py-2">Customer number</th>
                 <th className="px-4 py-2">Campaign</th>
                 <th className="px-4 py-2">Agent</th>
                 <th className="px-4 py-2">Duration</th>
@@ -222,13 +224,14 @@ export function CdrPage(): JSX.Element {
                 <tr key={row.call_id} className="cursor-pointer hover:bg-ink-50" onClick={() => setSelectedCallId(row.call_id)}>
                   {canExport && (
                     <td className="px-4 py-2" onClick={(e) => e.stopPropagation()}>
-                      <RowCheckbox selection={selection} id={row.call_id} label={`Select call to ${row.destination_number}`} />
+                      <RowCheckbox selection={selection} id={row.call_id} label={`Select call with ${customerNumber(row)}`} />
                     </td>
                   )}
+                  <td className="px-4 py-2"><DirectionBadge direction={row.direction} /></td>
                   <td className="px-4 py-2 text-ink-900">{row.started_at ? new Date(row.started_at).toLocaleString() : '-'}</td>
                   <td className="px-4 py-2 text-ink-900">{row.ended_at ? new Date(row.ended_at).toLocaleString() : '-'}</td>
                   <td className="px-4 py-2 text-ink-700">{row.lead_name ?? '-'}</td>
-                  <td className="px-4 py-2 font-mono text-ink-700">{row.destination_number}</td>
+                  <td className="px-4 py-2 font-mono text-ink-700">{customerNumber(row)}</td>
                   <td className="px-4 py-2 text-ink-700">{row.campaign_name ?? '-'}</td>
                   <td className="px-4 py-2 text-ink-700">{row.ai_agent_name ?? '-'}</td>
                   <td className="px-4 py-2 text-ink-700">{row.duration_seconds != null ? `${row.duration_seconds}s` : '-'}</td>
