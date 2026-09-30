@@ -188,6 +188,7 @@ describe('VapiProvider', () => {
       serverMessages: ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'],
       endCallFunctionEnabled: true,
       silenceTimeoutSeconds: 20,
+      hooks: [expect.objectContaining({ on: 'customer.speech.timeout' })],
     });
     // Callbacks and Do-Not-Call requests are available on every call.
     expect(tools.map((t: any) => t.function?.name ?? t.type)).toEqual(['schedule_callback', 'request_dnc']);
@@ -218,6 +219,74 @@ describe('VapiProvider', () => {
     expect(on.voicemailMessage).toBe('Call us back.');
     expect(toggledOff.voicemailMessage).toBe('Call us back.');
     expect(noCampaign.voicemailDetection).toBeUndefined();
+  });
+
+  it('createCall() makes the assistant speak up when the caller goes quiet, instead of waiting for the silence hang-up', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_h', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await new VapiProvider('sk-test').createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: null,
+    });
+    const [hook] = JSON.parse(fetchMock.mock.calls[0][1].body).assistantOverrides.hooks;
+    expect(hook.on).toBe('customer.speech.timeout');
+    // Within Vapi's documented limits (timeoutSeconds 2-1000).
+    expect(hook.options).toEqual({ timeoutSeconds: 7, triggerMaxCount: 2, triggerResetMode: 'onUserSpeech' });
+    expect(hook.do).toHaveLength(1);
+    expect(hook.do[0].type).toBe('say');
+    expect(typeof hook.do[0].prompt).toBe('string');
+  });
+
+  it('createCall() retries once without the hooks if Vapi rejects them, so the call still goes out', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 400, text: async () => '{"message":["assistantOverrides.hooks.0.options.timeoutSeconds must not be greater than 5"]}' })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'call_retry', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await new VapiProvider('sk-test').createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: null,
+    });
+    expect(result.providerCallId).toBe('call_retry');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const retried = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(retried.assistantOverrides.hooks).toBeUndefined();
+    expect(retried.assistantOverrides.silenceTimeoutSeconds).toBe(20);
+  });
+
+  it('createCall() does not retry on a 400 that has nothing to do with the hooks', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 400, text: async () => '{"message":["customer.number must be a valid phone number"]}' });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      new VapiProvider('sk-test').createCall({
+        callId: 'internal-call-1',
+        organizationId: 'org-1',
+        providerAssistantId: 'asst_123',
+        agentVersionId: 'version-1',
+        fromPhoneNumber: '+14845551111',
+        fromPhoneNumberProviderId: 'vapi-pn-1',
+        toPhoneNumber: '+1484',
+        transferDestinationE164: null,
+      }),
+    ).rejects.toBeInstanceOf(OrchestrationProviderError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('buildInboundAssistant() holds the silence hooks back for now', () => {
+    const payload = new VapiProvider('sk-test').buildInboundAssistant(BASE_CONFIG, { firstMessage: 'Hi', systemPrompt: 'Be nice.', transferDestinationE164: null, knowledgeBaseSearch: false });
+    expect(payload.hooks).toBeUndefined();
   });
 
   it('createCall() sends real assistantOverrides.firstMessage/model.messages when a per-lead override is resolved (Bug 1)', async () => {
@@ -254,6 +323,7 @@ describe('VapiProvider', () => {
       serverMessages: ['status-update', 'end-of-call-report', 'transcript', 'tool-calls'],
       endCallFunctionEnabled: true,
       silenceTimeoutSeconds: 20,
+      hooks: [expect.objectContaining({ on: 'customer.speech.timeout' })],
       firstMessage: 'Hi, am I speaking with Priya?',
       model: {
         provider: 'anthropic',
