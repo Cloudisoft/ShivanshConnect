@@ -24,7 +24,7 @@
  * organization_id server-side, on top of RLS.
  */
 import type { FastifyInstance } from 'fastify';
-import { encodeMp3 } from '../lib/audio/mp3.js';
+import { encodeMp3, normalizeLoudnessMp3 } from '../lib/audio/mp3.js';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok, paginationMeta } from '../lib/response.js';
@@ -77,6 +77,24 @@ export async function maybeTranscodeToMp3(sourceBuffer: Buffer, sourceFormat: st
     // ffmpeg not installed (ENOENT) or failed - serve the real source
     // bytes/format rather than fabricating an mp3.
     return { buffer: sourceBuffer, contentType: sourceFormat === 'wav' ? 'audio/wav' : 'audio/mpeg', extension: sourceFormat };
+  }
+}
+
+/** Normalized recordings, so replaying one doesn't re-run ffmpeg. */
+const loudCache = new Map<string, Buffer>();
+const LOUD_CACHE_MAX = 40;
+
+async function loudRecording(key: string, buffer: Buffer, extension: string): Promise<Buffer> {
+  if (extension !== 'mp3') return buffer;
+  const cached = loudCache.get(key);
+  if (cached) return cached;
+  try {
+    const loud = await normalizeLoudnessMp3(buffer);
+    loudCache.set(key, loud);
+    if (loudCache.size > LOUD_CACHE_MAX) loudCache.delete(loudCache.keys().next().value as string);
+    return loud;
+  } catch {
+    return buffer;
   }
 }
 
@@ -221,7 +239,11 @@ export async function cdrRoutes(app: FastifyInstance): Promise<void> {
       }
       throw err;
     }
-    const { buffer, contentType, extension } = await maybeTranscodeToMp3(sourceBuffer, recording.format ?? 'mp3');
+    const transcoded = await maybeTranscodeToMp3(sourceBuffer, recording.format ?? 'mp3');
+    const { contentType, extension } = transcoded;
+    // Played/downloaded at a normal listening level (recordings were too
+    // quiet); falls back to the stored audio if normalization fails.
+    const buffer = await loudRecording(recording.storage_path, transcoded.buffer, extension);
 
     reply.header('Content-Type', contentType);
     reply.header('Content-Disposition', `attachment; filename="call-${callId}.${extension}"`);
