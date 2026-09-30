@@ -136,6 +136,15 @@ describe('cdrQuery.fetchCdrCallsPage / buildCdrRows', () => {
     expect(row2.disposition_code).toBeNull();
   });
 
+  it('on an incoming call the customer is the caller and our number the destination', async () => {
+    const { supabase, orgId, call1 } = seed();
+    const [outgoing] = await buildCdrRows(supabase as any, orgId, [call1]);
+    const [incoming] = await buildCdrRows(supabase as any, orgId, [{ ...call1, direction: 'inbound' }]);
+    expect(incoming.caller_number).toBe(outgoing.destination_number);
+    expect(incoming.destination_number).toBe(outgoing.caller_number);
+    expect(incoming.direction).toBe('inbound');
+  });
+
   it('never returns a row for a call belonging to a different organization even when its id is passed directly', async () => {
     const { supabase, otherOrgId, otherCall } = seed();
     const rows = await buildCdrRows(supabase as any, otherOrgId, [otherCall]);

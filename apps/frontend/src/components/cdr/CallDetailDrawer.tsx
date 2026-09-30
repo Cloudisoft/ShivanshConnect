@@ -5,6 +5,7 @@ import { dispositionTone, callStatusLabel, EVALUATION_SCORE_CATEGORY_LABELS } fr
 import { useCdrDetail, fetchRecordingObjectUrl } from '../../hooks/useCdr';
 import { useCallEvaluation } from '../../hooks/useEvaluations';
 import { Badge, Button, Input } from '../ui';
+import { DirectionBadge } from './DirectionBadge';
 
 function formatMs(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -53,7 +54,7 @@ export function CallDetailDrawer({ callId, onClose }: { callId: string; onClose:
               <Field label="AI Agent" value={detail.ai_agent_name ?? '-'} />
               <Field label="Voice" value={detail.voice_name ?? '-'} />
               <Field label="Engine" value={detail.engine} />
-              <Field label="Direction" value={detail.direction} />
+              <Field label="Direction" value={<DirectionBadge direction={detail.direction} />} />
               <Field label="Duration" value={detail.duration_seconds != null ? `${detail.duration_seconds}s` : '-'} />
               <Field label="Talk duration" value={detail.talk_duration_seconds != null ? `${detail.talk_duration_seconds}s` : '-'} />
               <Field label="Status" value={<Badge>{callStatusLabel(detail.status)}</Badge>} />
