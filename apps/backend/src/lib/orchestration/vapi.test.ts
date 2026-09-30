@@ -108,7 +108,7 @@ describe('VapiProvider', () => {
     expect(body.voicemailDetection).toEqual({
       provider: 'vapi',
       backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 },
-      beepMaxAwaitSeconds: 20,
+      beepMaxAwaitSeconds: 40,
     });
     expect(body.voicemailMessage).toBe('Please call us back at 555-0100.');
     // Office ambience on every campaign; the old per-campaign noise level no longer maps to anything.
@@ -131,7 +131,7 @@ describe('VapiProvider', () => {
     expect(body.voicemailDetection).toEqual({
       provider: 'vapi',
       backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 },
-      beepMaxAwaitSeconds: 20,
+      beepMaxAwaitSeconds: 40,
     });
     expect(body.voicemailMessage).toBeUndefined();
     expect(body.backgroundSound).toBe('office');
@@ -211,7 +211,7 @@ describe('VapiProvider', () => {
     await provider.createCall({ ...base, voicemailDetection: { enabled: false, leaveVoicemail: true, message: 'Call us back.' } });
     await provider.createCall({ ...base, voicemailDetection: null });
     const [on, toggledOff, noCampaign] = fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).assistantOverrides);
-    const plan = { provider: 'vapi', backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 }, beepMaxAwaitSeconds: 20 };
+    const plan = { provider: 'vapi', backoffPlan: { startAtSeconds: 2.5, frequencySeconds: 2.5, maxRetries: 5 }, beepMaxAwaitSeconds: 40 };
     // Every campaign call detects voicemail; the campaign's script is left after the beep.
     expect(on.voicemailDetection).toEqual(plan);
     expect(toggledOff.voicemailDetection).toEqual(plan);
