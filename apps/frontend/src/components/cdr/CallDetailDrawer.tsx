@@ -47,7 +47,7 @@ export function CallDetailDrawer({ callId, onClose }: { callId: string; onClose:
         {detail && (
           <div className="space-y-6 p-6">
             <section className="grid grid-cols-2 gap-3 text-sm">
-              <Field label="Lead" value={detail.lead_name ?? '-'} />
+              <Field label="Lead" value={detail.lead_name ?? (detail.lead_id ? 'No name on file' : '-')} />
               <Field label="Campaign" value={detail.campaign_name ?? '-'} />
               <Field label="Caller number" value={detail.caller_number || '-'} mono />
               <Field label="Destination number" value={detail.destination_number} mono />

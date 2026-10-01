@@ -230,7 +230,7 @@ export function CdrPage(): JSX.Element {
                   <td className="px-4 py-2"><DirectionBadge direction={row.direction} /></td>
                   <td className="px-4 py-2 text-ink-900">{row.started_at ? new Date(row.started_at).toLocaleString() : '-'}</td>
                   <td className="px-4 py-2 text-ink-900">{row.ended_at ? new Date(row.ended_at).toLocaleString() : '-'}</td>
-                  <td className="px-4 py-2 text-ink-700">{row.lead_name ?? '-'}</td>
+                  <td className="px-4 py-2 text-ink-700">{row.lead_name ?? (row.lead_id ? 'No name on file' : '-')}</td>
                   <td className="px-4 py-2 font-mono text-ink-700">{customerNumber(row)}</td>
                   <td className="px-4 py-2 text-ink-700">{row.campaign_name ?? '-'}</td>
                   <td className="px-4 py-2 text-ink-700">{row.ai_agent_name ?? '-'}</td>
