@@ -169,7 +169,11 @@ function useLiveMonitorConnection(): LiveMonitorState {
           };
           next.lastEventByCall.set(payload.call_id, payload);
 
-          if (payload.type === 'CALL_ENDED') {
+          // A completed transfer ends the AI's call too (Vapi hands the caller
+          // over and leaves): it used to be re-added here as "transferred"
+          // and sat in the list for good, where Transfer/End call could only
+          // fail ("Cannot transfer a call in status transferred").
+          if (payload.type === 'CALL_ENDED' || payload.type === 'CALL_TRANSFER_CONNECTED') {
             next.calls.delete(payload.call_id);
             next.partials.delete(payload.call_id);
           } else if (payload.call) {

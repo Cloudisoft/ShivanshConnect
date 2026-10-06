@@ -27,6 +27,7 @@
  * (no lead is ever double-dialed) is tested by exercising
  * `processCampaign()` concurrently, not just by trusting the guard.
  */
+import { pickCallerNumber } from '../lib/localPresence.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
 import { originateCall } from './callOrigination.js';
 import { loadCampaignCallContext } from './campaignCallContext.js';
@@ -81,21 +82,12 @@ function recordDispatch(campaignId: string): void {
   else perMinuteCounters.set(campaignId, { windowStartMs: Date.now(), count: 1 });
 }
 
-/** In-process round-robin cursor per campaign for its phone number pool
- * (campaign_phone_numbers) - same in-process-counter pattern as
- * perMinuteCounters above, not a persisted queue. Resets to 0 on a
- * process restart, which only means rotation starts over from the first
- * number again, never a correctness issue (every number in the pool is
- * equally valid to dial from). */
+/** In-process round-robin cursors for each campaign's phone number pool
+ * (campaign_phone_numbers), per campaign and per campaign + area code - see
+ * lib/localPresence.ts. Same in-process-counter pattern as perMinuteCounters
+ * above: a restart only means rotation starts over, never a correctness
+ * issue (every number in the pool is valid to dial from). */
 const phoneNumberRotationCursors = new Map<string, number>();
-
-function nextPhoneNumberFromPool(campaignId: string, pool: Record<string, any>[]): Record<string, any> | null {
-  if (pool.length === 0) return null;
-  const cursor = phoneNumberRotationCursors.get(campaignId) ?? 0;
-  const number = pool[cursor % pool.length];
-  phoneNumberRotationCursors.set(campaignId, cursor + 1);
-  return number;
-}
 
 async function logSkip(supabase: Supabase, campaignId: string, orgId: string, leadId: string, reasonCode: string, reasonMessage: string): Promise<void> {
   await supabase.from('campaign_lead_skip_log').insert({
@@ -211,7 +203,7 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
   // version/voice/transfer number. The phone number pool is the one
   // exception - a campaign can dial from several numbers (any mix of
   // providers, see migration 00000000000056), so each call in the loop
-  // below rotates to the next one via nextPhoneNumberFromPool() rather
+  // below picks its own via pickCallerNumber() (local area code first) rather
   // than every call this tick using the same fixed number.
   const context = await loadCampaignCallContext(supabase, campaign, version);
   if (!context) return { dispatched, skipped };
@@ -263,7 +255,9 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
       continue;
     }
 
-    const phoneNumberRow = nextPhoneNumberFromPool(campaign.id, phoneNumberPool)!;
+    // Local presence: a pool number with the lead's own area code when
+    // there is one, else the campaign's normal rotation.
+    const phoneNumberRow = pickCallerNumber(campaign.id, phoneNumberPool as Array<{ phone_number: string }>, lead.phone_normalized, phoneNumberRotationCursors)!;
 
     try {
       const { call } = await originateCall({
