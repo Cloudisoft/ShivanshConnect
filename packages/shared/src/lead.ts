@@ -178,11 +178,24 @@ export interface LeadFilter {
   has_callback?: boolean;
   created_from?: string;
   created_to?: string;
+  /** The lead's last call outcome, by disposition name ("Voicemail"). */
+  last_disposition?: string;
+}
+
+/** Last outcomes a lead is never reset from (disposition names). */
+export const NEVER_RESET_OUTCOMES: readonly string[] = ['Disconnected', 'Not in Service', 'DNC', 'Not Interested'];
+
+/** Result of a "reset for redial" bulk action. */
+export interface LeadResetResult {
+  reset: number;
+  skipped_excluded: number;
+  skipped_on_call: number;
+  campaign_entries_reset: number;
 }
 
 export type LeadBulkSelection = { ids: string[] } | { filter: LeadFilter };
 
-export type LeadBulkActionType = 'delete' | 'move_to_list' | 'assign_list';
+export type LeadBulkActionType = 'delete' | 'move_to_list' | 'assign_list' | 'reset';
 
 export interface LeadBulkActionInput {
   action: LeadBulkActionType;

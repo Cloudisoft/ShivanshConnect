@@ -1,3 +1,4 @@
+import { resetLeads, type ResetLeadsResult } from '../services/resetLeads.js';
 import type { FastifyInstance } from 'fastify';
 import { authenticate, requirePermission } from '../middleware/auth.js';
 import { getSupabaseAdmin } from '../lib/supabase.js';
@@ -329,8 +330,12 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
     const ids = await resolveLeadIds(supabase, orgId, body);
 
     let affected = 0;
+    let resetResult: ResetLeadsResult | null = null;
     if (body.action === 'delete') {
       affected = await deleteLeadsByIds(supabase, orgId, ids);
+    } else if (body.action === 'reset') {
+      resetResult = await resetLeads(supabase, orgId, ids);
+      affected = resetResult.reset;
     } else {
       affected = await addLeadsToList(supabase, orgId, ids, body.lead_list_id!, body.action === 'move_to_list');
     }
@@ -341,11 +346,11 @@ export async function leadRoutes(app: FastifyInstance): Promise<void> {
       action: AUDIT_ACTIONS.LEAD_BULK_ACTION,
       entityType: 'lead',
       entityId: null,
-      newValue: { action: body.action, affected, lead_list_id: body.lead_list_id ?? null },
+      newValue: { action: body.action, affected, lead_list_id: body.lead_list_id ?? null, ...(resetResult ?? {}) },
       ipAddress: req.ip,
     });
 
-    return ok({ action: body.action, affected });
+    return ok({ action: body.action, affected, ...(resetResult ?? {}) });
   });
 
   // ---------------------------------------------------------------

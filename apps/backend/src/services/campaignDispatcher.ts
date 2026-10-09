@@ -182,7 +182,10 @@ export async function processCampaign(campaign: Record<string, any>): Promise<Pr
     .eq('campaign_id', campaign.id)
     .in('status', ['pending', 'retry_pending'])
     .or(`next_eligible_at.is.null,next_eligible_at.lte.${nowIso}`)
-    .order('next_eligible_at', { ascending: true })
+    // Fresh leads (never dialed) before retries, so a newly attached list
+    // is called first instead of waiting behind already-dialed leads.
+    .order('attempt_count', { ascending: true })
+    .order('next_eligible_at', { ascending: true, nullsFirst: true })
     .limit(capacity * CANDIDATE_BATCH_MULTIPLIER);
 
   const rows: Record<string, any>[] = candidates ?? [];

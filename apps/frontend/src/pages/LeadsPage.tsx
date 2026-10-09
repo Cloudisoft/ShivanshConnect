@@ -2,10 +2,11 @@ import { useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link } from 'react-router-dom';
-import { Plus, Trash2, Upload, UserPlus } from 'lucide-react';
+import { Plus, RotateCcw, Trash2, Upload, UserPlus } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useLeads, useDeleteLead, useLeadBulkAction, type LeadsQuery } from '../hooks/useLeads';
 import { useLeadList, useLeadLists } from '../hooks/useLeadLists';
+import { useDispositions } from '../hooks/useDispositions';
 import { useQueueLeadsExport } from '../hooks/useExports';
 import { Alert, Badge, Button, Card } from '../components/ui';
 import { FilterBar, FilterDate, FilterSearch, FilterSelect, dayToIso, hasActiveFilters } from '../components/FilterBar';
@@ -15,6 +16,7 @@ import { PasteNumbersModal } from '../components/leads/PasteNumbersModal';
 import { ImportModal } from '../components/leads/ImportModal';
 import { ExportTrigger } from '../components/exports/ExportTrigger';
 import { LEAD_STATUSES, type LeadFilter, type LeadListRow, type LeadStatus } from '@shivanshconnect/shared';
+import { describeResetResult, RESET_EXCLUSION_NOTE } from '../components/leads/resetLeads';
 import { ApiClientError } from '../lib/apiClient';
 
 const PAGE_SIZE = 50;
@@ -39,6 +41,8 @@ interface LeadsView {
   has_callback?: boolean;
   from_day?: string;
   to_day?: string;
+  /** The lead's last call outcome (disposition name). */
+  outcome?: string;
 }
 
 export function LeadsPage(): JSX.Element {
@@ -70,6 +74,7 @@ export function LeadsPage(): JSX.Element {
       has_callback: view.has_callback || undefined,
       created_from: dayToIso(view.from_day),
       created_to: dayToIso(view.to_day, true),
+      last_disposition: view.outcome,
     }),
     [leadListId, view],
   );
@@ -92,6 +97,10 @@ export function LeadsPage(): JSX.Element {
   const bulkAction = useLeadBulkAction();
   const queueExport = useQueueLeadsExport();
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const dispositionsQuery = useDispositions(1, 100);
+  const outcomeNames = Array.from(new Set((dispositionsQuery.data?.data ?? []).map((d) => d.name))).sort();
 
   const leads = leadsQuery.data?.data ?? [];
   const pagination = leadsQuery.data?.pagination;
@@ -159,6 +168,19 @@ export function LeadsPage(): JSX.Element {
       resetSelection();
     } catch (err) {
       setActionError(err instanceof ApiClientError ? err.message : 'Could not complete that action.');
+    }
+  }
+
+  async function runReset() {
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const result = await bulkAction.mutateAsync(selectAllMatching ? { action: 'reset', filter: leadFilter } : { action: 'reset', lead_ids: Array.from(selected) });
+      resetSelection();
+      setConfirmingReset(false);
+      setActionNotice(describeResetResult(result));
+    } catch (err) {
+      setActionError(err instanceof ApiClientError ? err.message : 'Could not reset these leads.');
     }
   }
 
@@ -244,6 +266,7 @@ export function LeadsPage(): JSX.Element {
           }}
           options={(listsQuery.data?.data ?? []).map((l) => ({ value: l.id, label: l.name }))}
         />
+        <FilterSelect label="Last outcome" allLabel="Any outcome" value={view.outcome} onChange={(v) => updateView((f) => ({ ...f, outcome: v }))} options={outcomeNames.map((n) => ({ value: n, label: n }))} />
         <FilterSelect label="Status" allLabel="All statuses" value={view.status} onChange={(v) => updateView((f) => ({ ...f, status: v as LeadStatus | undefined }))} options={LEAD_STATUSES.map((st) => ({ value: st, label: st.replace(/_/g, ' ') }))} />
         <FilterSelect
           label="Called"
@@ -337,6 +360,22 @@ export function LeadsPage(): JSX.Element {
                 </option>
               ))}
             </select>
+            {hasPermission('leads.edit') &&
+              (confirmingReset ? (
+                <span className="flex items-center gap-2 text-xs text-ink-600">
+                  Reset {selectionCount} lead(s) for redial?
+                  <Button onClick={runReset} disabled={bulkAction.isPending}>
+                    {bulkAction.isPending ? 'Resetting...' : 'Confirm'}
+                  </Button>
+                  <Button variant="ghost" onClick={() => setConfirmingReset(false)}>
+                    Cancel
+                  </Button>
+                </span>
+              ) : (
+                <Button variant="secondary" onClick={() => setConfirmingReset(true)} disabled={bulkAction.isPending} title={RESET_EXCLUSION_NOTE}>
+                  <RotateCcw className="h-4 w-4" /> Reset for redial
+                </Button>
+              ))}
             {hasPermission('leads.delete') && (
               <Button variant="danger" onClick={() => runBulkAction('delete')} disabled={bulkAction.isPending}>
                 <Trash2 className="h-4 w-4" /> Delete
@@ -348,6 +387,11 @@ export function LeadsPage(): JSX.Element {
       {actionError && (
         <div className="mt-3">
           <Alert>{actionError}</Alert>
+        </div>
+      )}
+      {actionNotice && (
+        <div className="mt-3">
+          <Alert variant="success">{actionNotice}</Alert>
         </div>
       )}
       {leadsError && (

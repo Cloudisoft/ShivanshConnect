@@ -17,6 +17,8 @@ export interface LeadFilter {
   has_callback?: boolean;
   created_from?: string;
   created_to?: string;
+  /** The lead's last call outcome, by disposition name ("Voicemail"). */
+  last_disposition?: string;
 }
 
 /** Strips characters PostgREST's or()/ilike syntax treats specially. */
@@ -41,6 +43,7 @@ export function applyLeadFilters<B>(builder: B, filter: LeadFilter): B {
   if (filter.called === 'never') b = b.is('last_called_at', null);
   if (filter.called === 'called') b = b.not('last_called_at', 'is', null);
   if (filter.has_callback) b = b.not('next_callback_at', 'is', null);
+  if (filter.last_disposition) b = b.eq('last_disposition', filter.last_disposition);
   if (filter.created_from) b = b.gte('created_at', filter.created_from);
   if (filter.created_to) b = b.lte('created_at', filter.created_to);
   return b as B;

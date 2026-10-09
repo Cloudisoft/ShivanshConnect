@@ -303,8 +303,11 @@ export function createFakeSupabase() {
         return actual === value;
       case 'neq':
         return actual !== value;
-      case 'in':
-        return (value as any[]).includes(actual);
+      case 'in': {
+        // .not('col', 'in', '(a,b)') passes PostgREST's list syntax as a string.
+        const list = typeof value === 'string' ? value.replace(/^\(|\)$/g, '').split(',') : (value as any[]);
+        return list.includes(actual);
+      }
       case 'ilike': {
         const pattern = String(value).replace(/%/g, '').toLowerCase();
         return String(actual ?? '').toLowerCase().includes(pattern);
@@ -723,10 +726,14 @@ export function createFakeSupabase() {
       return this;
     }
 
-    private orderBy: [string, boolean] | null = null;
+    private orderBy: Array<[string, boolean, boolean]> = [];
 
-    order(field: string, opts?: { ascending?: boolean }): this {
-      this.orderBy = [field, opts?.ascending !== false];
+    /** Several .order() calls sort by each key in turn, as PostgREST does.
+     * Nulls follow Postgres: last when ascending, first when descending,
+     * unless nullsFirst says otherwise. */
+    order(field: string, opts?: { ascending?: boolean; nullsFirst?: boolean }): this {
+      const ascending = opts?.ascending !== false;
+      this.orderBy.push([field, ascending, opts?.nullsFirst ?? !ascending]);
       return this;
     }
 
@@ -838,15 +845,21 @@ export function createFakeSupabase() {
       // select
       let rows = this.matched();
       const count = rows.length;
-      if (this.orderBy) {
-        const [field, ascending] = this.orderBy;
+      if (this.orderBy.length > 0) {
+        const keys = this.orderBy;
         rows = [...rows].sort((a, b) => {
-          const av = a[field];
-          const bv = b[field];
-          if (av === bv) return 0;
-          if (av === undefined || av === null) return ascending ? -1 : 1;
-          if (bv === undefined || bv === null) return ascending ? 1 : -1;
-          return (av > bv ? 1 : -1) * (ascending ? 1 : -1);
+          for (const [field, ascending, nullsFirst] of keys) {
+            const av = a[field];
+            const bv = b[field];
+            if (av === bv) continue;
+            const aNull = av === undefined || av === null;
+            const bNull = bv === undefined || bv === null;
+            if (aNull && bNull) continue;
+            if (aNull) return nullsFirst ? -1 : 1;
+            if (bNull) return nullsFirst ? 1 : -1;
+            return (av > bv ? 1 : -1) * (ascending ? 1 : -1);
+          }
+          return 0;
         });
       }
       rows = rows.map((r) => embedRelations(this.table, r, this.selectStr));

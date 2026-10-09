@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { ListChecks, Pencil, Plus, Trash2, Upload, X } from 'lucide-react';
+import { ListChecks, Pencil, Plus, RotateCcw, Trash2, Upload, X } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import {
   useBulkDeleteLeadLists,
@@ -12,6 +12,7 @@ import {
 import { useQueueLeadListExport } from '../hooks/useExports';
 import { Alert, Button, Card, Input, Label } from '../components/ui';
 import { ExportTrigger } from '../components/exports/ExportTrigger';
+import { ResetListModal } from '../components/leads/ResetListModal';
 import { ApiClientError } from '../lib/apiClient';
 import type { LeadListWithCounts } from '@shivanshconnect/shared';
 
@@ -23,6 +24,7 @@ export function LeadListsPage(): JSX.Element {
   const [page, setPage] = useState(1);
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<LeadListWithCounts | null>(null);
+  const [resetting, setResetting] = useState<LeadListWithCounts | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkError, setBulkError] = useState<string | null>(null);
 
@@ -156,6 +158,11 @@ export function LeadListsPage(): JSX.Element {
               <Link to={`/leads?lead_list_id=${list.id}`}>
                 <Button variant="secondary">View leads</Button>
               </Link>
+              {canEdit && (
+                <Button variant="secondary" onClick={() => setResetting(list)} title="Reset leads in this list for redial">
+                  <RotateCcw className="h-4 w-4" /> Reset
+                </Button>
+              )}
               {hasPermission('leads.import') && (
                 <Link to={`/leads?lead_list_id=${list.id}&import=1`}>
                   <Button variant="secondary">
@@ -172,6 +179,8 @@ export function LeadListsPage(): JSX.Element {
           </Card>
         ))}
       </div>
+
+      {resetting && <ResetListModal list={resetting} onClose={() => setResetting(null)} />}
 
       {pagination && pagination.total_pages > 1 && (
         <div className="mt-4 flex items-center justify-between text-sm text-ink-500">

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { LeadBulkActionType, LeadFilter, LeadListRow, LeadStatus, LeadWithLists } from '@shivanshconnect/shared';
+import type { LeadBulkActionType, LeadFilter, LeadListRow, LeadResetResult, LeadStatus, LeadWithLists } from '@shivanshconnect/shared';
 import { api } from '../lib/apiClient';
 
 export interface LeadsQuery extends Omit<LeadFilter, 'lead_list_id'> {
@@ -110,10 +110,12 @@ export function useLeadBulkAction() {
       lead_ids?: string[];
       filter?: LeadFilter;
       lead_list_id?: string;
-    }) => api.post<{ action: string; affected: number }>('/leads/bulk-actions', input),
+    }) => api.post<{ action: string; affected: number } & Partial<LeadResetResult>>('/leads/bulk-actions', input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
       queryClient.invalidateQueries({ queryKey: ['lead-lists'] });
+      // A reset puts leads back in line in their campaigns.
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
     },
   });
 }
