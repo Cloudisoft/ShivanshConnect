@@ -1,9 +1,11 @@
 import { hideVendorName } from '../../lib/displayText';
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { X, Play, Pause, Download } from 'lucide-react';
+import { X, Play, Pause, Download, Trash2 } from 'lucide-react';
 import { dispositionTone, callStatusLabel, EVALUATION_SCORE_CATEGORY_LABELS, CALL_ENGINE_LABELS, type CallEngine } from '@shivanshconnect/shared';
-import { useCdrDetail, fetchRecordingObjectUrl } from '../../hooks/useCdr';
+import { useCdrDetail, useDeleteCall, fetchRecordingObjectUrl } from '../../hooks/useCdr';
+import { useAuth } from '../../hooks/useAuth';
+import { ApiClientError } from '../../lib/apiClient';
 import { useCallEvaluation } from '../../hooks/useEvaluations';
 import { Badge, Button, Input } from '../ui';
 import { DirectionBadge } from './DirectionBadge';
@@ -22,9 +24,24 @@ function formatMs(ms: number): string {
  * download), and the AI summary panel or an honest "requires an LLM
  * provider" empty state when no call_summaries row exists.
  */
-export function CallDetailDrawer({ callId, onClose }: { callId: string; onClose: () => void }): JSX.Element {
+export function CallDetailDrawer({ callId, onClose, onDeleted }: { callId: string; onClose: () => void; onDeleted?: () => void }): JSX.Element {
   const { data: detail, isLoading } = useCdrDetail(callId);
   const [transcriptQuery, setTranscriptQuery] = useState('');
+  const { hasPermission } = useAuth();
+  const deleteCall = useDeleteCall();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleDelete() {
+    setDeleteError(null);
+    try {
+      await deleteCall.mutateAsync(callId);
+      onDeleted?.();
+      onClose();
+    } catch (err) {
+      setDeleteError(err instanceof ApiClientError ? err.message : 'Could not delete this call.');
+    }
+  }
 
   const filteredSegments = useMemo(() => {
     const segments = detail?.transcript_segments ?? [];
@@ -38,10 +55,29 @@ export function CallDetailDrawer({ callId, onClose }: { callId: string; onClose:
       <div className="h-full w-full max-w-2xl overflow-y-auto bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="sticky top-0 flex items-center justify-between border-b border-ink-200 bg-white px-6 py-4">
           <h2 className="text-lg font-semibold text-ink-900">Call detail</h2>
-          <button onClick={onClose} className="text-ink-400 hover:text-ink-700">
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            {detail && hasPermission('cdr.delete') &&
+              (confirmingDelete ? (
+                <span className="flex items-center gap-2 text-xs text-ink-600">
+                  Delete this call, its recording and transcript?
+                  <Button variant="danger" onClick={handleDelete} disabled={deleteCall.isPending}>
+                    {deleteCall.isPending ? 'Deleting...' : 'Delete'}
+                  </Button>
+                  <Button variant="ghost" onClick={() => setConfirmingDelete(false)} disabled={deleteCall.isPending}>
+                    Cancel
+                  </Button>
+                </span>
+              ) : (
+                <button type="button" onClick={() => setConfirmingDelete(true)} className="text-ink-400 hover:text-red-600" aria-label="Delete call" title="Delete call">
+                  <Trash2 className="h-5 w-5" />
+                </button>
+              ))}
+            <button onClick={onClose} className="text-ink-400 hover:text-ink-700" aria-label="Close">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
+        {deleteError && <p className="border-b border-red-200 bg-red-50 px-6 py-2 text-sm text-red-700">{deleteError}</p>}
 
         {isLoading && <p className="p-6 text-sm text-ink-500">Loading...</p>}
 

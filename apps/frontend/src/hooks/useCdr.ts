@@ -86,6 +86,41 @@ export function useCreateCdrExport() {
   });
 }
 
+export interface DeleteCallsResult {
+  deleted: number;
+  skipped_live: number;
+  not_found: number;
+}
+
+/** Deletes the ticked calls, or every call matching the filters. Calls
+ * that are still live are skipped by the server and counted. */
+export function useDeleteCalls() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { call_ids: string[] } | { filters: CdrFilters }) => api.post<DeleteCallsResult>('/cdr/delete', input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cdr'] }),
+  });
+}
+
+export function useDeleteCall() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (callId: string) => api.delete<DeleteCallsResult>(`/cdr/${callId}`),
+    onSuccess: (_result, callId) => {
+      queryClient.removeQueries({ queryKey: ['cdr', 'detail', callId] });
+      return queryClient.invalidateQueries({ queryKey: ['cdr'] });
+    },
+  });
+}
+
+/** "Deleted 3 calls. 1 call is still live and was kept." */
+export function deleteCallsSummary(result: DeleteCallsResult): string {
+  const plural = (n: number) => (n === 1 ? 'call' : 'calls');
+  const parts = [`Deleted ${result.deleted} ${plural(result.deleted)}.`];
+  if (result.skipped_live) parts.push(`${result.skipped_live} ${plural(result.skipped_live)} still live and kept. Delete ${result.skipped_live === 1 ? 'it' : 'them'} once ended.`);
+  return parts.join(' ');
+}
+
 // Phase 14: general export-history polling and file download moved to
 // hooks/useExports.ts (useExportHistory/downloadExportFile), since every
 // export type - not just CDR's - shares that exact same shape.

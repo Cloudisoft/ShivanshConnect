@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Download, FileText, History, Loader2 } from 'lucide-react';
+import { Download, FileText, History, Loader2, Trash2 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
-import { useCdrList, useCreateCdrExport, fetchRecordingObjectUrl, type CdrFilters } from '../hooks/useCdr';
+import { useCdrList, useCreateCdrExport, useDeleteCalls, deleteCallsSummary, fetchRecordingObjectUrl, type CdrFilters } from '../hooks/useCdr';
 import { useExportHistory } from '../hooks/useExports';
 import { useCampaigns } from '../hooks/useCampaigns';
 import { useAgents } from '../hooks/useAgents';
@@ -10,7 +10,7 @@ import { useDispositions } from '../hooks/useDispositions';
 import { useRowSelection } from '../hooks/useRowSelection';
 import { RowCheckbox, SelectPageCheckbox, SelectionBar } from '../components/SelectionBar';
 import { FilterBar, FilterDate, FilterSearch, FilterSelect, dayToIso, hasActiveFilters } from '../components/FilterBar';
-import { Badge, Button, Card } from '../components/ui';
+import { Alert, Badge, Button, Card } from '../components/ui';
 import { DirectionBadge, customerNumber } from '../components/cdr/DirectionBadge';
 import { CallDetailDrawer } from '../components/cdr/CallDetailDrawer';
 import { ExportTrigger } from '../components/exports/ExportTrigger';
@@ -84,6 +84,8 @@ type CdrView = Omit<CdrFilters, 'date_from' | 'date_to'> & { from_day?: string; 
 export function CdrPage(): JSX.Element {
   const { hasPermission } = useAuth();
   const canExport = hasPermission('cdr.export');
+  const canDelete = hasPermission('cdr.delete');
+  const canSelect = canExport || canDelete;
   const [page, setPage] = useState(1);
   const [view, setView] = useState<CdrView>({});
   const updateView = useCallback((change: (v: CdrView) => CdrView) => {
@@ -127,6 +129,29 @@ export function CdrPage(): JSX.Element {
   const pagination = cdrQuery.data?.pagination;
   const selection = useRowSelection(rows.map((r) => r.call_id), filters);
   const exportSelected = useCreateCdrExport();
+  const deleteSelected = useDeleteCalls();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const selectedCount = selection.allMatching ? (pagination?.total ?? rows.length) : selection.selected.size;
+  useEffect(() => {
+    if (selectedCount === 0) setConfirmingDelete(false);
+  }, [selectedCount]);
+
+  async function runDelete() {
+    setDeleteError(null);
+    setDeleteNotice(null);
+    try {
+      // All matching = the current filters; otherwise exactly the ticked calls.
+      const result = await deleteSelected.mutateAsync(selection.allMatching ? { filters } : { call_ids: Array.from(selection.selected) });
+      setDeleteNotice(deleteCallsSummary(result));
+      selection.clear();
+    } catch (err) {
+      setDeleteError(err instanceof ApiClientError ? err.message : 'Could not delete these calls.');
+    } finally {
+      setConfirmingDelete(false);
+    }
+  }
 
   return (
     <div>
@@ -166,22 +191,52 @@ export function CdrPage(): JSX.Element {
         <FilterDate label="To" value={view.to_day} onChange={(v) => updateView((f) => ({ ...f, to_day: v }))} />
       </FilterBar>
 
-      {canExport && (
+      {canSelect && (
         <SelectionBar selection={selection} pageCount={rows.length} total={pagination?.total ?? rows.length} noun="calls">
-          <span className="text-xs text-ink-500">Export selected:</span>
-          <ExportTrigger
-            csvType="cdr_csv"
-            xlsxType="cdr_xlsx"
-            pending={exportSelected.isPending}
-            onExport={(type) =>
-              exportSelected.mutateAsync({
-                type,
-                // All matching = the current filters; otherwise exactly the ticked calls.
-                filters: selection.allMatching ? filters : { ...filters, call_ids: Array.from(selection.selected) },
-              })
-            }
-          />
+          {canExport && (
+            <>
+              <span className="text-xs text-ink-500">Export selected:</span>
+              <ExportTrigger
+                csvType="cdr_csv"
+                xlsxType="cdr_xlsx"
+                pending={exportSelected.isPending}
+                onExport={(type) =>
+                  exportSelected.mutateAsync({
+                    type,
+                    // All matching = the current filters; otherwise exactly the ticked calls.
+                    filters: selection.allMatching ? filters : { ...filters, call_ids: Array.from(selection.selected) },
+                  })
+                }
+              />
+            </>
+          )}
+          {canDelete &&
+            (confirmingDelete ? (
+              <span className="flex items-center gap-2 text-xs text-ink-600">
+                Delete {selectedCount} {selectedCount === 1 ? 'call' : 'calls'} with their recordings and transcripts? This can't be undone.
+                <Button variant="danger" onClick={runDelete} disabled={deleteSelected.isPending}>
+                  {deleteSelected.isPending ? 'Deleting...' : 'Delete'}
+                </Button>
+                <Button variant="ghost" onClick={() => setConfirmingDelete(false)} disabled={deleteSelected.isPending}>
+                  Cancel
+                </Button>
+              </span>
+            ) : (
+              <Button variant="danger" onClick={() => setConfirmingDelete(true)} disabled={deleteSelected.isPending}>
+                <Trash2 className="h-4 w-4" /> Delete
+              </Button>
+            ))}
         </SelectionBar>
+      )}
+      {deleteError && (
+        <div className="mt-3">
+          <Alert>{deleteError}</Alert>
+        </div>
+      )}
+      {deleteNotice && (
+        <div className="mt-3">
+          <Alert variant="success">{deleteNotice}</Alert>
+        </div>
       )}
 
       {cdrQuery.isLoading && <p className="mt-8 text-sm text-ink-500">Loading calls...</p>}
@@ -201,7 +256,7 @@ export function CdrPage(): JSX.Element {
           <table className="min-w-full divide-y divide-ink-200 text-sm">
             <thead className="bg-ink-50 text-left text-xs font-medium uppercase tracking-wide text-ink-500">
               <tr>
-                {canExport && (
+                {canSelect && (
                   <th className="px-4 py-2">
                     <SelectPageCheckbox selection={selection} label="Select all calls on this page" />
                   </th>
@@ -222,7 +277,7 @@ export function CdrPage(): JSX.Element {
             <tbody className="divide-y divide-ink-100">
               {rows.map((row) => (
                 <tr key={row.call_id} className="cursor-pointer hover:bg-ink-50" onClick={() => setSelectedCallId(row.call_id)}>
-                  {canExport && (
+                  {canSelect && (
                     <td className="px-4 py-2" onClick={(e) => e.stopPropagation()}>
                       <RowCheckbox selection={selection} id={row.call_id} label={`Select call with ${customerNumber(row)}`} />
                     </td>
@@ -262,7 +317,16 @@ export function CdrPage(): JSX.Element {
         </div>
       )}
 
-      {selectedCallId && <CallDetailDrawer callId={selectedCallId} onClose={closeDrawer} />}
+      {selectedCallId && (
+        <CallDetailDrawer
+          callId={selectedCallId}
+          onClose={closeDrawer}
+          onDeleted={() => {
+            setDeleteError(null);
+            setDeleteNotice('Deleted 1 call.');
+          }}
+        />
+      )}
       {showExportHistory && <ExportHistoryModal onClose={() => setShowExportHistory(false)} />}
     </div>
   );

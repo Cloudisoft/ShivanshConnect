@@ -327,7 +327,7 @@ describe('Phase 9: CDR artifact ingestion pipeline + CDR/export APIs', () => {
     expect(auditEntry).toBeTruthy();
   });
 
-  it('cross-org isolation: org B can never see org A\'s CDR rows, transcripts, recordings or exports, even via a guessed id', async () => {
+  it('cross-org isolation: org B can never see or delete org A\'s CDR rows, transcripts, recordings or exports, even via a guessed id', async () => {
     const tokenA = await signup('Iso CDR Org A', `isocdra-${Date.now()}@test.com`);
     const tokenB = await signup('Iso CDR Org B', `isocdrb-${Date.now()}@test.com`);
     const { call } = await dialAndCompleteOneCall(tokenA);
@@ -354,5 +354,31 @@ describe('Phase 9: CDR artifact ingestion pipeline + CDR/export APIs', () => {
 
     const exportsListFromB = await app.inject({ method: 'GET', url: '/api/v1/exports', headers: { authorization: `Bearer ${tokenB}` } });
     expect(exportsListFromB.json().data).toHaveLength(0);
+
+    // Deleting call log entries: never another org's; the call goes with
+    // its recording file.
+    await waitFor(() => fake.tables.call_recordings.some((r) => r.call_id === call.id && r.status === 'ready'));
+    const recordingPath = fake.tables.call_recordings.find((r) => r.call_id === call.id)!.storage_path as string;
+    const { getStorageAdapter } = await import('./lib/storage/index.js');
+    await expect(getStorageAdapter().getObject(recordingPath)).resolves.toBeTruthy();
+
+    const deleteFromB = await app.inject({ method: 'DELETE', url: `/api/v1/cdr/${call.id}`, headers: { authorization: `Bearer ${tokenB}` } });
+    expect(deleteFromB.statusCode).toBe(404);
+    const bulkFromB = await app.inject({ method: 'POST', url: '/api/v1/cdr/delete', headers: { authorization: `Bearer ${tokenB}` }, payload: { call_ids: [call.id] } });
+    expect(bulkFromB.json().data).toEqual({ deleted: 0, skipped_live: 0, not_found: 1 });
+    expect(fake.tables.calls.some((c) => c.id === call.id)).toBe(true);
+
+    const bad = await app.inject({ method: 'POST', url: '/api/v1/cdr/delete', headers: { authorization: `Bearer ${tokenA}` }, payload: {} });
+    expect(bad.statusCode).toBe(422);
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/v1/cdr/${call.id}`, headers: { authorization: `Bearer ${tokenA}` } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual({ deleted: 1, skipped_live: 0, not_found: 0 });
+    expect(fake.tables.calls.some((c) => c.id === call.id)).toBe(false);
+    await expect(getStorageAdapter().getObject(recordingPath)).rejects.toThrow();
+    expect(fake.tables.audit_logs.some((a) => a.action === 'cdr.calls_deleted' && a.entity_id === call.id)).toBe(true);
+
+    const listAfter = await app.inject({ method: 'GET', url: '/api/v1/cdr', headers: { authorization: `Bearer ${tokenA}` } });
+    expect(listAfter.json().data.some((r: { call_id: string }) => r.call_id === call.id)).toBe(false);
   });
 });
