@@ -403,7 +403,7 @@ export function CallDetailPanel({
         {canWhisper && call.engine === 'vapi' && (
           <div className="border-b border-ink-200 px-6 py-3">
             <p className="mb-2 text-xs text-ink-500">
-              Vapi has no silent whisper-only channel - this message becomes real speech on the live call, audible to
+              AI orchestration has no silent whisper-only channel - this message becomes real speech on the live call, audible to
               the caller (see routes/liveMonitor.ts for why).
             </p>
             <div className="flex gap-2">

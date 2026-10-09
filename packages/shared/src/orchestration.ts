@@ -8,7 +8,7 @@ export const CALL_ENGINES = ['vapi', 'pipecat'] as const;
 export type CallEngine = (typeof CALL_ENGINES)[number];
 
 export const CALL_ENGINE_LABELS: Record<CallEngine, string> = {
-  vapi: 'Vapi (managed)',
+  vapi: 'AI orchestration (managed)',
   pipecat: 'Pipecat (self-hosted)',
 };
 

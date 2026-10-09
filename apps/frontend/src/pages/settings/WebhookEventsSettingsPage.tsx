@@ -53,7 +53,7 @@ export function WebhookEventsSettingsPage(): JSX.Element {
     <div>
       <h2 className="text-base font-semibold text-ink-900">Webhook events</h2>
       <p className="mt-1 text-sm text-ink-500">
-        Raw inbound delivery log from Vapi, Pipecat, Twilio and Telnyx - every delivery is deduplicated by its own
+        Raw inbound delivery log from AI orchestration, Pipecat, Twilio and Telnyx - every delivery is deduplicated by its own
         provider event id, so a genuine retry never processes twice. Any event can be replayed here - useful not
         only for a failed delivery, but also to force downstream state (e.g. a call/lead status) to be re-derived
         after a bug fix, for a webhook that was received and marked "processed" successfully at the time even
@@ -67,7 +67,7 @@ export function WebhookEventsSettingsPage(): JSX.Element {
           onChange={(e) => setFilters((f) => ({ ...f, provider: e.target.value || undefined }))}
         >
           <option value="">All providers</option>
-          <option value="vapi">Vapi</option>
+          <option value="vapi">AI orchestration</option>
           <option value="pipecat">Pipecat</option>
           <option value="twilio">Twilio</option>
           <option value="telnyx">Telnyx</option>

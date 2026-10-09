@@ -49,11 +49,11 @@ function VapiSyncStatus({ number }: { number: PhoneNumber }): JSX.Element {
           try {
             await sync.mutateAsync(number.id);
           } catch (err) {
-            setError(err instanceof ApiClientError ? err.message : 'Could not sync this number with Vapi.');
+            setError(err instanceof ApiClientError ? err.message : 'Could not sync this number with AI orchestration.');
           }
         }}
       >
-        {sync.isPending ? 'Syncing...' : 'Sync to Vapi'}
+        {sync.isPending ? 'Syncing...' : 'Sync to AI orchestration'}
       </Button>
       {error && <p className="mt-1 max-w-[12rem] text-xs text-red-600">{error}</p>}
     </div>
@@ -320,7 +320,7 @@ export function NumbersTab(): JSX.Element {
                 <th className="px-4 py-2">Provider</th>
                 <th className="px-4 py-2">Capabilities</th>
                 <th className="px-4 py-2">Status</th>
-                <th className="px-4 py-2">Vapi</th>
+                <th className="px-4 py-2">AI orchestration</th>
                 <th className="px-4 py-2">Agent</th>
                 <th className="px-4 py-2">Created</th>
                 <th className="px-4 py-2" />

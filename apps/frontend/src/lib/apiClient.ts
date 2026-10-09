@@ -1,5 +1,6 @@
 import type { ApiResponse, PaginationMeta } from '@shivanshconnect/shared';
 import { supabase } from './supabaseClient';
+import { hideVendorName } from './displayText';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000/api/v1';
 
@@ -9,7 +10,7 @@ export class ApiClientError extends Error {
   details?: unknown;
 
   constructor(status: number, code: string, message: string, details?: unknown) {
-    super(message);
+    super(hideVendorName(message));
     this.name = 'ApiClientError';
     this.status = status;
     this.code = code;

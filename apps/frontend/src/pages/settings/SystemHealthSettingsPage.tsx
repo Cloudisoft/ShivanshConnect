@@ -14,7 +14,7 @@ function componentLabel(component: string): string {
     call_reconciliation_scheduler: 'Call reconciliation scheduler',
     storage: 'Storage',
     pipecat_service: 'Pipecat service',
-    vapi: 'Vapi',
+    vapi: 'AI orchestration',
     twilio: 'Twilio',
     telnyx: 'Telnyx',
     smtp: 'SMTP (email)',

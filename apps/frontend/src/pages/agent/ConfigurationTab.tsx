@@ -1,3 +1,4 @@
+import { hideVendorName } from '../../lib/displayText';
 import { useEffect, useRef, useState } from 'react';
 import { Play } from 'lucide-react';
 import {
@@ -69,8 +70,8 @@ function ModelField({ provider, model, onChange }: { provider: LlmProvider; mode
       )}
       <p className="mt-1 text-xs text-ink-500">
         {curated
-          ? "Sourced from Vapi's own supported-model list for this provider - Vapi rejects an unrecognized model id when placing a call."
-          : 'Must be a real model id for the provider above - Vapi rejects an unrecognized one when placing a call.'}
+          ? "Sourced from the AI orchestration engine's supported-model list for this provider - an unrecognized model id is rejected when placing a call."
+          : 'Must be a real model id for the provider above - an unrecognized one is rejected when placing a call.'}
       </p>
     </div>
   );
@@ -354,7 +355,7 @@ export function ConfigurationTab({ agentId }: { agentId: string }): JSX.Element 
       // "Published" that looks identical to a real sync.
       if (published.vapi_sync_error) {
         setError(
-          `This version is published, but syncing it to Vapi failed: ${published.vapi_sync_error}. Calls using this agent may still use the previous config until this is resolved.`,
+          `This version is published, but syncing it to AI orchestration failed: ${hideVendorName(published.vapi_sync_error)}. Calls using this agent may still use the previous config until this is resolved.`,
         );
       }
     } catch (err) {

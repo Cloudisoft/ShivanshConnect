@@ -1,3 +1,4 @@
+import { hideVendorName } from '../../lib/displayText';
 import { useState } from 'react';
 import { Lock } from 'lucide-react';
 import { CALL_ENGINE_LABELS, CALL_ENGINES, DEFAULT_CALL_ENGINE_SETTINGS_KEY, type CallEngine } from '@shivanshconnect/shared';
@@ -160,7 +161,7 @@ function VapiCard(): JSX.Element {
     setError(null);
     setSaved(false);
     try {
-      if (!apiKey.trim()) throw new Error('A Vapi API key is required.');
+      if (!apiKey.trim()) throw new Error('An AI orchestration API key is required.');
       await save.mutateAsync(apiKey.trim());
       setApiKey('');
       setSaved(true);
@@ -182,29 +183,25 @@ function VapiCard(): JSX.Element {
   return (
     <Card>
       <div className="flex items-center gap-2">
-        <h3 className="text-sm font-semibold text-ink-900">Vapi (managed call orchestration)</h3>
+        <h3 className="text-sm font-semibold text-ink-900">AI orchestration (managed)</h3>
         {creds && <Badge tone={creds.status === 'connected' ? 'success' : creds.status === 'error' ? 'danger' : 'neutral'}>{creds.status.replace('_', ' ')}</Badge>}
       </div>
       <p className="mt-1 text-xs text-ink-500">
-        Connect your Vapi account to place calls through Vapi's managed engine. This is one of two orchestration
+        Connect your AI orchestration account to place calls through the managed engine. This is one of two orchestration
         engines - the other is the self-hosted Pipecat engine, selected below.
       </p>
       {creds?.masked_credential && <p className="mt-1 text-xs text-ink-500">Current key: {creds.masked_credential}</p>}
-      {creds?.last_error && <p className="mt-1 text-xs text-red-600">{creds.last_error}</p>}
+      {creds?.last_error && <p className="mt-1 text-xs text-red-600">{hideVendorName(creds.last_error)}</p>}
       {creds?.status === 'connected' && (
         <p className="mt-2 text-xs text-ink-500">
-          Vapi has no API for checking your account's credit balance - it's dashboard-only. Check it directly at{' '}
-          <a href="https://dashboard.vapi.ai/billing" target="_blank" rel="noreferrer" className="underline">
-            dashboard.vapi.ai/billing
-          </a>
-          .
+          The credit balance isn't available through the API - check it in your AI orchestration provider's dashboard.
         </p>
       )}
 
       {canManage && (
         <div className="mt-4 space-y-2">
           {error && <Alert>{error}</Alert>}
-          {saved && !error && <Alert variant="success">Vapi credentials saved.</Alert>}
+          {saved && !error && <Alert variant="success">AI orchestration credentials saved.</Alert>}
           <div>
             <Label htmlFor="vapi-api-key">API key</Label>
             <Input
@@ -255,7 +252,7 @@ function CallEngineCard(): JSX.Element {
     <Card>
       <h3 className="text-sm font-semibold text-ink-900">Default call engine</h3>
       <p className="mt-1 text-xs text-ink-500">
-        Which engine originates a call when one isn't specified per-call - Vapi (managed) or the self-hosted Pipecat
+        Which engine originates a call when one isn't specified per-call - AI orchestration (managed) or the self-hosted Pipecat
         engine. A campaign or an individual call can still request the other engine explicitly once Phase 7 adds
         campaigns.
       </p>
@@ -299,7 +296,7 @@ export function IntegrationsSettingsPage(): JSX.Element {
       <h2 className="text-base font-semibold text-ink-900">Integrations</h2>
       <p className="mt-1 text-sm text-ink-500">
         Twilio/Telnyx telephony connections live under the Phone Numbers module (Provider Connections tab). Call
-        orchestration (Vapi + the self-hosted Pipecat engine) is configured here.
+        orchestration (managed AI orchestration + the self-hosted Pipecat engine) is configured here.
       </p>
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <VapiCard />

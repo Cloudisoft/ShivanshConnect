@@ -62,7 +62,7 @@ export function InboundRoutesPage(): JSX.Element {
                     {r.answering ? (
                       <Badge tone="success">AI answering</Badge>
                     ) : (
-                      <span title="Starts answering once this number places its first call (it is set up with Vapi then).">
+                      <span title="Starts answering once this number places its first call (it is set up with AI orchestration then).">
                         <Badge tone="neutral">Not set up yet</Badge>
                       </span>
                     )}
