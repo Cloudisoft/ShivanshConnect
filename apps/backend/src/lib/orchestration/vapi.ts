@@ -64,6 +64,29 @@ const SERVER_MESSAGES = ['status-update', 'end-of-call-report', 'transcript', 't
 /** A dead line (nobody speaking) is hung up after this long. */
 const SILENCE_TIMEOUT_SECONDS = 20;
 
+/** Speech-to-text for every call, per request "enhance the smart listening
+ * skills so it doesn't irritate the callers": Deepgram's nova-3 (better
+ * with accents and noisy lines than the default), smart formatting so
+ * emails and phone numbers come through as written, and the caller's and
+ * company's names primed as keyterms - the words most often misheard
+ * (a debt call on 9 Oct heard "Fakruddin" as "Accru then"). */
+export function buildTranscriber(keyterms: string[] | undefined): Record<string, unknown> {
+  return {
+    provider: 'deepgram',
+    model: 'nova-3',
+    language: 'en',
+    smartFormat: true,
+    ...(keyterms && keyterms.length > 0 ? { keyterm: keyterms } : {}),
+  };
+}
+
+/** Krisp smart denoising on the caller's audio before transcription, so
+ * background chatter and noise aren't heard as speech. */
+const BACKGROUND_SPEECH_DENOISING_PLAN = { smartDenoisingPlan: { enabled: true } };
+
+/** Per-call settings a call can go ahead without if Vapi rejects them. */
+const OPTIONAL_CALL_SETTINGS = ['hooks', 'transcriber', 'backgroundSpeechDenoisingPlan'] as const;
+
 /** Vapi's documented customer.speech.timeout hook: when the caller has said
  * nothing for 7s after the assistant finished speaking, the assistant
  * speaks up (checks they're still there, or carries on) instead of
@@ -449,23 +472,29 @@ export class VapiProvider implements CallOrchestrationProvider {
     return (await res.json()) as T;
   }
 
-  /** Sends a request carrying CUSTOMER_SILENCE_HOOKS; if Vapi rejects the
-   * hooks (400 naming them), sends it once more without them, so a
-   * rejected optional setting never fails the call itself - a rejected
-   * voicemail setting failed every campaign call twice on 29-30 Sep. */
+  /** Sends a request carrying optional per-call settings (the silence
+   * hooks, the speech-to-text and denoising settings); if Vapi rejects one
+   * of them (a 400 naming it), sends it once more without the ones named,
+   * so a rejected optional setting never fails the call itself - a
+   * rejected voicemail setting failed every campaign call twice on 29-30
+   * Sep. */
   private async requestWithOptionalHooks<T>(method: string, path: string, body: Record<string, unknown>): Promise<T> {
     try {
       return await this.request<T>(method, path, body);
     } catch (err) {
-      if (!(err instanceof OrchestrationProviderError) || !/\(400 /.test(err.message) || !/hooks/i.test(err.message)) throw err;
+      if (!(err instanceof OrchestrationProviderError) || !/\(400 /.test(err.message)) throw err;
+      const rejected = OPTIONAL_CALL_SETTINGS.filter((key) => new RegExp(key, 'i').test(err.message));
+      if (rejected.length === 0) throw err;
       // eslint-disable-next-line no-console
-      console.error('Vapi rejected the silence hooks - retrying without them', err.message);
-      const stripped: Record<string, unknown> = { ...body };
-      delete stripped.hooks;
+      console.error(`Vapi rejected optional call settings (${rejected.join(', ')}) - retrying without them`, err.message);
+      const strip = (obj: Record<string, unknown>) => {
+        const copy = { ...obj };
+        for (const key of rejected) delete copy[key];
+        return copy;
+      };
+      const stripped = strip(body);
       if (stripped.assistantOverrides && typeof stripped.assistantOverrides === 'object') {
-        const overrides = { ...(stripped.assistantOverrides as Record<string, unknown>) };
-        delete overrides.hooks;
-        stripped.assistantOverrides = overrides;
+        stripped.assistantOverrides = strip(stripped.assistantOverrides as Record<string, unknown>);
       }
       return this.request<T>(method, path, stripped);
     }
@@ -740,6 +769,8 @@ export class VapiProvider implements CallOrchestrationProvider {
         endCallFunctionEnabled: true,
         silenceTimeoutSeconds: SILENCE_TIMEOUT_SECONDS,
         hooks: CUSTOMER_SILENCE_HOOKS,
+        transcriber: buildTranscriber(params.listeningKeyterms),
+        backgroundSpeechDenoisingPlan: BACKGROUND_SPEECH_DENOISING_PLAN,
         ...voicemailSettings(params.voicemailDetection),
       };
       // Auto transfer: the assistant gets a real transferCall tool for this

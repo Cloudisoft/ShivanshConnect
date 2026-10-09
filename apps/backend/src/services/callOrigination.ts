@@ -20,6 +20,8 @@
 import { knowledgeBaseIdsForCall } from './callKnowledge.js';
 import {
   buildScriptSection,
+  buildCallerDetailsSection,
+  buildListeningKeyterms,
   buildTimeAndCallbackSection,
   composeSystemPrompt,
   CONVERSATION_GUIDANCE,
@@ -180,7 +182,7 @@ async function resolveCallPersonalization(
   leadId: string | null,
   campaignId: string | null,
   actualVoiceName: string | null,
-): Promise<{ firstMessage: string; systemPrompt: string; context: PromptVariableContext }> {
+): Promise<{ firstMessage: string; systemPrompt: string; context: PromptVariableContext; companyName: string | null; voiceName: string }> {
   const { data: lead } = leadId
     ? await supabase
         .from('leads')
@@ -237,6 +239,8 @@ async function resolveCallPersonalization(
     firstMessage,
     systemPrompt: `${renderedSystemPrompt}${opening}${firstName ? '' : ASK_CALLER_NAME_INSTRUCTION}`,
     context,
+    companyName,
+    voiceName,
   };
 }
 
@@ -454,6 +458,7 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
     personalization.systemPrompt,
     ...personalityLines(version.personality),
     buildScriptSection(scriptAndKnowledge.scriptContent, personalization.context),
+    buildCallerDetailsSection(personalization.context),
     scriptAndKnowledge.hasKnowledgeBase && engine === 'vapi' ? KNOWLEDGE_BASE_INSTRUCTION : null,
     engine === 'vapi' ? buildTimeAndCallbackSection(params.timezone ?? (await organizationTimezone(supabase, orgId))) : null,
     CONVERSATION_GUIDANCE,
@@ -527,6 +532,12 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
         llmTemperature: version.llm_temperature ?? null,
         llmMaxTokens: version.llm_max_tokens ?? null,
         knowledgeBaseSearch: scriptAndKnowledge.hasKnowledgeBase,
+        listeningKeyterms: buildListeningKeyterms([
+          personalization.context.first_name,
+          personalization.context.last_name,
+          personalization.companyName,
+          personalization.voiceName,
+        ]),
         voicemailDetection: params.callingRulesOverride
           ? {
               enabled: params.callingRulesOverride.voicemail_detection_enabled,

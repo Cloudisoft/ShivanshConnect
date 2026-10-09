@@ -189,6 +189,8 @@ describe('VapiProvider', () => {
       endCallFunctionEnabled: true,
       silenceTimeoutSeconds: 20,
       hooks: [expect.objectContaining({ on: 'customer.speech.timeout' })],
+      transcriber: expect.objectContaining({ provider: 'deepgram', model: 'nova-3' }),
+      backgroundSpeechDenoisingPlan: { smartDenoisingPlan: { enabled: true } },
     });
     // Callbacks and Do-Not-Call requests are available on every call.
     expect(tools.map((t: any) => t.function?.name ?? t.type)).toEqual(['schedule_callback', 'request_dnc']);
@@ -266,6 +268,49 @@ describe('VapiProvider', () => {
     expect(retried.assistantOverrides.silenceTimeoutSeconds).toBe(20);
   });
 
+  it('createCall() listens with nova-3 primed with the caller\'s name, and filters background noise', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 'call_t', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await new VapiProvider('sk-test').createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: null,
+      listeningKeyterms: ['Fakruddin', 'Patel', 'Debt', 'Help'],
+    });
+    const overrides = JSON.parse(fetchMock.mock.calls[0][1].body).assistantOverrides;
+    expect(overrides.transcriber).toEqual({ provider: 'deepgram', model: 'nova-3', language: 'en', smartFormat: true, keyterm: ['Fakruddin', 'Patel', 'Debt', 'Help'] });
+    expect(overrides.backgroundSpeechDenoisingPlan).toEqual({ smartDenoisingPlan: { enabled: true } });
+  });
+
+  it('createCall() retries without the speech settings if Vapi rejects them, keeping the rest', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 400, text: async () => '{"message":["assistantOverrides.transcriber.keyterm must be an array"]}' })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'call_retry2', status: 'queued' }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await new VapiProvider('sk-test').createCall({
+      callId: 'internal-call-1',
+      organizationId: 'org-1',
+      providerAssistantId: 'asst_123',
+      agentVersionId: 'version-1',
+      fromPhoneNumber: '+14845551111',
+      fromPhoneNumberProviderId: 'vapi-pn-1',
+      toPhoneNumber: '+14845552222',
+      transferDestinationE164: null,
+      listeningKeyterms: ['Patel'],
+    });
+    expect(result.providerCallId).toBe('call_retry2');
+    const retried = JSON.parse(fetchMock.mock.calls[1][1].body).assistantOverrides;
+    expect(retried.transcriber).toBeUndefined();
+    expect(retried.hooks).toBeDefined();
+    expect(retried.backgroundSpeechDenoisingPlan).toBeDefined();
+  });
+
   it('createCall() does not retry on a 400 that has nothing to do with the hooks', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 400, text: async () => '{"message":["customer.number must be a valid phone number"]}' });
     vi.stubGlobal('fetch', fetchMock);
@@ -324,6 +369,8 @@ describe('VapiProvider', () => {
       endCallFunctionEnabled: true,
       silenceTimeoutSeconds: 20,
       hooks: [expect.objectContaining({ on: 'customer.speech.timeout' })],
+      transcriber: expect.objectContaining({ provider: 'deepgram', model: 'nova-3' }),
+      backgroundSpeechDenoisingPlan: { smartDenoisingPlan: { enabled: true } },
       firstMessage: 'Hi, am I speaking with Priya?',
       model: {
         provider: 'anthropic',

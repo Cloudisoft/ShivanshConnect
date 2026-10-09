@@ -166,6 +166,9 @@ export interface CreateCallParams {
   /** The campaign's voicemail settings (Vapi only), sent with the call
    * itself so detection never depends on what the assistant was saved
    * with. */
+  /** Words the speech-to-text should listen out for on this call (the
+   * caller's name, the company and agent names). */
+  listeningKeyterms?: string[];
   voicemailDetection?: AssistantConfig['voicemailDetection'];
   /** The assistant's own configured model.provider (Vapi only) - Vapi's
    * POST /call requires assistantOverrides.model to include a valid
