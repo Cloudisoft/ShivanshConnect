@@ -48,7 +48,7 @@ async function loadScopedCampaignLeads(
   const rows: ScopedCampaignLead[] = [];
   for (let from = 0; ; from += PAGE_ROWS) {
     let q = supabase.from('campaign_leads').select(columns).eq('campaign_id', campaignId);
-    if (scope.status) q = q.eq('status', scope.status);
+    if (scope.status) q = applyCampaignLeadStatusFilter(q, scope.status);
     // eslint-disable-next-line no-await-in-loop
     const { data, error } = await q.order('id', { ascending: true }).range(from, from + PAGE_ROWS - 1);
     if (error) throw error;
@@ -61,6 +61,15 @@ async function loadScopedCampaignLeads(
 /** Real Supabase's `.in()` doesn't accept an unbounded array (see
  * ID_QUERY_BATCH_SIZE) - runs one filtered select per batch in parallel
  * and concatenates the results. */
+/** Campaign lead status filter, plus two groupings: "fresh" (never
+ * dialed in this campaign) and "dialed" (already dialed at least once). */
+function applyCampaignLeadStatusFilter<B>(builder: B, status: string): B {
+  const b = builder as any;
+  if (status === 'fresh') return b.eq('attempt_count', 0);
+  if (status === 'dialed') return b.gt('attempt_count', 0);
+  return b.eq('status', status);
+}
+
 async function selectInBatches<T>(
   runQuery: (batch: string[]) => PromiseLike<{ data: T[] | null; error: unknown }>,
   ids: string[],
@@ -178,7 +187,7 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     const orgId = req.user!.organizationId;
 
     let builder = supabase.from('campaigns').select('*', { count: 'exact' }).eq('organization_id', orgId);
-    if (query.status) builder = builder.eq('status', query.status);
+    if (query.status) builder = applyCampaignLeadStatusFilter(builder, query.status);
     const from = (query.page - 1) * query.page_size;
     const to = from + query.page_size - 1;
     builder = builder.order('created_at', { ascending: false }).range(from, to);

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ArrowLeftRight, Info, Trash2 } from 'lucide-react';
+import { ArrowLeft, Info, Trash2 } from 'lucide-react';
 import {
   CAMPAIGN_STATUS_LABELS,
   LEAD_COOLDOWN_PRESETS,
@@ -17,13 +17,10 @@ import {
   useCreateCampaignVersion,
   usePublishCampaignVersion,
   useRemoveLeads,
-  useRotateLeads,
   useSetCampaignPhoneNumbers,
   useUpdateCampaign,
   useUpdateConcurrency,
   type CampaignDetail,
-  type CampaignLeadScope,
-  type RotateDecision,
 } from '../hooks/useCampaigns';
 import { useAgents } from '../hooks/useAgents';
 import { usePhoneNumbers } from '../hooks/usePhoneNumbers';
@@ -602,9 +599,7 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
   const leadListsQuery = useLeadLists();
   const attachLeads = useAttachLeads();
   const removeLeads = useRemoveLeads();
-  const rotateLeads = useRotateLeads();
   const [selectedListId, setSelectedListId] = useState('');
-  const [rotatePreview, setRotatePreview] = useState<{ rotated: number; excluded: number; decisions: RotateDecision[]; scope: CampaignLeadScope; label: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -614,8 +609,6 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
   const canEdit = hasPermission('campaigns.edit');
   const selection = useRowSelection(rows.map((r) => r.id), statusFilter);
   const selectedCount = selection.allMatching ? pagination?.total ?? 0 : selection.selected.size;
-  const selectionScope = (): CampaignLeadScope =>
-    selection.allMatching ? { status: statusFilter || undefined } : { campaign_lead_ids: Array.from(selection.selected) };
 
   async function handleAttach() {
     if (!selectedListId) return;
@@ -625,30 +618,6 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
       setSelectedListId('');
     } catch (err) {
       setError(describeApiError(err, 'Failed to attach lead list.'));
-    }
-  }
-
-  async function handlePreviewRotate(scope: CampaignLeadScope, label: string) {
-    setError(null);
-    setNotice(null);
-    try {
-      const result = await rotateLeads.mutateAsync({ id: campaignId, dry_run: true, ...scope });
-      setRotatePreview({ ...result, scope, label });
-    } catch (err) {
-      setError(describeApiError(err, 'Could not preview the rotation.'));
-    }
-  }
-
-  async function handleConfirmRotate() {
-    if (!rotatePreview) return;
-    setError(null);
-    try {
-      const result = await rotateLeads.mutateAsync({ id: campaignId, dry_run: false, ...rotatePreview.scope });
-      setRotatePreview(null);
-      selection.clear();
-      setNotice(`${result.rotated} lead(s) re-queued for another attempt. ${result.excluded} excluded.`);
-    } catch (err) {
-      setError(describeApiError(err, 'Could not rotate these leads.'));
     }
   }
 
@@ -705,55 +674,13 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
             Attach
           </Button>
 
-          <div className="ml-auto flex items-center gap-2">
-            <Button variant="secondary" onClick={() => handlePreviewRotate({}, 'all attached leads')} disabled={rotateLeads.isPending}>
-              <ArrowLeftRight className="h-4 w-4" /> Preview rotate/reuse (all)
-            </Button>
-          </div>
-        </Card>
-      )}
-
-      {rotatePreview && (
-        <Card>
-          <h3 className="text-sm font-semibold text-ink-900">Rotate preview - {rotatePreview.label}</h3>
-          <p className="mt-1 text-sm text-ink-600">
-            {rotatePreview.rotated} lead(s) will be re-queued for another attempt. {rotatePreview.excluded} lead(s) are excluded (already completed, transferred, DNC, on a call right now, or another permanent outcome).
+          <p className="ml-auto max-w-sm text-xs text-ink-500">
+            Never-dialed leads are called first. To redial leads, reset them from{' '}
+            <Link to="/lead-lists" className="underline">
+              Lead Lists
+            </Link>
+            .
           </p>
-          <div className="mt-3 max-h-48 overflow-y-auto rounded-md border border-ink-200">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-ink-50 text-ink-500">
-                <tr>
-                  <th className="px-2 py-1">Lead</th>
-                  <th className="px-2 py-1">Phone</th>
-                  <th className="px-2 py-1">Include</th>
-                  <th className="px-2 py-1">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rotatePreview.decisions.map((d) => (
-                  <tr key={d.campaignLeadId} className="border-t border-ink-100">
-                    <td className="px-2 py-1">{d.leadName || <span className="font-mono">{d.leadId.slice(0, 8)}</span>}</td>
-                    <td className="px-2 py-1 font-mono">{d.phone ?? '-'}</td>
-                    <td className="px-2 py-1">
-                      <Badge tone={d.include ? 'success' : 'neutral'}>{d.include ? 'Include' : 'Exclude'}</Badge>
-                    </td>
-                    <td className="px-2 py-1 text-ink-600">{d.reason}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {rotatePreview.rotated + rotatePreview.excluded > rotatePreview.decisions.length && (
-            <p className="mt-1 text-xs text-ink-500">Showing the first {rotatePreview.decisions.length} of {rotatePreview.rotated + rotatePreview.excluded} leads (included first).</p>
-          )}
-          <div className="mt-3 flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setRotatePreview(null)}>
-              Cancel
-            </Button>
-            <Button onClick={handleConfirmRotate} disabled={rotateLeads.isPending || rotatePreview.rotated === 0}>
-              Confirm - re-queue {rotatePreview.rotated} lead(s)
-            </Button>
-          </div>
         </Card>
       )}
 
@@ -768,7 +695,9 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
               setPage(1);
             }}
           >
-            <option value="">All statuses</option>
+            <option value="">All leads</option>
+            <option value="fresh">Fresh (never dialed)</option>
+            <option value="dialed">Already dialed</option>
             {['pending', 'queued', 'dialing', 'connected', 'completed', 'retry_pending', 'failed', 'skipped', 'dnc'].map((s) => (
               <option key={s} value={s}>
                 {s}
@@ -779,13 +708,6 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
         {canEdit && (
           <div className="mb-3 -mt-1">
             <SelectionBar selection={selection} pageCount={rows.length} total={pagination?.total ?? rows.length} noun="leads">
-              <Button
-                variant="secondary"
-                disabled={rotateLeads.isPending}
-                onClick={() => handlePreviewRotate(selectionScope(), selection.allMatching ? `all ${selectedCount} matching leads` : `${selectedCount} selected lead(s)`)}
-              >
-                <ArrowLeftRight className="h-4 w-4" /> Preview rotate
-              </Button>
               {confirmingRemove ? (
                 <>
                   <span className="text-xs text-ink-600">Remove {selectedCount} lead(s) from this campaign?</span>
