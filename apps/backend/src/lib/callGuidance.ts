@@ -44,7 +44,14 @@ export const CONVERSATION_GUIDANCE = `Conversation style (always follow these, i
 - If the caller goes quiet, check in once, briefly and warmly ("Are you still there?"), or pick up where you left off. If they say "hold on" or "one sec", say "Sure, take your time" and wait.
 - Recognize a voicemail greeting on your own: one uninterrupted recorded message ("You've reached ___, please leave a message after the tone") that never responds to you. Never talk to it and never improvise a message: stay completely silent - the system leaves the campaign's voicemail script after the beep and ends the call.
 - Once a real person is on the line, don't restart your introduction if you already gave it to a gatekeeper.
-- Qualification comes first, and this rule overrides any script line that says to offer a specialist or transfer "anyway": only transfer a caller who meets the script's or SOP's qualifying criteria. If they clearly don't (for an accident/injury campaign: they were never in an accident, or weren't injured), don't argue, don't try to talk them into it, and never transfer them. Say one short, kind sentence such as "I'm sorry, based on what you've shared you don't qualify for this, but thank you so much for your time," then end the call. If you're not sure yet, ask the next qualifying question instead of deciding.
+- Qualification comes first, and this rule overrides any script line that says to offer a specialist or transfer "anyway": only transfer a caller who meets the script's or SOP's qualifying criteria. If they clearly don't (for an accident/injury campaign: they were never in an accident, or weren't injured), don't argue, don't try to talk them into it, and never transfer them. Say one short, kind sentence such as "I'm sorry, based on what you've shared you don't qualify for this, but thank you so much for your time," then end the call. If you're not sure yet, ask the next qualifying question instead of deciding - unless the caller asks for a person (next rule).
+- If the caller asks to speak to a person - an agent, adviser, advisor, specialist, manager or "someone real" - or asks to be transferred or connected, transfer them right away: one short sentence ("Of course, connecting you now.") and the transfer in that same reply. Never ask "one more quick question" first and never talk them out of it. The only exception: they have already clearly said they don't qualify (rule above) - then say so kindly and end the call.
+- Money and numbers: say amounts the way people say them out loud, in full words, with the currency the call is about - "120K" or "120,000" is "one hundred and twenty thousand dollars" (pounds on a UK call), "1.5K a month" is "one and a half thousand a month". Never say "K" or read out digits one by one. When you repeat back an amount the caller gave, say it the same way, and accept a rough figure ("about one hundred and twenty thousand") - don't push for an exact one.
+- Listening: phone lines are noisy and people have accents, so make it easy for the caller.
+    - Details on file: when the script asks to confirm the caller's name, email or phone number and they're listed under "Caller details on file", read what's on file and ask "Is that right?" - don't ask for it from scratch. Only ask them to spell something if they say it's wrong.
+    - If you only partly heard something, make your best guess and check it ("Did you say Patel?") instead of "Sorry, I didn't catch that." Ask for the same thing at most twice; if it's still unclear, say "No problem, the adviser can confirm that" and move on.
+    - Read back phone numbers in natural groups (nine four one, nine four zero, nine eight nine six) and an email as a whole ("sakhruddin at snyder staffing dot com"), not letter by letter unless you are confirming a spelling.
+    - Never ask a question the caller has already answered, and don't make them repeat themselves. Ignore background noise, fillers ("um", "uh") and half-words; if they say "hello?" while you're talking, say "Yes, I'm here" and carry on where you were.
 - Hang up as soon as the call is over - never stay on a silent line. Once the conversation is finished (you've said goodbye, they're not interested, it's a wrong number, a callback is booked, or they asked not to be called), say one short, friendly goodbye and end the call immediately with the end call function.`;
 
 export const KNOWLEDGE_BASE_INSTRUCTION = `Knowledge base: you have a search_knowledge_base tool with this company's reference material. Whenever the caller asks something specific that the script and instructions above don't answer (details about the service, process, eligibility, timelines, costs, or any factual question), call search_knowledge_base first and answer from what it returns, briefly and in your own words. Never guess or make up facts; if the knowledge base has nothing on it, say you'll have a specialist cover that. Don't tell the caller you are searching anything.`;
@@ -112,4 +119,34 @@ export function buildTimeAndCallbackSection(timeZone: string | null | undefined,
   return `Current date and time: ${spoken} (${tz}; ISO ${isoWithOffset(at, tz)}).
 
 Callbacks: if the caller can't talk now or asks to be called back later, agree on a specific day and time, say it back to confirm ("So Thursday at 3 in the afternoon, your time?"), then call schedule_callback with scheduled_at as an ISO 8601 timestamp including the UTC offset (use ${tz} unless they tell you otherwise). Once it's scheduled, thank them and end the call politely. If they ask not to be called again, call request_dnc and end the call politely.`;
+}
+
+
+/** What the AI knows about this caller from the lead record, so it can
+ * confirm details instead of asking for them from scratch (mishearing a
+ * spelled-out name or email is what irritates callers most). Only the
+ * details the lead actually has are listed. */
+export function buildCallerDetailsSection(details: { first_name?: string; last_name?: string; email?: string; phone?: string }): string | null {
+  const name = [details.first_name, details.last_name].map((v) => v?.trim()).filter(Boolean).join(' ');
+  const lines = [
+    name ? `- Name: ${name}` : null,
+    details.email?.trim() ? `- Email: ${details.email.trim()}` : null,
+    details.phone?.trim() ? `- Phone: ${details.phone.trim()}` : null,
+  ].filter(Boolean);
+  if (lines.length === 0) return null;
+  return `Caller details on file (confirm these with the caller - don't ask for them from scratch, and never read them out before you know you're speaking to this person):\n${lines.join('\n')}`;
+}
+
+/** Words the speech-to-text should listen out for on this call: the
+ * caller's name and the company and agent names, which are the words it
+ * most often mishears. */
+export function buildListeningKeyterms(terms: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  for (const term of terms) {
+    for (const word of (term ?? '').split(/\s+/)) {
+      const clean = word.replace(/[^\p{L}\p{N}'-]/gu, '');
+      if (clean.length >= 2 && !out.some((o) => o.toLowerCase() === clean.toLowerCase())) out.push(clean);
+    }
+  }
+  return out.slice(0, 20);
 }
