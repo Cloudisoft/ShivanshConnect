@@ -1,3 +1,4 @@
+import { hideVendorName } from '../lib/displayText';
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Info, Trash2 } from 'lucide-react';
@@ -435,7 +436,7 @@ function ConfigurationTab({ campaign }: { campaign: CampaignDetail }): JSX.Eleme
                   disabled={!canEdit}
                   onChange={(e) => setPhoneNumberIds((prev) => (e.target.checked ? [...prev, n.id] : prev.filter((id) => id !== n.id)))}
                 />
-                {n.phone_number} ({n.friendly_name || n.provider_key})
+                {n.phone_number}
               </label>
             ))}
           </div>
@@ -759,7 +760,7 @@ function LeadsTab({ campaignId }: { campaignId: string }): JSX.Element {
                     <Badge>{row.status}</Badge>
                   </td>
                   <td className="px-2 py-1">
-                    {row.final_disposition ? <Badge tone="neutral">{row.final_disposition}</Badge> : <span className="text-ink-400">-</span>}
+                    {row.final_disposition ? <Badge tone="neutral">{hideVendorName(row.final_disposition)}</Badge> : <span className="text-ink-400">-</span>}
                   </td>
                   <td className="px-2 py-1">{row.attempt_count}</td>
                   <td className="px-2 py-1">{row.next_eligible_at ? new Date(row.next_eligible_at).toLocaleString() : '-'}</td>

@@ -155,7 +155,7 @@ export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
   'custom-llm': 'Custom LLM',
   baseten: 'Baseten',
   runpod: 'RunPod',
-  vapi: 'Vapi',
+  vapi: 'AI orchestration (built-in)',
   'anthropic-bedrock': 'Anthropic (Bedrock)',
   'anthropic-vertex': 'Anthropic (Vertex)',
   minimax: 'MiniMax',

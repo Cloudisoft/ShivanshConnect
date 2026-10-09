@@ -1,7 +1,8 @@
+import { hideVendorName } from '../../lib/displayText';
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { X, Play, Pause, Download } from 'lucide-react';
-import { dispositionTone, callStatusLabel, EVALUATION_SCORE_CATEGORY_LABELS } from '@shivanshconnect/shared';
+import { dispositionTone, callStatusLabel, EVALUATION_SCORE_CATEGORY_LABELS, CALL_ENGINE_LABELS, type CallEngine } from '@shivanshconnect/shared';
 import { useCdrDetail, fetchRecordingObjectUrl } from '../../hooks/useCdr';
 import { useCallEvaluation } from '../../hooks/useEvaluations';
 import { Badge, Button, Input } from '../ui';
@@ -53,7 +54,7 @@ export function CallDetailDrawer({ callId, onClose }: { callId: string; onClose:
               <Field label="Destination number" value={detail.destination_number} mono />
               <Field label="AI Agent" value={detail.ai_agent_name ?? '-'} />
               <Field label="Voice" value={detail.voice_name ?? '-'} />
-              <Field label="Engine" value={detail.engine} />
+              <Field label="Engine" value={CALL_ENGINE_LABELS[detail.engine as CallEngine] ?? detail.engine} />
               <Field label="Direction" value={<DirectionBadge direction={detail.direction} />} />
               <Field label="Duration" value={detail.duration_seconds != null ? `${detail.duration_seconds}s` : '-'} />
               <Field label="Talk duration" value={detail.talk_duration_seconds != null ? `${detail.talk_duration_seconds}s` : '-'} />
@@ -62,7 +63,7 @@ export function CallDetailDrawer({ callId, onClose }: { callId: string; onClose:
                 label="Disposition"
                 value={detail.disposition_name ? <Badge tone={dispositionTone(detail.disposition_code ?? '')}>{detail.disposition_name}</Badge> : '-'}
               />
-              <Field label="Ended reason" value={detail.ended_reason ?? '-'} />
+              <Field label="Ended reason" value={hideVendorName(detail.ended_reason) ?? '-'} />
               <Field label="Transfer status" value={detail.transfer_status ?? '-'} />
               <Field label="Cost" value={detail.cost != null ? `$${Number(detail.cost).toFixed(4)}` : '-'} />
               <Field label="Started" value={detail.started_at ? new Date(detail.started_at).toLocaleString() : '-'} />
