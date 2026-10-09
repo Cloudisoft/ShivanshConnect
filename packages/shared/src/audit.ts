@@ -110,6 +110,7 @@ export const AUDIT_ACTIONS = {
   LEAD_DNC_REQUESTED_ON_CALL: 'lead.dnc_requested_on_call',
 
   CDR_EXPORT_CREATED: 'cdr.export_created',
+  CDR_CALLS_DELETED: 'cdr.calls_deleted',
 
   // Phase 14: the export engine generalized beyond CDR.
   LEADS_EXPORT_CREATED: 'leads.export_created',

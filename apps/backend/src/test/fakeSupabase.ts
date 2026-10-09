@@ -190,6 +190,8 @@ export function createFakeSupabase() {
       'campaigns.delete',
       'callbacks.manage',
       'cdr.export',
+      // Granted to SUPER_ADMIN/ADMIN/MANAGER by 00000000000068.
+      'cdr.delete',
       // Phase 10: live_monitor.* - mirrors
       // 00000000000009_seed_roles_permissions.sql's real catalog/role
       // mapping exactly (MANAGER gets everything except roles/users/

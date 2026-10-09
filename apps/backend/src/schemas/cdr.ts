@@ -36,6 +36,15 @@ export const createExportSchema = z.object({
 });
 export type CreateExportInput = z.infer<typeof createExportSchema>;
 
+// POST /cdr/delete - the ticked calls, or every call matching the filters.
+export const deleteCallsSchema = z
+  .object({
+    call_ids: z.array(uuidSchema).min(1).max(5000).optional(),
+    filters: listCdrQuerySchema.omit({ page: true, page_size: true }).optional(),
+  })
+  .refine((v) => Boolean(v.call_ids) !== Boolean(v.filters), { message: 'Send either call_ids or filters.' });
+export type DeleteCallsInput = z.infer<typeof deleteCallsSchema>;
+
 // GET /exports
 export const listExportsQuerySchema = paginationSchema.extend({
   type: z

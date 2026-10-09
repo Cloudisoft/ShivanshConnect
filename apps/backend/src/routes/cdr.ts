@@ -14,13 +14,16 @@
  * GET /cdr/search-transcript          - full-text search across
  *                                      call_transcripts (Postgres tsvector
  *                                      + ts_rank via search_call_transcripts())
+ * POST /cdr/delete                    - deletes the ticked calls, or all
+ *                                      matching the filters (cdr.delete)
+ * DELETE /cdr/:callId                 - deletes one call (cdr.delete)
  * POST /cdr/export                    - queues a background export job
  *                                      (see services/cdrExport.ts) -
  *                                      routes/exports.ts serves its status/
  *                                      download.
  *
  * Every route here requires `cdr.view` (export additionally requires
- * `cdr.export`) and scopes every query to the caller's own
+ * `cdr.export`, delete `cdr.delete`) and scopes every query to the caller's own
  * organization_id server-side, on top of RLS.
  */
 import type { FastifyInstance } from 'fastify';
@@ -30,9 +33,10 @@ import { getSupabaseAdmin } from '../lib/supabase.js';
 import { ok, paginationMeta } from '../lib/response.js';
 import { NotFoundError, ValidationError } from '../lib/errors.js';
 import { uuidSchema } from '../schemas/common.js';
-import { createExportSchema, listCdrQuerySchema, searchTranscriptQuerySchema } from '../schemas/cdr.js';
+import { createExportSchema, deleteCallsSchema, listCdrQuerySchema, searchTranscriptQuerySchema } from '../schemas/cdr.js';
 import { buildCdrRows, fetchCdrCallsPage, type CdrFilters } from '../services/cdrQuery.js';
 import { queueCdrExport } from '../services/cdrExport.js';
+import { callIdsMatchingFilters, deleteCalls, type DeleteCallsResult } from '../services/deleteCalls.js';
 import { convertStoredRecordingToMp3, reingestRecording } from '../services/processCallArtifacts.js';
 import { getStorageAdapter, StorageObjectNotFoundError } from '../lib/storage/index.js';
 import { writeAuditLog } from '../lib/audit.js';
@@ -157,6 +161,43 @@ export async function cdrRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return ok(exportRecord, { message: 'Export queued. Check its status via GET /api/v1/exports/:id.' });
+  });
+
+  async function auditDelete(req: { user?: { id: string; organizationId: string } | null; ip: string }, callIds: string[], result: DeleteCallsResult): Promise<void> {
+    if (result.deleted === 0) return;
+    await writeAuditLog({
+      organizationId: req.user!.organizationId,
+      userId: req.user!.id,
+      action: AUDIT_ACTIONS.CDR_CALLS_DELETED,
+      entityType: 'call',
+      entityId: callIds.length === 1 ? callIds[0] : null,
+      newValue: { ...result, call_ids: callIds.slice(0, 500) },
+      ipAddress: req.ip,
+    });
+  }
+
+  app.post('/delete', { preHandler: [requirePermission('cdr.view'), requirePermission('cdr.delete')] }, async (req) => {
+    const body = deleteCallsSchema.parse(req.body);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const callIds = body.call_ids ?? (await callIdsMatchingFilters(supabase, orgId, extractFilters(body.filters as Record<string, unknown>)));
+    const result = await deleteCalls(supabase, orgId, callIds);
+    await auditDelete(req, callIds, result);
+    return ok(result);
+  });
+
+  app.delete('/:callId', { preHandler: [requirePermission('cdr.view'), requirePermission('cdr.delete')] }, async (req) => {
+    const { callId } = req.params as { callId: string };
+    uuidSchema.parse(callId);
+    const supabase = getSupabaseAdmin();
+    const orgId = req.user!.organizationId;
+
+    const result = await deleteCalls(supabase, orgId, [callId]);
+    if (result.not_found) throw new NotFoundError('Call not found.');
+    if (result.skipped_live) throw new ValidationError('This call is still live. It can be deleted once it has ended.');
+    await auditDelete(req, [callId], result);
+    return ok(result);
   });
 
   app.get('/:callId', { preHandler: requirePermission('cdr.view') }, async (req) => {

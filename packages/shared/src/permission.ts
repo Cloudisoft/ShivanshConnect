@@ -27,6 +27,7 @@ export const PERMISSIONS = [
 
   { key: 'cdr.view', category: 'cdr', description: 'View call detail records' },
   { key: 'cdr.export', category: 'cdr', description: 'Export call detail records' },
+  { key: 'cdr.delete', category: 'cdr', description: 'Delete call detail records' },
 
   { key: 'agents.manage', category: 'agents', description: 'Manage AI agents' },
   { key: 'voices.manage', category: 'voices', description: 'Manage voices' },
