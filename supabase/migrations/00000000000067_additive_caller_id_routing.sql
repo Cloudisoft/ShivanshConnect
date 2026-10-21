@@ -32,7 +32,7 @@ returns trigger
 language plpgsql
 security definer
 set search_path = public
-as $
+as $$
 begin
   if new.status = 'active'
      and coalesce((new.capabilities ->> 'voice_outbound')::boolean, false) = true then
@@ -42,13 +42,12 @@ begin
   end if;
   return new;
 end;
-$;
+$$;
 
 drop trigger if exists phone_numbers_add_to_caller_id_pool on public.phone_numbers;
 create trigger phone_numbers_add_to_caller_id_pool
   after insert or update of status, capabilities on public.phone_numbers
   for each row execute function public.add_eligible_phone_number_to_caller_id_pool();
-
 
 drop trigger if exists caller_id_pool_set_updated_at on public.caller_id_pool;
 create trigger caller_id_pool_set_updated_at
