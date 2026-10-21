@@ -38,6 +38,7 @@ import { VapiProvider } from '../lib/orchestration/vapi.js';
 import { decryptCredentials, type EncryptedEnvelope } from '../lib/crypto/credentials.js';
 import { toAdapterCredentials as toTelephonyAdapterCredentials } from '../routes/phoneNumberProviders.js';
 import { renderTemplate, spokenVoiceName, type PromptVariableContext } from '../lib/promptVariables.js';
+import { resolveCallerIdPhoneNumber } from './callerIdRouting.js';
 
 /**
  * Appended to the resolved system prompt only for the unnamed/no-lead
@@ -444,7 +445,11 @@ export interface OriginateCallResult {
  * by the Phase 7 campaign dispatcher - never duplicated. */
 export async function originateCall(params: OriginateCallParams): Promise<OriginateCallResult> {
   const supabase = getSupabaseAdmin();
-  const { organizationId: orgId, engine, agent, version, phoneNumber, customerNumber, leadId, campaignId, createdBy } = params;
+  const { organizationId: orgId, engine, agent, version, customerNumber, leadId, campaignId, createdBy } = params;
+  // Optional, opt-in routing. When disabled or unavailable, the original
+  // selected number is preserved and the existing call flow is unchanged.
+  const callerIdRouting = await resolveCallerIdPhoneNumber(supabase, orgId, params.phoneNumber, customerNumber);
+  const phoneNumber = callerIdRouting.phoneNumber;
 
   const transferDestination = resolveTransferDestination(version, params.transferDestinationOverride);
   const actualVoice = await resolveActualVoice(supabase, orgId, version, params.voiceOverride ?? null);
@@ -489,6 +494,21 @@ export async function originateCall(params: OriginateCallParams): Promise<Origin
     .select('*')
     .single();
   if (insertError) throw insertError;
+
+  if (callerIdRouting.enabled) {
+    await supabase.from('call_events').insert({
+      call_id: call.id,
+      organization_id: orgId,
+      event_type: 'caller_id.selected',
+      payload: {
+        selected_phone_number_id: phoneNumber.id,
+        requested_phone_number_id: params.phoneNumber.id,
+        selected_from_pool: callerIdRouting.selectedFromPool,
+        match_type: callerIdRouting.matchType,
+        destination_area_code: (customerNumber.startsWith('+1') ? customerNumber.slice(2, 5) : null),
+      },
+    });
+  }
 
   try {
     if (engine === 'vapi') {
