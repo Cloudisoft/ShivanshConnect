@@ -13,8 +13,8 @@ export interface CallerIdRoutingResult {
 /**
  * Opt-in caller-ID routing. The feature is disabled unless
  * organization_settings.settings.caller_id_routing_enabled === true.
- * The caller_id_pool table only contains numbers explicitly enabled by an
- * organization. Any routing/configuration error falls back to the number
+ * The caller_id_pool table is seeded from eligible registered numbers; its
+ * enabled flag allows individual numbers to be excluded. Any routing/configuration error falls back to the number
  * the existing flow already selected, so the add-on cannot block existing
  * calls when the optional feature is unavailable.
  */
