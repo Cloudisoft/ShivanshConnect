@@ -46,7 +46,7 @@ $;
 
 drop trigger if exists phone_numbers_add_to_caller_id_pool on public.phone_numbers;
 create trigger phone_numbers_add_to_caller_id_pool
-  after insert on public.phone_numbers
+  after insert or update of status, capabilities on public.phone_numbers
   for each row execute function public.add_eligible_phone_number_to_caller_id_pool();
 
 
